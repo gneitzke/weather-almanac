@@ -8,7 +8,7 @@ from tests.test_radar_v46 import function
 
 
 def render(dark=False, nearest=True, width=1000, current=False):
-    script = '\n'.join(function(n) for n in ('isNum', 'radarPendingRetry', 'radarSourceSubject', 'radarUnfiltered', 'radarSourceRender')) + '''
+    script = '\n'.join(function(n) for n in ('isNum', 'radarPendingRetry', 'radarFallbackText', 'radarSourceSubject', 'radarUnfiltered', 'radarSourceRender')) + '''
 const nodes=new Map(),$=id=>{if(!nodes.has(id))nodes.set(id,{
   dataset:{},attrs:{},textContent:'',clientWidth:WIDTH,
   setAttribute(k,v){this.attrs[k]=v},removeAttribute(){},

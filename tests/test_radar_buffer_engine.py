@@ -9,7 +9,7 @@ from tests.test_radar_v3 import multisite  # noqa: F401
 
 
 @pytest.mark.parametrize('damage', [False, True])
-def test_history_repair_keeps_original_site_scan_pairs(make_emitter, hybrid, multisite, monkeypatch, damage):
+def test_history_rebuilds_when_requested_site_scan_pairs_change(make_emitter, hybrid, multisite, monkeypatch, damage):
     hybrid.view()
     emitter = make_emitter()
     monkeypatch.setattr(emitter, '_radar_prefetch', lambda *args: None)
@@ -27,7 +27,8 @@ def test_history_repair_keeps_original_site_scan_pairs(make_emitter, hybrid, mul
     emitter._do_radar(intent_triggered=False)
     repaired = next(f for f in emitter._radar_result.frames if f['ts'] == historical['ts'])
     assert repaired['complete']
-    assert repaired['siteScans'] == historical['siteScans']
+    assert repaired['siteScans'] != historical['siteScans']
+    assert next(p['ts'] for p in repaired['siteScans'] if p['id'] == 'KMID') == historical['ts']
     assert not any(emitter._radar_pending[k] for k in ('newest', 'four', 'eight'))
 
 

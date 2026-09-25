@@ -7,6 +7,20 @@ to shared upstream code that the classic console benefits from too.
 ## 2026-09-25
 
 ### Radar
+- **v2-only review fixes.** Watch publication lag retains the last frame and
+  retries at negative-cache expiry without provider strikes or warnings before
+  ten minutes. Primary selection respects the saved viewport, and watch cannot
+  change Auto's mode using incomplete neighbour evidence. Attended loops rebuild
+  watch frames with full coverage; warm keeps its four-frame mosaic loop even
+  off-tab. Shadow no longer applies watch's primary-only restriction.
+- **Cooldown fallback and honest recovery.** N0B cooldowns select IEM tiles;
+  Level III Retry-After is capped at five minutes. An expired timer alone does
+  not claim recovery: a validated N0B fetch must succeed. Corner notes use the
+  same fallback/recovery wording as captions. Level III budget notices are Site
+  only, without duplicate fallback-caption text or replacing Region's scale note.
+- **Review regression coverage.** Native-on Region evidence checks are restored,
+  including a cooldown beginning during a pass. General hybrid tests no longer
+  force native off; the IEM topology fixture owns that override.
 - **One site renderer on every board.** Site always draws the NOAA Level III
   per-pixel mosaic with N0H clutter control, including on Pi 3. The v1 | v2
   switch and saved renderer preference are gone. IEM site tiles fill in only

@@ -10,9 +10,9 @@ Tiers, lowest first:
            zoom-5 "sentinel" at home every hour by day (two at night) to see
            rain approaching while the local gauge is dry
   watch    weather present, or conditions unknown: newest frame at the scan
-           cadence, the full 8-frame loop kept warm by day, newest-only at night
-  warm     a person touched the device or looked at radar recently: newest at
-           cadence plus four history frames, so a tap opens on a moving loop
+           cadence (Site: primary only); Region keeps eight by day, one at night
+  warm     a person touched the device or looked at radar recently: a four-frame
+           loop (the newest and three before it), so a tap opens on a moving loop
   live     the Radar tab is open now: today's behaviour, prefetch included
 
 Promotion is immediate. Demotion waits: live drops to warm the moment the tab

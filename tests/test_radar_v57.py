@@ -187,6 +187,8 @@ def test_concurrent_worker_admission_keeps_one_flight(make_emitter):
 
 @pytest.mark.parametrize('count',[2,4])
 def test_multisite_cold_switch_with_partly_used_budget(make_emitter, hybrid, monkeypatch, tmp_path, count):
+    # This local transport models IEM ridge layers, not Level III products.
+    monkeypatch.setattr(ae.AlmanacEmitter, '_radar_level3_down', lambda self: True)
     # Distinct sites at the same footprint make every required layer explicit.
     sites={f'KAA{i}':(47.61,-122.33,f'Site {i}') for i in range(count)}
     monkeypatch.setattr(ae,'_NEXRAD_SITES',sites)

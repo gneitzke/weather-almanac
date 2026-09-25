@@ -85,7 +85,9 @@ def test_budget_pause_caption_and_effective_smoothing():
     controls(r'''
 radarView.data.native=false;
 radarView.data.nativeBudget={ceilingState:'paused',bytesToday:250000001};
-radarSourceRender();assert.match(caption(),/v2 paused · daily data limit/);
+radarSourceRender();assert.doesNotMatch(caption(),/daily|Level III|v2/);
+Object.assign(radarView.data,{sourceMode:'site',nativeFallback:{active:true,reason:'daily-limit'}});
+radarSourceRender();assert.match(caption(),/Daily Level III limit reached/);
 assert.equal(radarNativeActive(),false);
 radarView.data.native=true;assert.equal(radarNativeActive(),true);
 ''')

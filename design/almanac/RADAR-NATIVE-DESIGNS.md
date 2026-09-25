@@ -421,7 +421,7 @@ A rainy day with three 10-min sessions and five warm holds is about 30 MB/day; a
 - **One radar down.** Its area falls to the next beam, or to no data; caption "KLGX not reporting".
 - **N0H late.** Render unfiltered with a caption. Re-render if N0H lands within 3 min; the new QC state gives a new `mosaicKey`.
 - **Slow Pi.** If p90 tile time exceeds 150 ms or frame time exceeds 3 s, native is disabled for 6 h, the reason goes to `/health`, and auto uses IEM tiles at z≥8.
-- **Pi 3.** `WFP_RADAR_NATIVE=auto|on|off`. Auto requires `/proc/device-tree/model` to report a Pi 4 *and* a startup calibration under 60 ms/tile. The under-volted Pi 3 keeps today's behaviour unchanged.
+- **Pi 3 (proposal superseded 2026-09-25).** Original proposal: `WFP_RADAR_NATIVE=auto|on|off`. Auto requires `/proc/device-tree/model` to report a Pi 4 *and* a startup calibration under 60 ms/tile. The under-volted Pi 3 keeps today's behaviour unchanged. **Shipped policy:** Site uses Level III on every board, including Pi 3; IEM tiles are the automatic outage/daily-limit fallback. See DATA_CONTRACT.md, “One site renderer”.
 
 ## 10. Test and verification plan
 

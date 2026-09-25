@@ -73,7 +73,7 @@ def test_watch_fetches_only_primary_newest_and_counts_bytes(
 
 
 @pytest.mark.parametrize('tier', ['live', 'warm', 'watch'])
-def test_unviewed_builds_only_primary_newest(
+def test_unviewed_builds_follow_attention_tier(
         make_emitter, hybrid, multisite, native, monkeypatch, tmp_path, tier):
     monkeypatch.setattr(ae, 'RADAR_ATTENTION_MODE', 'active')
     (tmp_path/'radar_viewed').unlink(); (tmp_path/'radar_viewing').unlink()
@@ -81,8 +81,12 @@ def test_unviewed_builds_only_primary_newest(
     emitter._radar_attention.forced = emitter._radar_attention.tier = tier
     emitter._do_radar()
     assert emitter._radar_result.tiles['variant'] == 'native'
-    assert len(emitter._radar_result.frames) == 1
-    assert all(key.startswith('NEA_') for _, key in native.calls)
+    if tier == 'watch':
+        assert len(emitter._radar_result.frames) == 1
+        assert all(key.startswith('NEA_') for _, key in native.calls)
+    else:
+        assert len(emitter._radar_result.frames) > 1
+        assert {p['id'] for p in emitter._radar_result.frames[-1]['siteScans']} == {'KNEA', 'KMID'}
 
 
 def test_watch_paused_uses_labelled_iem_fallback(

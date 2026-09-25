@@ -118,6 +118,8 @@ def test_regressed_primary_retains_newest(make_emitter,hybrid):
 
 @pytest.mark.parametrize('mode,expected', [('site','iem-nexrad-n0b'),('mosaic','iem-mrms-lcref')])
 def test_site_actual_scans_and_restart(make_emitter,hybrid,tmp_path,monkeypatch,mode,expected):
+    # This test owns an IEM ridge transport and asserts its per-site layers.
+    monkeypatch.setattr(ae.AlmanacEmitter, '_radar_level3_down', lambda self: True)
     monkeypatch.setattr(ae, '_NEXRAD_SITES', {'KATX': ae._NEXRAD_SITES['KATX']})
     original=ae.RadarSession.open
     scans=[hybrid.latest-1800,hybrid.latest-1200,hybrid.latest-600,hybrid.latest]

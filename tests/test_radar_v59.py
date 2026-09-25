@@ -71,7 +71,7 @@ def test_corner_note_keeps_page_acquisition_after_wrap(state, expected):
     import json
     import subprocess
     from tests.test_radar_v46 import function
-    functions = '\n'.join(function(n) for n in ('isNum', 'radarPendingRetry', 'radarNoteRender'))
+    functions = '\n'.join(function(n) for n in ('isNum', 'radarPendingRetry', 'radarFallbackText', 'radarNoteRender'))
     script = '''
 const node={dataset:{}},$=()=>node,radarIntent={postedAt:0},radarSwitch=null,radarSource={};
 const radarFrameLabel=()=>'12:00';

@@ -271,14 +271,14 @@ process.exit(0);
     assert result.returncode == 0, result.stderr
 
 
-def test_variant_caption_names_renderers_and_ledger_failure_names_accounting():
+def test_variant_caption_names_renderers_without_duplicating_ledger_notice():
     controls(r'''
 Object.assign(radarView.data,{sourceId:'iem-nexrad-n0b',sourceMode:'site',siteId:'KATX',native:false});
 radarView.pendingSource={variantOnly:true,data:{native:true,sourceMode:'site'}};
 radarSourceRender();assert.match(caption(),/^Restoring NOAA Level III · showing IEM tiles/);assert.ok(!caption().includes('Switching'));
 radarView.pendingSource=null;radarView.data.native=true;
 radarView.data.nativeBudget={ceilingState:'normal',ledgerState:'retrying'};
-radarSourceRender();assert.match(caption(),/accounting retrying/);assert.ok(!caption().includes('daily data limit'));
+radarSourceRender();assert.doesNotMatch(caption(),/accounting|byte ledger|daily data limit|v2/);
 ''')
 
 

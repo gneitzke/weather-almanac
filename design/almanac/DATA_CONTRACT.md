@@ -225,7 +225,7 @@ worth looking at. `radar.attention` is published with every payload:
 | tier | when | acquisition |
 |---|---|---|
 | `live` | the Radar tab is open now (`radar_viewing` marker live) | newest at scan cadence, 8-frame loop, zoom/mode prefetch |
-| `warm` | a human touched the device (`presence` marker) or looked at radar within 45 min | newest at cadence plus four history frames |
+| `warm` | a human touched the device (`presence` marker) or looked at radar within 45 min | a four-frame loop: the newest and three before it |
 | `watch` | weather present (rain hold 60 min, lightning hold 30 min, echo hold 60 min, forecast ≥ 50 % or precipitation words until < 30 %), or observations unknown (older than 5 min), or a usual glance hour, or a LAN browser polling within 15 min | Site: primary/newest Level III scan only. Region: 8 frames by day (06:00–23:00 local), newest only by night |
 | `rest` | quiet weather, nobody around | site listings every 15 min, no Site tiles or Level III products, a 4-tile zoom-5 MRMS sentinel at home every 60 min by day / 120 by night |
 | `dormant` | rest for 2 h at night, or no attention for 3 days | one listing an hour, no tiles, no sentinel |
@@ -1747,24 +1747,31 @@ true only for Smooth, so the page never interpolates v2 pixels. The payload adds
 `radar.native` (the drawn variant). `radar.nativeFallback` contains `active`
 (true only when the published site frames are IEM tiles), `reason`
 (`level3-unreachable`, `daily-limit`, or null), and `recovering` (true when IEM
-frames remain displayed after the cause clears). There is no `renderPref`.
+frames remain displayed after a validated N0B product fetch succeeds;
+an expired outage timer or half-open breaker alone is not recovery). There is no `renderPref`.
 The page uses the drawn/staged manifest for captions, retaining the old loop
 until the replacement newest frame decodes. Native attribution reads `NOAA Level III`.
 `/health.radar.nativeFallback` retains the host diagnostics (`active`,
 `breakerOpen`, `reason`, `since`, `retrySec`); it is separate from the drawn state.
 
 **Attention and daily bytes.** Watch keeps exactly one site and one newest
-Level III scan warm: the primary radar, with its matching optional N0H. Any
-unviewed site-loop build follows the same bound, even in warm/live. Discovery
-lists only that primary site, never other sites; no older scan is downloaded
-if the newest is unpublished. Rest and dormant fetch no Site tiles or Level III
-products. Rest keeps its four-tile zoom-5 MRMS sentinel at home every hour by
+Level III scan warm: the primary in-view radar, with its matching optional N0H.
+Discovery lists only that site; a saved viewport with no radar coverage is
+reported as out of view and fetches no Site products. No older scan is downloaded
+if the newest is unpublished. Warm keeps the full native mosaic: newest plus
+four history frames, including when unviewed. Live retains its eight-frame target.
+Watch's primary-only discovery cannot change Auto's existing mode; a cold watch
+uses cached neighbour status for coverage without fetching neighbours.
+Rest and dormant fetch no Site tiles or Level III products. Rest keeps its four-tile zoom-5 MRMS sentinel at home every hour by
 day and every two hours at night; dormant only lists.
 Shadow tiers do not apply acquisition restrictions; the effective tier remains
-live, while an unviewed build still has the primary/newest bound. Live viewing
-expands to the full mosaic loop, reusing the warmed primary product even when
-the scan timestamp has not changed. All Level III bodies use the same ledger;
-newest-only stays native and paused uses automatic IEM fallback. At a rainy-day
+live; an unviewed shadow build still acquires the full mosaic for its frames.
+Attendance expands watch frames into full mosaics, reusing decoded primary
+products even when the timestamp has not changed. Primary-only frames are marked;
+a full build retains a published frame only when its requested site/scan pairs
+match the current view's selection. Changed pairs rebuild under a new mosaic key,
+including historical watch frames after a newer scan arrives. All Level III
+bodies use the same ledger; newest-only stays native and paused uses automatic IEM fallback. At a rainy-day
 5–6 minute cadence, 0.25–0.33 MB N0B plus 0.025 MB N0H is about 2.75–4.26 MB/hour
 (10–12 scans); listings/retries add overhead.
 
@@ -1810,8 +1817,11 @@ The intent watcher also detects UTC rollover and resumes the eligible variant.
 `/health.radar.native` and `radar.nativeBudget` contain `day` (UTC `YYYY-MM-DD`),
 `bytesToday`, `ceilingState` (`normal`, `newest-only`, or `paused`), and
 `ledgerState` (`ok` or `retrying`). The page shows
-`v2 accounting retrying · bytes counted in memory` for ledger failure and
-`v2 paused · daily data limit` only when the byte ceiling is paused. N0H shares this ledger and both ceiling policies.
+`Level III byte ledger retrying · bytes counted in memory` for ledger failure
+and `Daily Level III limit reached` when the byte ceiling is paused. These
+notices are Site-only; the daily-limit fallback caption carries the limit reason
+once, and ledger status is confined to the corner note. N0H shares this ledger
+and both ceiling policies.
 
 **Outages and logging.** A failed Level III transport attempt selects automatic
 IEM fallback for 120 seconds. An already open Level III breaker also selects
@@ -1823,12 +1833,24 @@ eligible native attempt can reset the streak again; this bounded exception is
 not a claim that a dead local network leaves IEM reachable. Discovery itself
 may fail first, in which case its normal local backoff applies without trying
 Level III. Existing pixels remain while both routes are unavailable.
+An active N0B transport cooldown also selects IEM fallback, with the unreachable
+caption. Level III Retry-After values (seconds or HTTP dates, N0B and optional
+N0H independently) are capped at 300 seconds. The caption keeps its unreachable
+reason across retry windows until a validated N0B product succeeds. Recovery
+still happens automatically without a restart. The corner note names the same
+fallback/recovery as the source caption; renderer changes never say sharpening.
+Daily-limit and byte-ledger notices appear only in Site mode, use Level III names,
+and are not repeated inside the fallback caption. Region retains its scale note.
 All per-site input failures remain counted in `/health.radar.mosaic.siteFailures`.
 Warnings are limited to transport/local/ambiguous/circuit failures, or a Level
 III scan still unpublished more than 600 seconds after its advertised volume
 minute. The typed unpublished outcome survives the negative cache. Routine
-IEM-to-S3 publication lag and other validation errors do not warn. Eligible
-warnings retain the existing per-site rate limit and suppressed count.
+IEM-to-S3 publication lag and other validation errors do not warn. In watch,
+a newest scan unpublished for at most 600 seconds retains the current frame
+(or leaves a cold view waiting), schedules retry at its 60-second negative-cache
+expiry (including the discovery wakeup), and adds no provider failure, fallback-chain strike or pass warning.
+After 600 seconds the ordinary failed-pass handling and overdue warning apply.
+Eligible warnings retain the existing per-site rate limit and suppressed count.
 
 **Scan identity.** IEM names a scan by its volume start floored to the minute;
 the S3 key carries the seconds (`ATX_N0B_2026_09_25_03_42_24` is IEM's 03:42).
@@ -2087,9 +2109,10 @@ and legend retains the previously published frames whose timestamps are within
 the engine lists the newest as pending before native tile I/O: a warm 31-frame
 MRMS hour becomes 31 listed / 30 complete, with only the expired oldest removed.
 Every partial-tile publish carries that window; completion updates the newest in
-place. Backfill retains historical `siteScans` exactly, even if fresh per-site
-listings would choose different scan pairs. Site windows slide by actual scan
-stamps. The shared 25-second pass deadline may leave newest pending for a
+place. Site backfill retains historical frames only when their requested
+site/scan pairs still match the full build's selection (v2-only review,
+2026-09-25); changed coverage or pairs rebuild the measurement under a new
+mosaic key. Site windows slide by actual scan stamps. The shared 25-second pass deadline may leave newest pending for a
 retry, but does not collapse history. Cold start and changed geometry still
 publish their first measurement with a new window.
 

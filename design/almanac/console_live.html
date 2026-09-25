@@ -3255,7 +3255,7 @@
   $('rad-smooth').addEventListener('click',()=>{if(radarSmooth.writable===false||radarNativeActive())return;radarSmooth.value=radarSmooth.pending=!radarSmooth.value;radarZoomRender();poll(true);});
   // v2 draws gates, not IEM colours: Smooth has nothing to soften there. Region has no single radar, so it stays v1.
   function radarNativeActive(){return radarView.data?.native===true;}
-  function radarZoomRender(){var r=radarView.data,rail=$('rad-zoom');rail.hidden=!r;if(!r||!radarCamera)return;var native=radarNativeActive();$('rad-smooth').setAttribute('aria-pressed',String(!!radarSmooth.value&&!native));$('rad-smooth').setAttribute('aria-disabled',String(native));var z=Math.round(radarCamera.zoom);rail.dataset.mode=radarZoom.auto?'auto':'manual';rail.dataset.state='confirmed';rail.setAttribute('aria-busy','false');$('rad-zoom-mode').textContent=radarZoom.auto?'Auto':String(z);$('rad-zoom-reset').hidden=radarZoom.auto;$('rad-zoom-out').disabled=z<=r.zoomMin;$('rad-zoom-in').disabled=z>=10;radarView.zoomNote=r.nativeBudget?.ledgerState==='retrying'?'v2 accounting retrying · bytes counted in memory':r.nativeBudget?.ceilingState==='paused'?'v2 paused · daily data limit':z>r.zoomMax?r.zoomSource+' reaches zoom '+r.zoomMax+' — scaled to this view.':'';radarNoteRender();}
+  function radarZoomRender(){var r=radarView.data,rail=$('rad-zoom');rail.hidden=!r;if(!r||!radarCamera)return;var native=radarNativeActive();$('rad-smooth').setAttribute('aria-pressed',String(!!radarSmooth.value&&!native));$('rad-smooth').setAttribute('aria-disabled',String(native));var z=Math.round(radarCamera.zoom);rail.dataset.mode=radarZoom.auto?'auto':'manual';rail.dataset.state='confirmed';rail.setAttribute('aria-busy','false');$('rad-zoom-mode').textContent=radarZoom.auto?'Auto':String(z);$('rad-zoom-reset').hidden=radarZoom.auto;$('rad-zoom-out').disabled=z<=r.zoomMin;$('rad-zoom-in').disabled=z>=10;radarView.zoomNote=r.sourceMode==='site'&&r.nativeBudget?.ledgerState==='retrying'?'Level III byte ledger retrying · bytes counted in memory':r.sourceMode==='site'&&r.nativeBudget?.ceilingState==='paused'&&!r.nativeFallback?.active?'Daily Level III limit reached':z>r.zoomMax?r.zoomSource+' reaches zoom '+r.zoomMax+' — scaled to this view.':'';radarNoteRender();}
   // Retry epochs and their reference clock come from the same payload. A kiosk
   // wall clock can be wrong; elapsed UI/switch time is not a scheduled retry.
   function radarPendingRetry(){
@@ -3270,6 +3270,14 @@
     if(f.retryReason==='budget'&&currentLoop)return null;
     var reasons={budget:'work budget',deadline:'acquisition deadline',provider:'provider issue',local:'local issue','not reporting':'site not reporting'};
     return {reason:reasons[f.retryReason]||reasons[f.reason]||'scheduled retry',when:at-now<1?'now':Math.ceil(at-now)+'s'};
+  }
+  function radarFallbackText(r,pending){
+    var changing=pending?.variantOnly&&pending.data.native!==r.native;
+    var fallback=changing&&!pending.data.native?pending.data.nativeFallback:r.nativeFallback;
+    if(!changing&&!(r.sourceMode==='site'&&!r.native&&fallback?.active))return '';
+    if(changing&&pending.data.native||fallback?.recovering)return 'Restoring NOAA Level III · showing IEM tiles';
+    var reason=fallback?.reason==='daily-limit'?'Daily Level III limit reached':'Level III unreachable';
+    return reason+(r.native?' · loading IEM tiles · showing NOAA Level III':' · showing IEM tiles');
   }
   function radarNoteRender(){
     var r=radarView.data,f=radarView.refresh,note=$('rad-note'),copy='';
@@ -3287,6 +3295,7 @@
     else if(r.attention?.waking)copy=radarView.current?.bitmap?
       'Waking radar · showing '+radarFrameLabel(radarView.current)+' while the newest scan loads':
       'Waking radar · fetching the first scan';
+    else if(radarFallbackText(r,radarView.pendingSource))copy=radarFallbackText(r,radarView.pendingSource);
     else if(radarView.pendingSource&&f.state!=='failed')copy=radarView.pendingSource.variantOnly?'Playing previous view · sharpening newest frame':'Playing previous view · sharpening '+radarView.pendingSource.frames.filter(f=>f.bitmap).length+' of '+radarStartCount(radarView.pendingSource.data);
     else if(radarView.holdingWindow&&f.state!=='failed')copy=(radarView.nextAt?'Playing previous view':'Previous view')+' · sharpening '+radarView.loaded.filter(f=>f.bitmap).length+' of '+Math.min(8,Math.max(radarView.loaded.length,r.frameCount||0));
     else if((radarView.current?.bitmap&&radarView.loaded.some(f=>!f.bitmap))&&f.state!=='failed')copy='Refreshing · frame '+radarView.loaded.filter(f=>f.bitmap).length+' of '+Math.min(8,Math.max(radarView.loaded.length,r.frameCount||0));
@@ -3473,8 +3482,6 @@
     var cadence=mode==='site'?(interval?'new scan '+interval:''):'new image every '+(r.cadenceSec||600)/60+' min';
     var exceptions=[];
     var filtering=radarUnfiltered(r);if(filtering)exceptions.push(filtering);
-    if (r.nativeBudget?.ledgerState==='retrying') exceptions.push('v2 accounting retrying · bytes counted in memory');
-    if (r.nativeBudget?.ceilingState==='paused') exceptions.push('v2 paused · daily data limit');
     if (rainviewer) exceptions.push('reflectivity only');
     if (r.latestOnly) exceptions.push('latest only');
     if (r.scanningSlowly) exceptions.push('scanning slowly');
@@ -3495,11 +3502,8 @@
     // Any staged source says so, including one site radar handing off to another
     // (same mode, different source); a renderer-only change has its own copy below.
     if(radarView.pendingSource&&!radarView.pendingSource.variantOnly&&(radarView.pendingSource.data?.sourceId!==r.sourceId||radarView.pendingSource.data?.siteId!==r.siteId)||target&&target!==mode&&(radarView.pendingSource||pref==='auto'))switching=target||mode;
-    var pending=radarView.pendingSource, fallback=r.nativeFallback;
-    var fallbackText=(pending?.variantOnly&&!pending.data.native?pending.data.nativeFallback:fallback)?.reason==='daily-limit'?'Daily Level III limit reached':'Level III unreachable';
-    if(pending?.variantOnly&&pending.data.native!==r.native||mode==='site'&&!r.native&&fallback?.active){
-      var text=pending?.data.native||fallback?.recovering?'Restoring NOAA Level III · showing IEM tiles':
-        fallbackText+(r.native?' · loading IEM tiles · showing NOAA Level III':' · showing IEM tiles');
+    var text=radarFallbackText(r,radarView.pendingSource);
+    if(text){
       cap.replaceChildren(document.createTextNode(text+' · '));
       var credit=document.createElement('a');credit.id='rad-attrib';credit.className='rad-attrib';
       credit.textContent=rainviewer?'RainViewer':r.native?'NOAA Level III':'IEM / NOAA';cap.append(credit);

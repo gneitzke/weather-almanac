@@ -80,6 +80,8 @@ def test_cadence_threshold_boundaries(seconds,mode,slow):
 
 @pytest.mark.parametrize('primary', ['KATX','KLGX'])
 def test_n6_primary_listing_controls_mode(make_emitter,hybrid,tmp_path,monkeypatch,primary):
+    # This local transport models IEM ridge layers, not Level III products.
+    monkeypatch.setattr(ae.AlmanacEmitter, '_radar_level3_down', lambda self: True)
     # Exchange geographic positions; both listings/tiles remain available.
     sites={i:ae._NEXRAD_SITES[i] for i in ('KATX','KLGX')}
     if primary=='KLGX': sites['KATX'],sites['KLGX']=sites['KLGX'],sites['KATX']
@@ -128,6 +130,8 @@ def test_old_palette_tiles_cannot_enter_current_inventory(make_emitter,monkeypat
 
 @pytest.mark.parametrize('gaps', [[],[4]])
 def test_short_primary_listing_payload(make_emitter,hybrid,tmp_path,monkeypatch,gaps):
+    # This local transport models IEM ridge layers, not Level III products.
+    monkeypatch.setattr(ae.AlmanacEmitter, '_radar_level3_down', lambda self: True)
     monkeypatch.setattr(ae,'_NEXRAD_SITES',{'KATX':ae._NEXRAD_SITES['KATX']})
     original=ae.RadarSession.open
     def fetch(self,req,timeout):

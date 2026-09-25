@@ -47,6 +47,8 @@ def test_cap_is_viewport_distance_not_station(monkeypatch):
 
 @pytest.fixture
 def multisite(hybrid, monkeypatch, tmp_path):
+    # IEM layer/topology tests use this fallback; S3 tests opt into native.
+    monkeypatch.setattr(ae.AlmanacEmitter, '_radar_level3_down', lambda self: True)
     monkeypatch.setattr(ae, '_NEXRAD_SITES', {
         'KNEA': (47.61, -122.33, 'nearest'),
         'KMID': (47.8, -122.33, 'middle'),

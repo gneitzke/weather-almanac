@@ -65,7 +65,7 @@ def test_region_warming_uses_native_until_paused(
 
 @pytest.mark.parametrize('mode', ['mosaic', 'auto'])
 def test_region_failed_listing_replaces_old_evidence_on_original_cadence(
-        make_emitter, hybrid, multisite, tmp_path, monkeypatch, mode):
+        make_emitter, hybrid, multisite, native, tmp_path, monkeypatch, mode):
     intent(tmp_path, 6, mode)
     emitter = make_emitter(); emitter._do_radar()
     # A Level III cooldown cannot suppress the independent IEM evidence check.

@@ -323,13 +323,15 @@ def test_bzip_expansion_limit_is_enforced():
         l3.decode(bytes(raw))
 
 
-@pytest.mark.parametrize('failure', ['breaker', 'outage'])
+@pytest.mark.parametrize('failure', ['breaker', 'outage', 'cooldown'])
 def test_s3_outage_does_not_block_automatic_iem_fallback(make_emitter, hybrid, multisite, native, tmp_path, failure):
     hybrid.view()
     emitter = make_emitter()
     emitter._do_radar()
     assert emitter._radar_result.tiles['variant'] == 'native'
-    if failure == 'breaker':
+    if failure == 'cooldown':
+        emitter._radar_cooldowns[ae.RADAR_LEVEL3_TRANSPORT] = hybrid.mono + 60
+    elif failure == 'breaker':
         emitter._radar_health._host(ae.RADAR_LEVEL3_TRANSPORT, ae.RADAR_LEVEL3_BUCKET)['until'] = hybrid.mono + 60
     else:
         emitter._radar_level3_fallback(ConnectionError('unreachable'))
