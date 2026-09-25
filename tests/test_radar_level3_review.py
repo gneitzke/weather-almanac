@@ -301,30 +301,6 @@ def test_native_transient_failure_keeps_published_frames(make_emitter, hybrid, m
     assert {f['ts'] for f in before.frames if f['complete']} <= {f['ts'] for f in after.frames}
 
 
-def test_render_switch_reconciles_headers_region_smooth_and_readonly_viewers():
-    html = Path('design/almanac/console_live.html').read_text()
-    controls = html[html.index("  $('rad-smooth').addEventListener"):html.index('  function radarZoomRender()')]
-    reconcile = html[html.index("        if(x.render==='v1'"):html.index('        render(d);')]
-    script = r'''
-const assert = require('node:assert/strict'), nodes = {};
-const $ = id => nodes[id] ||= {addEventListener:(_,fn)=>nodes[id].click=fn};
-let polls=0; const poll=()=>polls++,radarZoomRender=()=>{};
-const radarRender={value:'v1',pending:null},radarSmooth={value:true,pending:null},radarView={data:{sourceMode:'site',native:true}};
-CONTROLS
-const reconcile=(x,d)=>{RECONCILE};
-$('rad-v2').click(); assert.equal(radarRender.pending,'v2');
-reconcile({render:'v1'},{radar:{native:false}}); assert.equal(radarRender.value,'v2');
-reconcile({render:'v2'},{radar:{native:false}}); assert.equal(radarRender.pending,null);
-$('rad-smooth').click(); assert.equal(radarSmooth.value,true); assert.equal(radarSmooth.pending,null);
-radarView.data.sourceMode='mosaic'; radarView.data.native=false; $('rad-smooth').click(); assert.equal(radarSmooth.value,false);
-reconcile({render:null},{radar:{native:false}}); assert.equal(radarRender.value,'v1');
-const count=polls; $('rad-v2').click(); assert.equal(polls,count); assert.equal($('rad-v2').disabled,true);
-reconcile({render:null},{radar:{native:true}}); assert.equal(radarRender.value,'v2');
-'''.replace('CONTROLS', controls).replace('RECONCILE', reconcile)
-    result = subprocess.run(['node'], input=script, text=True, capture_output=True, timeout=10)
-    assert result.returncode == 0, result.stderr
-
-
 def test_overlapping_azimuths_cannot_overwrite_other_rays():
     def overlap(body):
         struct.pack_into('>h', body, 34, 20)
@@ -347,8 +323,8 @@ def test_bzip_expansion_limit_is_enforced():
         l3.decode(bytes(raw))
 
 
-@pytest.mark.parametrize('failure', ['breaker', 'cooldown'])
-def test_s3_outage_does_not_block_switch_back_to_v1(make_emitter, hybrid, multisite, native, tmp_path, failure):
+@pytest.mark.parametrize('failure', ['breaker', 'outage'])
+def test_s3_outage_does_not_block_automatic_iem_fallback(make_emitter, hybrid, multisite, native, tmp_path, failure):
     hybrid.view()
     emitter = make_emitter()
     emitter._do_radar()
@@ -356,9 +332,8 @@ def test_s3_outage_does_not_block_switch_back_to_v1(make_emitter, hybrid, multis
     if failure == 'breaker':
         emitter._radar_health._host(ae.RADAR_LEVEL3_TRANSPORT, ae.RADAR_LEVEL3_BUCKET)['until'] = hybrid.mono + 60
     else:
-        emitter._radar_cooldowns[ae.RADAR_LEVEL3_TRANSPORT] = hybrid.mono + 60
+        emitter._radar_level3_fallback(ConnectionError('unreachable'))
     assert emitter._radar_headroom_delay(SOURCE, 1) >= (60 if failure == 'cooldown' else 0)
-    (tmp_path/'radar_render').write_text('v1')
     emitter._do_radar()
     assert emitter._radar_result.tiles['variant'] is False
     assert emitter._radar_result.frames and any(f['complete'] for f in emitter._radar_result.frames)

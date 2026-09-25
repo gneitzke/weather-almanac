@@ -11,12 +11,11 @@ from lib import radar_native_budget as budget
 from tests.test_radar_hybrid import hybrid  # noqa: F401
 from tests.test_radar_v3 import multisite  # noqa: F401
 from tests.test_radar_level3 import native  # noqa: F401
-from tests.test_freshness_health import _load_serve
 
 SOURCE = 'iem-nexrad-n0b'
 
 
-@pytest.mark.parametrize('tier,expected', [('live', 'native'), ('warm', 'native'), ('watch', False), ('rest', False), ('dormant', False)])
+@pytest.mark.parametrize('tier,expected', [('live', 'native'), ('warm', 'native'), ('watch', 'native'), ('rest', False), ('dormant', False)])
 @pytest.mark.parametrize('state', ['normal', 'newest-only', 'paused'])
 def test_variant_is_exact_for_tier_and_ceiling(tier, expected, state):
     ctx = dict(native=True, attention=tier, native_ceiling=state)
@@ -26,41 +25,6 @@ def test_variant_is_exact_for_tier_and_ceiling(tier, expected, state):
     ctx['smooth'] = True
     assert ae._radar_variant(ctx, SOURCE) == ('native' if expected == 'native' else True)
     assert ae._radar_render_revision('native') != ae._radar_render_revision(True)
-
-
-@pytest.mark.parametrize('model,expected', [('Raspberry Pi 3 Model B Rev 1.2', 'v1'), ('Raspberry Pi 3 Model B Plus Rev 1.3', 'v1'), ('Raspberry Pi 4 Model B', 'v2'), ('Raspberry Pi 5', 'v2'), ('', 'v2')])
-def test_default_model_is_read_once_and_explicit_always_wins(tmp_path, model, expected):
-    reads = []
-    def read():
-        reads.append(True)
-        return model
-    path = tmp_path/'radar_render'
-    assert budget.render_preference(path, read) == expected
-    assert budget.render_preference(path, read) == expected
-    assert len(reads) == 1
-    for value in ('v1', 'v2'):
-        path.write_text(value)
-        assert budget.render_preference(path, read) == value
-    assert len(reads) == 1
-
-
-@pytest.mark.parametrize('model,expected', [('Raspberry Pi 3 Model B', 'v1'), ('Raspberry Pi 4 Model B', 'v2')])
-def test_server_and_engine_share_missing_preference_default(make_emitter, hybrid, multisite, native, tmp_path, monkeypatch, model, expected):
-    reader = lambda: model
-    preference = lambda path: budget.render_preference(path, reader)
-    monkeypatch.setattr(ae, 'render_preference', preference)
-    (tmp_path/'radar_render').unlink()
-    emitter = make_emitter(); emitter._do_radar()
-    assert emitter._radar_result.tiles['variant'] == ('native' if expected == 'v2' else False)
-    server = _load_serve(monkeypatch, tmp_path, {})
-    monkeypatch.setattr(server, 'render_preference', preference)
-    headers = {}
-    handler = server.Handler.__new__(server.Handler)
-    handler.path, handler.client_address = '/wx.json', ('127.0.0.1', 1)
-    handler.send_header = lambda key, value: headers.update({key: value})
-    monkeypatch.setattr(server.http.server.SimpleHTTPRequestHandler, 'end_headers', lambda self: None)
-    handler.end_headers()
-    assert headers['X-Radar-Render'] == expected
 
 
 def test_ledger_boundaries_restart_concurrency_and_utc_rollover(tmp_path):
@@ -103,15 +67,12 @@ def test_atomic_counter_preserves_durable_symlink(tmp_path):
     assert path.is_symlink() and json.loads(durable.read_text())['bytes'] == 123
 
 
-@pytest.mark.parametrize('tier', ['watch', 'rest', 'dormant'])
+@pytest.mark.parametrize('tier', ['rest', 'dormant'])
 def test_unattended_tiers_never_acquire_level3(make_emitter, hybrid, multisite, native, monkeypatch, tier):
     monkeypatch.setattr(ae, 'RADAR_ATTENTION_MODE', 'active')
     emitter = make_emitter(); emitter._radar_attention.forced = tier; emitter._radar_attention.tier = tier
     emitter._do_radar()
     assert native.calls == []
-    if tier == 'watch':
-        assert emitter._radar_result.tiles['variant'] is False
-        assert any(c[0] == 'tile' for c in multisite.calls)
 
 
 def test_promotion_builds_native_even_when_listing_is_unchanged(make_emitter, hybrid, multisite, native, monkeypatch):
@@ -119,13 +80,15 @@ def test_promotion_builds_native_even_when_listing_is_unchanged(make_emitter, hy
     emitter = make_emitter(); emitter._radar_attention.forced = 'watch'; emitter._radar_attention.tier = 'watch'
     emitter._do_radar()
     before = emitter._radar_result
-    assert before.tiles['variant'] is False
+    assert before.tiles['variant'] == 'native'
+    assert len(before.frames[-1]['siteScans']) == 1
     emitter._radar_attention.forced = 'warm'; emitter._radar_attention.tier = 'warm'
     emitter._do_radar(discovery=True, intent_triggered=False)
     assert native.calls
     assert emitter._radar_result.tiles['variant'] == 'native'
     assert emitter._radar_result.ts_frame == before.ts_frame
-    assert emitter._radar_result.tiles['revision'] != before.tiles['revision']
+    assert emitter._radar_result.tiles['revision'] == before.tiles['revision']
+    assert len(emitter._radar_result.frames[-1]['siteScans']) > 1
 
 
 def test_newest_only_has_no_native_history_or_prefetch(make_emitter, hybrid, multisite, native):
@@ -151,7 +114,7 @@ def test_hard_ceiling_uses_v1_until_next_utc_day(make_emitter, hybrid, multisite
     wire = emitter._build_payload()['radar']
     assert wire['nativeBudget']['ceilingState'] == 'paused'
     assert wire['health']['native'] == wire['nativeBudget']
-    assert wire['renderPref'] == 'v2' and not wire['native']
+    assert wire['nativeFallback'] == dict(active=True, reason='daily-limit', recovering=False) and not wire['native']
     with pytest.raises(ae._RadarSuperseded):
         emitter._radar_request(ae.RADAR_LEVEL3_TRANSPORT, ae.RADAR_LEVEL3_BUCKET+'blocked', 10)
     hybrid.now += 86400
@@ -270,5 +233,7 @@ def test_native_ceiling_preserves_iem_prefetch(make_emitter, hybrid, multisite, 
     monkeypatch.setattr(emitter, '_radar_tile_batch', fill)
     monkeypatch.setattr(emitter, '_radar_headroom_delay', lambda *args: 0)
     emitter._radar_prefetch(source, dict(ctx, viewed=True, refresh=dict(state='idle')))
-    assert warmed and all(variant != 'native' for _, variant in warmed)
+    assert warmed
+    assert all(variant == ('native' if ceiling == budget.NATIVE_NEWEST_ONLY_BYTES else False)
+               for target, variant in warmed if target == SOURCE)
     assert any(target == 'iem-mrms-lcref' for target, _ in warmed)

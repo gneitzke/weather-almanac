@@ -7,8 +7,24 @@ to shared upstream code that the classic console benefits from too.
 ## 2026-09-25
 
 ### Radar
+- **One site renderer on every board.** Site always draws the NOAA Level III
+  per-pixel mosaic with N0H clutter control, including on Pi 3. The v1 | v2
+  switch and saved renderer preference are gone. IEM site tiles fill in only
+  while Level III is unreachable or the daily ceiling is paused; the caption
+  labels the fallback and recovery, keeping the old map until new tiles decode.
+  Smooth remains available for Region and IEM fallback.
+- **A small native scan stays warm unattended.** Watch keeps only the primary
+  radar's newest N0B and optional N0H, about 2.75–4.26 MB/hour in rainy weather.
+  Opening Radar backfills the mosaic loop. Rest and dormant fetch no Site tiles
+  or Level III products. Rest keeps its four-tile MRMS sentinel at home every
+  hour by day and every two hours at night;
+  the 150 MB newest-only and 250 MB pause ceilings still count every body byte.
+- **Quiet publication lag, visible outages.** Per-site failures remain counted
+  in health, but warnings now cover transport failures and scans still
+  unpublished after ten minutes, with the existing rate limit. Whole-network
+  retry behaviour is documented and tested across the 120-second fallback window.
 - **Remote control from your home network.** A browser on a Mac or phone can
-  zoom, pan, choose Auto, Region or a site, and change Smooth or v1 | v2; the
+  zoom, pan, choose Auto, Region or a site, and change Smooth; the
   panel follows the same engine view. The last user action takes control.
   Other pages and reloads follow without stealing it or getting stuck on
   “Updating view”. Remote touches count as presence; only the panel reports
@@ -35,17 +51,6 @@ to shared upstream code that the classic console benefits from too.
   air, or whose picture has gone stale, still does.
 - **Manual choices time out.** Tapping Region or the site holds that choice until
   you tap Auto or nobody touches the screen for 45 minutes.
-- **v2 only when someone is looking, with a daily cap.** Level III is downloaded
-  only while the Radar tab is open or the panel was touched in the last 45
-  minutes; an unattended rainy day uses v1 tiles and no Level III at all. Past
-  150 MB in a UTC day v2 keeps only its newest frame, past 250 MB it pauses until
-  midnight UTC, and the panel says so. The count shows in `/health` and is
-  saved within two seconds of each download, so a restart loses at most about
-  two seconds of counting.
-- **v2 is the default on the Pi 4.** Boards with the Pi 3's chip (Pi 3, Compute
-  Module 3, Zero 2) default to v1. A choice made on the v1 | v2 switch always wins.
-  Switching renderer shows the new picture as soon as its newest frame is ready
-  ("Sharpening to v2") instead of dropping the loop to one frame.
 - **Every US radar.** Swept all 160 sites from the Pi 4: 157 decode cleanly
   (KGGW was off the air; the Azores and Okinawa radars are not in NOAA's
   bucket). Site mode no longer requires the continental-US mask, which only

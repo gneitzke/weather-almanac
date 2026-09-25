@@ -116,21 +116,25 @@ the zoom and remembers it across
 reboots — a zoom step keeps the loop you were watching playing until the new
 frames are in — and a **SMOOTH** toggle, off by default, softens the gate edges
 of every echo without inventing detail, interpolated on the reflectivity field
-so every pixel is still a legend colour. Beside it, **v1 | v2** picks how the
-site radar is drawn: v1 from IEM's tiles, gridded to about a kilometre; v2
-from NOAA's Level III product, the radar's own half-degree by 250-metre cells,
-so zoom 9 and 10 look like a phone radar app instead of a mosaic of squares.
-v2 is the default on the Pi 4 (a Pi 3 starts on v1) and works for every US
-radar, Alaska, Hawaii, Puerto Rico and Guam included. It downloads only while
-someone is looking, the Radar tab open or the screen touched in the last 45
-minutes, and a daily cap (newest frame only past 150 MB, v1 past 250 MB, reset
-at midnight UTC) keeps a forgotten tab bounded; the count shows in `/health`.
+so every pixel is still a legend colour. The site radar always uses **v2**:
+NOAA Level III, the radar's own half-degree by 250-metre cells, on every board
+including the Pi 3. It works across the US, including Alaska, Hawaii,
+Puerto Rico and Guam. IEM site tiles fill in automatically only when Level III
+is unreachable or its daily allowance is paused; the source caption plainly
+labels the fallback and recovery. Smooth applies to Region and IEM fallback
+tiles and is disabled while native frames draw.
+While unattended, watch keeps only the primary radar's newest N0B/N0H scan
+warm; opening Radar backfills the full mosaic loop. Rest and dormant fetch no
+Site tiles or Level III products. Rest keeps its four-tile MRMS sentinel at home
+every hour by day and every two hours at night. The daily cap keeps only the
+newest frame past 150 MB and uses labelled IEM fallback past 250 MB, resetting
+at midnight UTC; `/health` shows the count.
 v2 merges nearby radars pixel by pixel: each pixel shows the echo from the
 lowest beam within 230 km that sees one, so a radar blocked by mountains never
 hides its neighbour's rain, and there are no seams where one radar's coverage
 ends. NOAA's own classification removes ground clutter, and birds and insects
 outside rain, for about 25 KB more per scan; if it is late, rain still draws
-and the caption says "unfiltered". Region and v1 keep their existing pictures. The station glyph shows where home is
+and the caption says "unfiltered". Region keeps its MRMS picture. The station glyph shows where home is
 while you're away and the view drifts back to it after a minute and a half
 untouched.
 
@@ -293,8 +297,10 @@ first live reading arrives.
 - `attention`: which of the five acquisition tiers the engine is in (`live`,
   `warm`, `watch`, `rest`, `dormant`), why, since when, the weather holds, the
   last transitions, and bytes fetched per tier. With the tab closed the engine
-  rests on listings only until rain, lightning, a wet forecast, a touch on the
-  device or an approaching echo (a four-tile sentinel each hour) warms it.
+  rests on listings plus a four-tile MRMS sentinel at home every hour by day
+  (every two hours at night) until rain, lightning, a wet forecast, a touch on
+  the device or an approaching echo warms it. Rest and dormant fetch no Site
+  tiles or Level III products; dormant has no sentinel.
 
 The engine logs one summary line per radar pass (`radar pass outcome=...`); a
 pass that yields on an internal budget says `error=deferred: <reason>`. On the

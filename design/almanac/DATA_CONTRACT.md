@@ -226,8 +226,8 @@ worth looking at. `radar.attention` is published with every payload:
 |---|---|---|
 | `live` | the Radar tab is open now (`radar_viewing` marker live) | newest at scan cadence, 8-frame loop, zoom/mode prefetch |
 | `warm` | a human touched the device (`presence` marker) or looked at radar within 45 min | newest at cadence plus four history frames |
-| `watch` | weather present (rain hold 60 min, lightning hold 30 min, echo hold 60 min, forecast ≥ 50 % or precipitation words until < 30 %), or observations unknown (older than 5 min), or a usual glance hour, or a LAN browser polling within 15 min | newest at cadence; 8 frames by day (06:00–23:00 local), newest only by night |
-| `rest` | quiet weather, nobody around | site listings every 15 min, no frame tiles, a 4-tile zoom-5 sentinel at home every 60 min by day / 120 by night |
+| `watch` | weather present (rain hold 60 min, lightning hold 30 min, echo hold 60 min, forecast ≥ 50 % or precipitation words until < 30 %), or observations unknown (older than 5 min), or a usual glance hour, or a LAN browser polling within 15 min | Site: primary/newest Level III scan only. Region: 8 frames by day (06:00–23:00 local), newest only by night |
+| `rest` | quiet weather, nobody around | site listings every 15 min, no Site tiles or Level III products, a 4-tile zoom-5 MRMS sentinel at home every 60 min by day / 120 by night |
 | `dormant` | rest for 2 h at night, or no attention for 3 days | one listing an hour, no tiles, no sentinel |
 
 Promotion is immediate. Live drops to warm the moment the tab closes; every other
@@ -408,7 +408,7 @@ rapid zoom presses accumulate from the pending animation target.
 ### Remote control
 
 There is one engine view. Browsers on the home network can steer zoom, pan,
-Auto/Region/site, Smooth and v1/v2; the panel follows. Controllers are loopback
+Auto/Region/site and Smooth; the panel follows. Controllers are loopback
 and explicit private ranges: IPv4 `10/8`, `172.16/12`, `192.168/16`; IPv6
 `fc00::/7`, `fe80::/10`; IPv4-mapped IPv6 addresses use their IPv4 classification.
 The peer address is classified with `ipaddress`, not forwarded headers or the
@@ -437,7 +437,7 @@ Passive polls, opening Radar and reloading never claim. A rejected claim follows
 the winning view until another user action. Smooth and renderer writes are
 explicit pending taps with a valid `radarSession`, independent of camera
 ownership. Controllers receive `X-Radar-Intent`, `X-Radar-Smooth`,
-`X-Radar-Render`, `X-View-Session` and `X-Radar-Panel: 1|0`; only loopback gets
+`X-View-Session` and `X-Radar-Panel: 1|0`; only loopback gets
 panel value `1`.
 
 The panel alone may recenter an away camera after the accepted intent is 90
@@ -662,7 +662,7 @@ source (`mosaic` or `site`). Auto stays pressed while either source is drawn.
 Its normal caption starts with `Auto · `, for example `Auto · Region` or
 `Auto · KATX radar`. `refresh.targetMode` names a staged source. The page uses
 `Switching to … · showing …` during that transition and retains the old image.
-The v1/v2 preference chooses the site renderer in Auto too.
+Site always uses the Level III mosaic, including in Auto and on Pi 3 boards.
 
 `lib/radar_auto.py:choose` uses only the accepted, settled camera zoom:
 
@@ -697,8 +697,11 @@ visible until min(4, n) frames of the new loop are decoded, where n is the
 advertised target, not just the frames published so far. Tile scheduling and
 acceptance use the same readiness predicate. A renderer-only change on the same
 source/site accepts as soon as the new variant's newest frame is decoded;
-history backfills normally. Its caption says `Sharpening to v2 · showing v1`
-(or the reverse), never “Switching to” the same radar.
+history backfills normally. A degradation says `Level III unreachable` (or
+`Daily Level III limit reached`), then `loading IEM tiles · showing NOAA Level III`
+until decoded fallback tiles replace native. While fallback tiles draw, it says
+`showing IEM tiles`. Recovery says `Restoring NOAA Level III · showing IEM tiles`.
+Renderer transitions never use “Sharpening” and never blank the existing map.
 Region still has a native zoom ceiling of 9; Auto
 can select Site at camera zoom 10 when the guards permit it.
 
@@ -776,9 +779,9 @@ A settled, viewed Region warms the Site newest tiles at the same centre and
 zoom plus eligible neighbours; a completed mosaic return retries this warming.
 Manual Site retains opposite-mode Region warming. In Auto, Region warms Site
 at settled zoom >= 7, and Site warms Region at settled zoom <= 7. Warming fetches
-Level III products only when native is allowed in the effective live/warm tier
-and the ceiling is `normal`; otherwise it warms v1 tiles. Shadow attention does
-not gate native. Existing viewed/idle, attention prefetch, and interaction
+Level III products at the normal ceiling; the newest-only ceiling warms only
+the primary site’s newest scan. IEM tiles warm only during a Level III outage
+or the paused ceiling. Shadow attention does not gate native. Existing viewed/idle, attention prefetch, and interaction
 reserve admission still apply.
 
 Both themes keep the closest segment tappable when the site is `not reporting`
@@ -1446,8 +1449,8 @@ remapped disk paths used by `serve.py` and the v4 page. Opposite-mode newest at
 the current camera takes precedence over optional zoom neighbours when eligible.
 Manual Site warms Region, and manual Region warms Site. Auto warms the next
 source at the settled camera: Region-to-Site at zoom >= 7, Site-to-Region at
-zoom <= 7. Native warming requires the effective live/warm tier and a normal
-ceiling; otherwise Site warming uses v1 tiles. Source cooldowns cannot block
+zoom <= 7. Site warming uses native; newest-only warming is restricted to the primary
+site’s newest scan. Only an outage or paused ceiling uses IEM fallback tiles. Source cooldowns cannot block
 another source's eligible round; the shared 240/minute
 cap and footprint/layer-aware mandatory reserve apply (v5.7 replaces the fixed
 34-request reserve). A round is
@@ -1707,37 +1710,32 @@ the next lifecycle's executors. Timed-out and cancelled flights enter bounded pe
 memory; late successful products still clear that failure and can upgrade. Prefetch propagates HCA budget refusals
 and skips only the current target when classification is unfinished, continuing
 later targets (including Region). A budget denial may end the round. No unfinished
-round is recorded as successfully prefetched. No HCA requests in
-watch/rest/dormant or paused native, and no native history/prefetch at the
-newest-only ceiling. Optional HCA has its own circuit/cooldown state, published at
+round is recorded as successfully prefetched. Watch requests N0H only for the primary newest N0B. Rest/dormant and paused
+native request no HCA; newest-only permits no native history. Optional HCA has its own circuit/cooldown state, published at
 `/health.radar.classification`, so its failures cannot open N0B's circuit.
 Neither a failed HCA nor its failure cache blocks N0B. An unfiltered newest
 frame less than three minutes old schedules a 20-second readiness retry.
 
 ### v2: the radar's own cells (Level III, 2026-09-25)
 
-**v1** is the radar above: IEM ridge tiles, gridded by IEM to about 1 km before
+**v1** is only the automatic fallback described above: IEM ridge tiles, gridded by IEM to about 1 km before
 we remap them. **v2** mosaics contributing NEXRAD sites from NOAA's Level III base
 reflectivity (N0B, product 153: 720 radials of 0.5 degrees, 1840 gates of 250 m),
 read from the public bucket `https://unidata-nexrad-level3.s3.amazonaws.com/`.
 Design and the later phases: `RADAR-NATIVE-DESIGNS.md`.
 
-**Preference.** A `v1 | v2` group sits after SMOOTH (two 48×44 px segments on the
-plate scrim, `aria-pressed`). A controller sends `radarRender=v1|v2` on a tap; the
-rules are Smooth's exactly: one value and a valid session, independent of camera ownership,
-atomic replace only on change, durable at
-`$XDG_STATE_HOME/wfpiconsole/radar_render`, acknowledged by
-`X-Radar-Render: v1|v2`, and watched by the emitter even under an ordered intent.
-Default is v2, except for BCM2837-class boards (Raspberry Pi 3,
-Compute Module 3/3+, and Raspberry Pi Zero 2), which default to v1. The shared device reader is cached once per process and
-injectable in tests. An explicit preference always wins. Region stays v1.
-Smooth is disabled while native frames are drawn. A paused v2 preference can
-show v1 with Smooth enabled; the requested renderer and the drawn variant are
-separate facts.
+**One site renderer.** Every device, including BCM2837/Pi 3 boards, uses v2.
+There is no renderer control, poll parameter, response header, or renderer
+preference. Old `radar_render` files (including malformed or unreadable files)
+are ignored and no longer linked by the launcher. The watched preferences are
+`radar_intent` and `radar_smooth`, plus legacy `radar_zoom`, `radar_source`, and
+`radar_center` when there is no ordered intent. Region retains MRMS. Smooth
+remains available for Region and automatic IEM fallback and is disabled while
+native frames draw.
 
 **Render variant.** v2 is a third tile variant beside plain and Smooth:
-`_radar_variant(ctx, source)` is `'native'` for `iem-nexrad-n0b` with v2 selected,
-attention tier `live` or `warm`, and the daily ceiling below its pause state.
+`_radar_variant(ctx, source)` is `'native'` for `iem-nexrad-n0b` when Level III
+is reachable, effective attention is live/warm/watch, and the ceiling is not paused.
 Otherwise it is the Smooth boolean. The variant has its own render revision directory
 (`_radar_render_revision('native')`, advertised in `radar/.native-revision` so
 the server serves it immutable), a disk key suffixed `('native',)`, and PNG
@@ -1746,14 +1744,29 @@ Gates are measurements, not matched colours, so `unmatchedPixels` and
 `ambiguousPixels` are 0 and `remapped` is true. The manifest adds
 `tiles.variant` (`false`, `true` or `"native"`); `tiles.smooth` stays a boolean,
 true only for Smooth, so the page never interpolates v2 pixels. The payload adds
-`radar.native` (the drawn variant) and `radar.renderPref` (`v1` or `v2`, the
-requested renderer). Native attribution reads `NOAA NEXRAD Level III`.
+`radar.native` (the drawn variant). `radar.nativeFallback` contains `active`
+(true only when the published site frames are IEM tiles), `reason`
+(`level3-unreachable`, `daily-limit`, or null), and `recovering` (true when IEM
+frames remain displayed after the cause clears). There is no `renderPref`.
+The page uses the drawn/staged manifest for captions, retaining the old loop
+until the replacement newest frame decodes. Native attribution reads `NOAA Level III`.
+`/health.radar.nativeFallback` retains the host diagnostics (`active`,
+`breakerOpen`, `reason`, `since`, `retrySec`); it is separate from the drawn state.
 
-**Attention and daily bytes.** Watch, rest and dormant never fetch Level III.
-Site acquisition in those tiers uses IEM v1 tiles; rest and dormant keep their
-existing no-tile policy. Already displayed frames remain during the transition.
-Promotion to warm/live stages native frames under their own cache revision,
-even if the scan timestamp has not changed.
+**Attention and daily bytes.** Watch keeps exactly one site and one newest
+Level III scan warm: the primary radar, with its matching optional N0H. Any
+unviewed site-loop build follows the same bound, even in warm/live. Discovery
+lists only that primary site, never other sites; no older scan is downloaded
+if the newest is unpublished. Rest and dormant fetch no Site tiles or Level III
+products. Rest keeps its four-tile zoom-5 MRMS sentinel at home every hour by
+day and every two hours at night; dormant only lists.
+Shadow tiers do not apply acquisition restrictions; the effective tier remains
+live, while an unviewed build still has the primary/newest bound. Live viewing
+expands to the full mosaic loop, reusing the warmed primary product even when
+the scan timestamp has not changed. All Level III bodies use the same ledger;
+newest-only stays native and paused uses automatic IEM fallback. At a rainy-day
+5–6 minute cadence, 0.25–0.33 MB N0B plus 0.025 MB N0H is about 2.75–4.26 MB/hour
+(10–12 scans); listings/retries add overhead.
 
 `lib/radar_native_budget.py` counts received Level III response-body bytes,
 including listings, products, invalid bodies and partial reads. Cache hits and
@@ -1785,10 +1798,10 @@ This is a response-body budget, not an ISP traffic counter. A request already
 in flight may cross a threshold.
 
 Above 150,000,000 bytes in a UTC day, native acquisition is newest-only, with no
-native history backfill or optional warming. Up to two older scans may be tried
+native history backfill. Optional Site warming is primary/newest-only. Up to two older scans may be tried
 if the newest scan is unavailable, still building just one frame. Region keeps
 its normal loop. Above 250,000,000 bytes, Site uses
-v1 for the rest of the UTC day. Preferences are retained. Policy changes
+labelled IEM fallback for the rest of the UTC day. Policy changes
 supersede a Site acquisition as a whole, so a tile key never changes renderer;
 Site-only tier/ceiling transitions do not invalidate Region acquisitions.
 In attention shadow mode, tiers gate neither native access nor Auto evaluation.
@@ -1799,6 +1812,23 @@ The intent watcher also detects UTC rollover and resumes the eligible variant.
 `ledgerState` (`ok` or `retrying`). The page shows
 `v2 accounting retrying · bytes counted in memory` for ledger failure and
 `v2 paused · daily data limit` only when the byte ceiling is paused. N0H shares this ledger and both ceiling policies.
+
+**Outages and logging.** A failed Level III transport attempt selects automatic
+IEM fallback for 120 seconds. An already open Level III breaker also selects
+IEM until a recovery probe is eligible. With a whole-network outage, a
+v2 attempt takes the Level III path once per 120-second fallback window, resets
+the local failure streak and schedules a retry in 2 seconds. Subsequent IEM
+attempts follow the ordinary local exponential backoff. At expiry the next
+eligible native attempt can reset the streak again; this bounded exception is
+not a claim that a dead local network leaves IEM reachable. Discovery itself
+may fail first, in which case its normal local backoff applies without trying
+Level III. Existing pixels remain while both routes are unavailable.
+All per-site input failures remain counted in `/health.radar.mosaic.siteFailures`.
+Warnings are limited to transport/local/ambiguous/circuit failures, or a Level
+III scan still unpublished more than 600 seconds after its advertised volume
+minute. The typed unpublished outcome survives the negative cache. Routine
+IEM-to-S3 publication lag and other validation errors do not warn. Eligible
+warnings retain the existing per-site rate limit and suppressed count.
 
 **Scan identity.** IEM names a scan by its volume start floored to the minute;
 the S3 key carries the seconds (`ATX_N0B_2026_09_25_03_42_24` is IEM's 03:42).

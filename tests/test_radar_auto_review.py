@@ -244,11 +244,6 @@ def test_shadow_tier_cannot_gate_auto_or_native(make_emitter, hybrid, multisite,
     assert ae.RADAR_LEVEL3_TRANSPORT in emitter._radar_transport_sources('iem-nexrad-n0b')
 
 
-@pytest.mark.parametrize('model', ['Raspberry Pi Compute Module 3 Rev 1.0', 'Raspberry Pi Compute Module 3 Plus Rev 1.0', 'Raspberry Pi Zero 2 W Rev 1.0', 'BCM2837'])
-def test_bcm2837_defaults_v1(model):
-    assert budget.default_renderer(lambda: model) == 'v1'
-
-
 def test_auto_schedules_site_breaker_recovery(make_emitter, monkeypatch):
     emitter = make_emitter()
     emitter._radar_result = emitter._radar_result._replace(source_pref='auto', source_id='iem-mrms-lcref', source_mode='mosaic', zoom_desired=8)
@@ -280,7 +275,7 @@ def test_camera_posts_source_only_for_explicit_change():
 const assert=require('node:assert/strict');
 let presenceDirty=false,pollTimer=null,pollController=null,polling=false,pollStart=0,FETCH_MS=4000,failCount=0,pollGen=0,reportRender=false;
 const schedulePoll=()=>{},updateFreshness=()=>{},$=()=>({classList:{contains:()=>true}}),document={hidden:false},clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
-const radarIntent={generation:1,ready:true,owned:true,owner:null,session:'review-session-12345',heartbeat:0,preferredMode:'site'},radarGesture={state:'idle'},radarZoom={auto:false},radarSmooth={pending:null},radarRender={pending:null},radarBaseStyle={theme:'paper'};
+const radarIntent={generation:1,ready:true,owned:true,owner:null,session:'review-session-12345',heartbeat:0,preferredMode:'site'},radarGesture={state:'idle'},radarZoom={auto:false},radarSmooth={pending:null},radarBaseStyle={theme:'paper'};
 let radarCamera={lat:47,lon:-122,zoom:9},urls=[];
 const fetch=url=>{urls.push(url);const chain={then:()=>chain,catch:()=>chain};return chain};
 POLL

@@ -33,13 +33,13 @@ def test_auto_warms_next_source_at_settled_zoom(scene, monkeypatch, source, zoom
 
 @pytest.mark.parametrize('attention,tier,ceiling,variant', [
     ('active', 'live', 0, 'native'),
-    ('active', 'live', budget.NATIVE_NEWEST_ONLY_BYTES+1, False),
+    ('active', 'live', budget.NATIVE_NEWEST_ONLY_BYTES+1, 'native'),
     ('active', 'live', budget.NATIVE_PAUSE_BYTES+1, False),
     ('shadow', 'watch', 0, 'native'),
     ('shadow', 'rest', 0, 'native'),
     ('shadow', 'dormant', 0, 'native'),
 ])
-def test_region_warming_uses_native_only_with_full_allowance(
+def test_region_warming_uses_native_until_paused(
         make_emitter, hybrid, multisite, native, tmp_path, monkeypatch,
         attention, tier, ceiling, variant):
     (tmp_path/'radar_source').write_text('mosaic')
@@ -67,7 +67,6 @@ def test_region_warming_uses_native_only_with_full_allowance(
 def test_region_failed_listing_replaces_old_evidence_on_original_cadence(
         make_emitter, hybrid, multisite, tmp_path, monkeypatch, mode):
     intent(tmp_path, 6, mode)
-    (tmp_path/'radar_render').write_text('v2')
     emitter = make_emitter(); emitter._do_radar()
     # A Level III cooldown cannot suppress the independent IEM evidence check.
     emitter._radar_cooldowns[ae.RADAR_LEVEL3_TRANSPORT] = hybrid.mono+1000

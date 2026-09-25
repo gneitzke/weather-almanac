@@ -240,14 +240,14 @@ def test_throttled_page_keeps_commit_presence_and_preferences_for_next_poll():
     run_remote(r'''
 const a=page(),b=page();await a.poll();a.run('radarZoomChange(1)');await a.poll();await b.poll();
 server.throttled=true;
-b.run("radarZoomChange(-1);presenceDirty=true;radarRender.pending='v2';radarSmooth.pending=true");
+b.run("radarZoomChange(-1);presenceDirty=true;radarSmooth.pending=true");
 await b.poll();
-b.run("assert.equal(radarIntent.ready,true);assert.equal(presenceDirty,true);assert.equal(radarCamera.zoom,8);assert.equal(radarRender.pending,'v2');assert.equal(radarSmooth.pending,true);assert.equal(failCount,0);assert.equal(reportRender,true)");
+b.run("assert.equal(radarIntent.ready,true);assert.equal(presenceDirty,true);assert.equal(radarCamera.zoom,8);assert.equal(radarSmooth.pending,true);assert.equal(failCount,0);assert.equal(reportRender,true)");
 assert.equal(server.owner,a.run('radarIntent.session'));
 server.throttled=false;await b.poll();
 assert.equal(server.owner,b.run('radarIntent.session'));assert.equal(server.intent.zoom,8);
-assert.equal(server.requests.at(-1).get('touch'),'1');assert.equal(server.render,'v2');assert.equal(server.smooth,'on');
-b.run("assert.equal(radarIntent.ready,false);assert.equal(presenceDirty,false);assert.equal(radarRender.pending,null);assert.equal(radarSmooth.pending,null)");
+assert.equal(server.requests.at(-1).get('touch'),'1');assert.equal(server.smooth,'on');
+b.run("assert.equal(radarIntent.ready,false);assert.equal(presenceDirty,false);assert.equal(radarSmooth.pending,null)");
 ''')
 
 
@@ -337,7 +337,7 @@ def test_intent_header_reports_owner_idle(server, monkeypatch):
 def test_site_to_site_handoff_says_switching():
     run_remote(r'''
 const p=page();await p.poll();
-p.run("radarView.data={...manifest(),sourceId:'iem-nexrad-n0b',sourceMode:'site',siteId:'KATX',sourcePref:'auto'};radarView.pendingSource={frames:[],data:{...manifest(),sourceId:'iem-nexrad-n0b',sourceMode:'site',siteId:'KRTX'}};assert.match(caption(),/^Switching to /);radarView.pendingSource={frames:[],variantOnly:true,data:{...radarView.data,native:true}};assert.match(caption(),/^Sharpening to v2/)");
+p.run("radarView.data={...manifest(),sourceId:'iem-nexrad-n0b',sourceMode:'site',siteId:'KATX',sourcePref:'auto',native:true};radarView.pendingSource={frames:[],data:{...manifest(),sourceId:'iem-nexrad-n0b',sourceMode:'site',siteId:'KRTX'}};assert.match(caption(),/^Switching to /);radarView.data.native=false;radarView.pendingSource={frames:[],variantOnly:true,data:{...radarView.data,native:true}};assert.match(caption(),/^Restoring NOAA Level III/)");
 ''')
 
 

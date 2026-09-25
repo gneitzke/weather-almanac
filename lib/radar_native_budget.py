@@ -1,43 +1,18 @@
-"""Native Level III policy, device default and restart-safe UTC body-byte ledger."""
+"""Native Level III policy and restart-safe UTC body-byte ledger."""
 import json
 import logging
 import os
 import threading
 import time
 from datetime import datetime, timezone, timedelta
-from functools import lru_cache
 from pathlib import Path
 
 NATIVE_NEWEST_ONLY_BYTES = 150_000_000
 NATIVE_PAUSE_BYTES = 250_000_000
 
 
-def read_device_model():
-    try:
-        return Path('/proc/device-tree/model').read_text().rstrip('\0\n')
-    except (OSError, UnicodeError):
-        return ''
-
-
-@lru_cache(maxsize=None)
-def default_renderer(model_reader=read_device_model):
-    """Read once per process; an injected reader makes device policy testable."""
-    model = model_reader()
-    return 'v1' if any(name in model for name in ('Raspberry Pi 3', 'Compute Module 3', 'Raspberry Pi Zero 2', 'BCM2837')) else 'v2'
-
-
-def render_preference(path, model_reader=read_device_model):
-    try:
-        raw = Path(path).read_text()[:128].strip()
-        if raw in ('v1', 'v2'):
-            return raw
-    except (OSError, UnicodeError):
-        pass
-    return default_renderer(model_reader)
-
-
 def native_allowed(requested, tier, ceiling_state):
-    return requested and tier in ('live', 'warm') and ceiling_state != 'paused'
+    return requested and tier in ('live', 'warm', 'watch') and ceiling_state != 'paused'
 
 
 class NativeBudget:

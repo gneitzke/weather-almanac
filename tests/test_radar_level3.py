@@ -175,7 +175,7 @@ def test_match_key_uses_the_iem_minute():
 @pytest.fixture
 def native(hybrid, multisite, monkeypatch, tmp_path):
     """S3 routes beside the IEM fixture: listings and products for each scan."""
-    # Native acquisition now requires a person looking at the radar.
+    # Exercise the attended full mosaic; watch has separate primary/newest tests.
     monkeypatch.setattr(ae, 'RADAR_ATTENTION_MODE', 'active')
     hybrid.view()
     (tmp_path / 'radar_viewing').write_text(json.dumps(dict(since=hybrid.now, last=hybrid.now)))
@@ -204,7 +204,8 @@ def native(hybrid, multisite, monkeypatch, tmp_path):
             return io.BytesIO(product(lat=lat, lon=lon, volume_ts=ts, codes=codes))
         return opened(self, req, timeout)
     monkeypatch.setattr(ae.RadarSession, 'open', fetch)
-    (tmp_path / 'radar_render').write_text('v2\n')
+    monkeypatch.setattr(ae.AlmanacEmitter, '_radar_level3_down', hybrid.level3_down)
+    monkeypatch.setattr(ae.AlmanacEmitter, '_radar_primary_only', staticmethod(hybrid.primary_only))
     return state
 
 
@@ -236,7 +237,7 @@ def test_v2_draws_site_scans_from_level3_once_per_scan(make_emitter, hybrid, mul
     restart = make_emitter(); restart._do_radar()
     assert records.keys() <= restart._radar_disk_inventory.records.keys(), 'native tiles survive a restart'
 
-    (tmp_path / 'radar_render').write_text('v1\n'); emitter._do_radar()
+    emitter._radar_level3_fallback(ConnectionError('test outage')); emitter._do_radar()
     assert emitter._build_payload()['radar']['native'] is False
     assert emitter._radar_result.tiles['variant'] is False
     assert [c for c in multisite.calls if c[0] == 'tile']
@@ -270,38 +271,6 @@ def test_a_missing_scan_is_not_requested_per_tile(make_emitter, hybrid, multisit
     assert not emitter._radar_level3_flights
 
 
-@pytest.mark.parametrize('address', ['127.0.0.1', '198.51.100.1'])
-@pytest.mark.parametrize('query,value', [('radarRender=v2', 'v2'), ('radarRender=v1', 'v1'),
-    ('radarRender=v3', None), ('radarRender=V2', None), ('radarRender=v1&radarRender=v2', None)])
-def test_render_preference_is_loopback_and_validated(monkeypatch, tmp_path, address, query, value):
-    module = _load_serve(monkeypatch, tmp_path, _payload())
-    monkeypatch.setattr(module.http.server.SimpleHTTPRequestHandler, 'do_GET', lambda h: None)
-    h = object.__new__(module.Handler); h.client_address = (address, 1); h.path = '/wx.json?radarSession=preference-session-123&' + query
-    h.do_GET(); marker = tmp_path / 'radar_render'
-    assert (marker.read_text().strip() if marker.exists() else None) == (value if address in module.LOOPBACK else None)
-
-
-def test_render_header_and_native_tiles_are_immutable(monkeypatch, tmp_path):
-    module = _load_serve(monkeypatch, tmp_path, _payload())
-    from lib.radar_native_budget import render_preference
-    reader = lambda: 'Raspberry Pi 4 Model B'
-    monkeypatch.setattr(module, 'render_preference', lambda path: render_preference(path, reader))
-    headers = {}
-    h = object.__new__(module.Handler); h.client_address = ('127.0.0.1', 1); h.path = '/wx.json'
-    h.send_header = lambda k, v: headers.__setitem__(k, v)
-    monkeypatch.setattr(module.http.server.SimpleHTTPRequestHandler, 'end_headers', lambda self: None)
-    h.end_headers(); assert headers['X-Radar-Render'] == 'v2'
-    (tmp_path / 'radar_render').write_text('v2\n'); h.end_headers()
-    assert headers['X-Radar-Render'] == 'v2'
+def test_native_tiles_are_immutable():
     source = Path('design/almanac/kiosk/serve.py').read_text()
     assert "revision('native',tile[1])" in source
-    script = Path('design/almanac/kiosk/almanac-kiosk.sh').read_text()
-    assert 'ln -sfn "$RADAR_STATE/radar_render" "$DATA_DIR/radar_render"' in script
-
-
-def test_page_switch_posts_once_and_follows_the_server():
-    html = Path('design/almanac/console_live.html').read_text()
-    assert re.search(r'id="rad-v1"[^>]*aria-pressed="true"', html) and 'id="rad-v2"' in html
-    assert '"&radarRender="+radarRender.pending' in html
-    assert "x.render==='v1'||x.render==='v2'" in html
-    assert "function radarNativeActive(){return radarView.data?.native===true;}" in html

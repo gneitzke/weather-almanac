@@ -24,7 +24,6 @@ import sys
 REPO_ROOT = str(Path(__file__).resolve().parents[3])
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
-from lib.radar_native_budget import render_preference
 from lib.radar_auto import source_preference
 
 PORT      = int(os.environ.get("WFP_PORT", "8137"))
@@ -291,7 +290,7 @@ def _write_radar_source(values):
 
 def _write_radar_preference(name, values):
     """Caller holds _count_lock and has checked controller admission. Polling cannot fail here."""
-    if name not in ('radar_zoom', 'radar_source', 'radar_center', 'radar_smooth', 'radar_render') or len(values) != 1:
+    if name not in ('radar_zoom', 'radar_source', 'radar_center', 'radar_smooth') or len(values) != 1:
         return
     value = values[0]
     if name == 'radar_center':
@@ -305,9 +304,6 @@ def _write_radar_preference(name, values):
             value = ','.join(format(Decimal(str(n)), 'f') for n in (lat, lon))
     elif name == 'radar_smooth':
         if value not in ('on', 'off'):
-            return
-    elif name == 'radar_render':
-        if value not in ('v1', 'v2'):
             return
     elif name == 'radar_source':
         if value not in ('auto', 'mosaic', 'site'):
@@ -645,7 +641,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                         _write_radar_viewing(viewed_radar)
                     if _valid_radar_session(params):
                         _write_radar_preference('radar_smooth', params.get('radarSmooth', []))
-                        _write_radar_preference('radar_render', params.get('radarRender', []))
                     if camera_report and view_accepted:
                         marker=os.path.join(os.path.dirname(DATA),'radar_activity');tmp=marker+'.tmp'
                         try:
@@ -720,8 +715,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     self.send_header('X-Radar-Throttled', '1')
                 self.send_header('X-Radar-Panel', '1' if _is_loopback(self.client_address[0]) else '0')
                 self.send_header('X-Radar-Smooth', 'on' if smooth else 'off')
-                render = render_preference(Path(DATA).with_name('radar_render'))
-                self.send_header('X-Radar-Render', render)
                 self.send_header('X-View-Session', _view_owner['session'] if _view_owner else '')
                 # ownerIdleSec lets the panel tell a live owner (a phone still
                 # watching a storm) from a dead one (closed or hidden tab).

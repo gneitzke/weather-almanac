@@ -16,11 +16,11 @@ const nodes=new Map(),$=id=>{if(!nodes.has(id))nodes.set(id,{
   get scrollWidth(){return this.textContent.length}
 });return nodes.get(id)};
 const document={createTextNode:s=>s,createElement:()=>$('credit')};
-const radarNoteRender=()=>{},radarSource={desired:null},radarIntent={postedAt:0},radarSwitch=null,radarRender={value:'v1'};
+const radarNoteRender=()=>{},radarSource={desired:null},radarIntent={postedAt:0},radarSwitch=null;
 const radarSiteTable=[{id:'KATX',name:'Camano Island'},{id:'KLGX',name:'Langley Hill'}];
 const sites=['KATX','KLGX','KRTX','KOTX'].map(id=>({id,contributing:true}));
 if(DARK)Object.assign(sites[0],{contributing:false,reason:'not reporting'});
-const radarView={data:{sourceId:'iem-nexrad-n0b',sourceMode:'site',sourcePref:'site',siteId:DARK?'KLGX':'KATX',
+const radarView={data:{sourceId:'iem-nexrad-n0b',sourceMode:'site',native:true,sourcePref:'site',siteId:DARK?'KLGX':'KATX',
   scanCadenceSec:240,scanMode:null,sources:[{mode:'site',siteId:'KLGX',available:true}],sites,
   nexrad:NEAREST?{id:'KATX',name:'Fallback',distanceDisp:'39 mi',bearing:'NE'}:null}};
 if(CURRENT)radarView.current={drawnSites:[{id:'KLGX'},{id:'KRTX'}]};
@@ -39,8 +39,8 @@ def test_closest_button_and_drawn_caption(dark):
     assert r['button'] == ('KATX +2' if dark else 'KATX +3')
     assert r['aria'] == f"KATX and {2 if dark else 3} nearby: Camano Island radar, high resolution, 39 mi NE"
     assert r['caption'] == (
-        'Langley Hill radar, high resolution + 2 nearby · new scan every ~4 min · IEM / NOAA · KATX not reporting'
-        if dark else 'Camano Island radar, high resolution + 3 nearby · new scan every ~4 min · IEM / NOAA')
+        'Langley Hill radar, high resolution + 2 nearby · new scan every ~4 min · NOAA Level III · KATX not reporting'
+        if dark else 'Camano Island radar, high resolution + 3 nearby · new scan every ~4 min · NOAA Level III')
     assert '39 mi' not in r['caption']
 
 
@@ -57,7 +57,7 @@ def test_additional_count_uses_displayed_frame():
 
 
 def test_resolution_yields_before_existing_drop_order():
-    full = 'Langley Hill radar + 2 nearby · new scan every ~4 min · IEM / NOAA · KATX not reporting'
+    full = 'Langley Hill radar + 2 nearby · new scan every ~4 min · NOAA Level III · KATX not reporting'
     short = full.replace('new scan every', 'every')
     bare = short.replace(' + 2 nearby', '')
     for expected in (full, short, bare):

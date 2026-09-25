@@ -274,6 +274,7 @@ def test_mosaic_echo_is_counted_once_and_matches_metadata(make_emitter, hybrid, 
 
 def test_n0h_provider_failure_cannot_open_n0b_circuit(make_emitter, hybrid, multisite, classified):
     hybrid.now = hybrid.latest + 60
+    hybrid.view()  # Keep this multi-site/backfill scenario attended after moving the clock.
     emitter=make_emitter(); emitter._do_radar()
     for key in list(emitter._radar_level3_scans):
         if len(key)==3: del emitter._radar_level3_scans[key]
@@ -371,7 +372,7 @@ def test_n0h_body_bytes_share_durable_ledger(make_emitter, monkeypatch, invalid)
     assert make_emitter()._radar_native_budget.snapshot()['bytesToday']==len(raw)
 
 
-@pytest.mark.parametrize('tier', ['watch','rest','dormant'])
+@pytest.mark.parametrize('tier', ['rest','dormant'])
 def test_n0h_inherits_unattended_tier_gating(make_emitter, hybrid, multisite, classified, native, tier):
     emitter=make_emitter(); emitter._radar_attention.forced=tier; emitter._radar_attention.tier=tier
     emitter._do_radar()

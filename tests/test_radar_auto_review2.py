@@ -250,7 +250,7 @@ def test_old_poll_ack_cannot_consume_a_new_source_tap():
 const assert=require('node:assert/strict');
 let presenceDirty=false,pollTimer=null,pollController=null,polling=false,pollStart=0,FETCH_MS=4000,failCount=0,pollGen=0,reportRender=false;
 const schedulePoll=()=>{},updateFreshness=()=>{},$=()=>({classList:{contains:()=>true}}),document={hidden:false},clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
-const radarIntent={generation:1,ready:false,owned:true,owner:null,session:'review2-session',heartbeat:0,preferredMode:'mosaic'},radarGesture={state:'idle'},radarZoom={auto:false},radarSmooth={pending:null},radarRender={pending:null},radarBaseStyle={theme:'paper'},radarSource={desired:null};
+const radarIntent={generation:1,ready:false,owned:true,owner:null,session:'review2-session',heartbeat:0,preferredMode:'mosaic'},radarGesture={state:'idle'},radarZoom={auto:false},radarSmooth={pending:null},radarBaseStyle={theme:'paper'},radarSource={desired:null};
 const validPayload=()=>true,radarTrace=()=>{},isNum=v=>typeof v==='number'&&Number.isFinite(v);
 let radarCamera={lat:47,lon:-122,zoom:9},requests=[];
 const fetch=url=>{const handlers=[],chain={then(fn){handlers.push(fn);return chain},catch(){return chain}};requests.push({url,handlers});return chain};
@@ -275,8 +275,8 @@ def test_variant_caption_names_renderers_and_ledger_failure_names_accounting():
     controls(r'''
 Object.assign(radarView.data,{sourceId:'iem-nexrad-n0b',sourceMode:'site',siteId:'KATX',native:false});
 radarView.pendingSource={variantOnly:true,data:{native:true,sourceMode:'site'}};
-radarSourceRender();assert.match(caption(),/^Sharpening to v2 · showing v1/);assert.ok(!caption().includes('Switching'));
-radarView.pendingSource=null;radarRender.value='v2';
+radarSourceRender();assert.match(caption(),/^Restoring NOAA Level III · showing IEM tiles/);assert.ok(!caption().includes('Switching'));
+radarView.pendingSource=null;radarView.data.native=true;
 radarView.data.nativeBudget={ceilingState:'normal',ledgerState:'retrying'};
 radarSourceRender();assert.match(caption(),/accounting retrying/);assert.ok(!caption().includes('daily data limit'));
 ''')
@@ -336,7 +336,6 @@ def test_auto_region_at_zoom_nine_ignores_unused_level3_breaker(make_emitter, hy
     Region never contacts Level III, so that breaker cannot clear from there."""
     monkeypatch.setattr(auto, 'coverage_fraction', lambda *a, **k: .5)
     (tmp_path/'radar_source').unlink(missing_ok=True)
-    (tmp_path/'radar_render').write_text('v2\n')
     (tmp_path/'radar_intent').write_text(json.dumps(dict(seq=1, zoom=9, source='auto', center='station')))
     e = make_emitter(); e._do_radar()
     assert e._radar_result.source_mode == 'mosaic'

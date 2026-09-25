@@ -42,7 +42,7 @@ def test_a_level3_only_outage_draws_the_site_radar_from_v1(make_emitter, hybrid,
     assert [c for c in multisite.calls if c[0] == 'tile'], 'v1 fetched IEM ridge tiles'
     fallback = r['health']['nativeFallback']
     assert fallback['active'] is True and 'name resolution' in fallback['reason']
-    assert r['renderPref'] == 'v2'                                      # the choice itself is unchanged
+    assert r['nativeFallback'] == dict(active=True, reason='level3-unreachable', recovering=False)
 
 
 def test_a_level3_failure_is_never_a_local_network_outage(make_emitter, hybrid, multisite, level3_dns_down):

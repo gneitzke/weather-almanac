@@ -31,7 +31,7 @@ Object.assign(radarView.data,{sourceId:'iem-mrms-lcref',sourcePref:'auto',source
 def test_auto_pressed_independently_of_drawn_source_and_caption(mode):
     controls(r'''
 radarView.data.sourceMode=MODE;
-if(MODE==='site')Object.assign(radarView.data,{sourceId:'iem-nexrad-n0b',siteId:'KATX',sites:[{id:'KATX',contributing:true}]});
+if(MODE==='site')Object.assign(radarView.data,{sourceId:'iem-nexrad-n0b',siteId:'KATX',native:true,sites:[{id:'KATX',contributing:true}]});
 radarSourceRender();
 assert.equal($('rad-src-auto').attrs['aria-pressed'],'true');
 assert.equal($('rad-src-mosaic').attrs['aria-pressed'],'false');
@@ -83,7 +83,7 @@ assert.equal(radarSource.desired,null);
 
 def test_budget_pause_caption_and_effective_smoothing():
     controls(r'''
-radarRender.value='v2';radarView.data.native=false;
+radarView.data.native=false;
 radarView.data.nativeBudget={ceilingState:'paused',bytesToday:250000001};
 radarSourceRender();assert.match(caption(),/v2 paused · daily data limit/);
 assert.equal(radarNativeActive(),false);
@@ -110,7 +110,7 @@ const schedulePoll=()=>{},updateFreshness=()=>{};
 const $=()=>({classList:{contains:()=>true}}),document={hidden:false};
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
 const radarIntent={generation:1,ready:true,owned:true,owner:null,session:'auto-session-12345',heartbeat:0,preferredMode:'auto',sourceDirty:true},
- radarGesture={state:STATE},radarZoom={auto:false},radarSmooth={pending:null},radarRender={pending:null},radarBaseStyle={theme:'paper'};
+ radarGesture={state:STATE},radarZoom={auto:false},radarSmooth={pending:null},radarBaseStyle={theme:'paper'};
 let radarCamera={lat:47,lon:-122,zoom:8},urls=[];
 // An unresolved thenable records the production request synchronously, without I/O.
 const fetch=url=>{urls.push(url);const chain={then:()=>chain,catch:()=>chain};return chain};

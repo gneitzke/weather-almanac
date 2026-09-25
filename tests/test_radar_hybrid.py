@@ -27,7 +27,12 @@ def png(color=(0, 204, 0, 255), size=(256, 256)):
 def hybrid(tmp_path, monkeypatch):
     # This transport fixture exercises Region/IEM; Auto and native have their own fixtures.
     (tmp_path / 'radar_source').write_text('mosaic')
-    (tmp_path / 'radar_render').write_text('v1')
+    # Isolate legacy IEM tile topology/cache tests from native acquisition policy.
+    # The native fixture restores both real policies; v2-only tests cover quiet tiers.
+    primary_only = ae.AlmanacEmitter._radar_primary_only
+    monkeypatch.setattr(ae.AlmanacEmitter, '_radar_primary_only', staticmethod(lambda ctx: False))
+    level3_down = ae.AlmanacEmitter._radar_level3_down
+    monkeypatch.setattr(ae.AlmanacEmitter, '_radar_level3_down', lambda self: True)
     latest = int(datetime(2026, 9, 13, 0, 2, tzinfo=timezone.utc).timestamp())
     state = SimpleNamespace(latest=latest, rv=latest - 120, now=latest + 360,
         mono=0., calls=[], failure=None, tile=png(), metadata=None, conditional=False)
@@ -67,6 +72,8 @@ def hybrid(tmp_path, monkeypatch):
         return response
 
     monkeypatch.setattr(ae.RadarSession, 'open', lambda self, *a, **k: fetch(*a, **k))
+    state.primary_only = primary_only
+    state.level3_down = level3_down
     state.view = lambda: (tmp_path / 'radar_viewed').write_text(str(ae.time.time()))
     return state
 

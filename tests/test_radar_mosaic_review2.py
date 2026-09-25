@@ -24,6 +24,7 @@ from tests.test_radar_mosaic_review import frame_context
 @pytest.mark.parametrize('restart', [False, True])
 def test_missing_reflectivity_upgrades_immutable_frame(make_emitter, hybrid, multisite, classified, monkeypatch, restart):
     hybrid.now = hybrid.latest + 60
+    hybrid.view()  # Keep this multi-site/backfill scenario attended after moving the clock.
     for site in multisite.scans:
         multisite.scans[site] = [hybrid.latest]
     emitter = make_emitter()

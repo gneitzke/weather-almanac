@@ -77,7 +77,7 @@ let presenceDirty=true,pollTimer=null,pollController=null,polling=false,pollStar
 const schedulePoll=()=>{},updateFreshness=()=>{};
 const $=()=>({classList:{contains:()=>false}}),document={hidden:false};
 const radarIntent={generation:0,ready:false,owned:false,owner:null},radarGesture={state:'idle'},
-    radarSmooth={pending:null},radarRender={pending:null},radarBaseStyle={theme:'paper'};
+    radarSmooth={pending:null},radarBaseStyle={theme:'paper'};
 let radarCamera=null,urls=[];
 const fetch=url=>{urls.push(url);return Promise.reject(Error('offline'));};
 POLL

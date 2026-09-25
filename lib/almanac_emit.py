@@ -53,7 +53,7 @@ from lib.radar_fetch import HostHealth, CircuitOpen, Attempt, AttemptCancelled, 
 from lib.radar_discovery import DiscoverySchedule
 from lib.radar_attention import Attention, Signals, GlanceHistory, RANK, WARM_HOLD_SEC
 from lib import radar_auto
-from lib.radar_native_budget import NativeBudget, render_preference, native_allowed
+from lib.radar_native_budget import NativeBudget, native_allowed
 import logging
 # Pillow's PNG reader logs every chunk at DEBUG ("STREAM b'IDAT' ..."), and Kivy's
 # root logger passes DEBUG through to its file handler: on the Pi that was ~800 SD-card
@@ -159,6 +159,7 @@ RADAR_N0H_FRAME_BUDGET_SEC = 2.5
 RADAR_N0H_UPGRADE_SEC = 180
 # Two products, two boundary hours, plus two hours of headroom.
 RADAR_LEVEL3_LISTING_CACHE = RADAR_SITE_MAX_COUNT * len(RADAR_LEVEL3_TRANSPORTS) * 4
+RADAR_LEVEL3_UNPUBLISHED_LOG_SEC = 600  # allow IEM-to-S3 publication lag
 RADAR_LEVEL3_FALLBACK_SEC = 120   # draw IEM site tiles before retrying Level III
 RADAR_LEVEL3_RETRY_SEC = 60       # a scan S3 lacks is not re-requested per tile
 RADAR_RAINVIEWER_COLOR = 2
@@ -815,7 +816,7 @@ def _radar_variant_revision(variant):
 def _radar_variant(ctx, source):
     # v2 mosaics native NEXRAD gates; Region keeps its existing renderer.
     return 'native' if (source == 'iem-nexrad-n0b' and native_allowed(
-        ctx.get('native'), ctx.get('attention', 'watch'), ctx.get('native_ceiling', 'normal'))) else bool(ctx.get('smooth', False))
+        ctx.get('native'), ctx.get('attention'), ctx.get('native_ceiling', 'normal'))) else bool(ctx.get('smooth', False))
 
 
 def _radar_render_revision(smooth=False):
@@ -1102,6 +1103,10 @@ class _RadarInputExecutor(ThreadPoolExecutor):
         return result
 
 
+class _RadarScanUnpublished(ValueError):
+    """IEM advertises a scan before its Level III product reaches S3."""
+
+
 class AlmanacEmitter:
     """ Periodically snapshots the console's live Obs/Astro/Met/Sager/System
     DictProperties into a flat JSON file for the almanac HTML overlay.
@@ -1130,8 +1135,7 @@ class AlmanacEmitter:
         self._radar_level3_flights = {}            # (site, stamp) -> shared completion and verdict
         self._radar_level3_failed = {}             # (site, stamp) -> (retry at, error text)
         self._radar_level3_listings = {}           # (site, hour prefix) -> (listed at, keys)
-        self._radar_native_requested = render_preference(Path(output_path).with_name('radar_render')) == 'v2'
-        self._radar_native_pref = self._radar_native_requested
+        self._radar_native_requested = True
         self._radar_level3_outage = None  # until, since, reason and one recovery wakeup
         self._radar_qc_failures = 0
         self._radar_qc_last_error = None
@@ -1904,7 +1908,7 @@ class AlmanacEmitter:
     def _radar_stamp_names(self):
         """Which marker files carry intent right now (one JSON parse)."""
         record = self._radar_read_intent()
-        return ('radar_intent', 'radar_smooth', 'radar_render') if record is not None else ('radar_zoom', 'radar_source', 'radar_center', 'radar_intent', 'radar_smooth', 'radar_render')
+        return ('radar_intent', 'radar_smooth') if record is not None else ('radar_zoom', 'radar_source', 'radar_center', 'radar_intent', 'radar_smooth')
 
     def _radar_preference_stamp(self, names=None):
         # Supersede checkpoints run at every tile boundary. A pass hands them the file
@@ -2791,22 +2795,28 @@ class AlmanacEmitter:
 
     def _radar_level3_site_failures(self, failures):
         """ Per-site Level III failures inside a frame that still drew: counted
-        in /health.radar.mosaic.siteFailures and logged at most every
-        RADAR_FAILURE_LOG_SEC per site, with the number held back. """
+        in /health.radar.mosaic.siteFailures. Warn only on outages or products
+        still unpublished after 600 seconds, rate limited per site. """
         now = time.time()
-        for site, error in failures:
+        for failure in failures:
+            site, error = failure[:2]
+            stamp = failure[2] if len(failure) > 2 else None
             if isinstance(error, (_RadarSuperseded, _RadarBudget)):
                 continue
             text = f'{type(error).__name__}: {error}'[:200]
             with self._radar_lock:
                 entry = self._radar_level3_site_errors.setdefault(site, dict(count=0, loggedAt=None, suppressed=0))
                 entry.update(count=entry['count'] + 1, lastError=text, lastTs=now)
+                while len(self._radar_level3_site_errors) > 32:
+                    self._radar_level3_site_errors.pop(next(iter(self._radar_level3_site_errors)))
+                outage = isinstance(error, CircuitOpen) or is_transport_error(error) or failure_class(error) in ('local', 'ambiguous')
+                overdue = isinstance(error, _RadarScanUnpublished) and stamp is not None and now - stamp > RADAR_LEVEL3_UNPUBLISHED_LOG_SEC
+                if not (outage or overdue):
+                    continue
                 if entry['loggedAt'] is not None and now - entry['loggedAt'] < RADAR_FAILURE_LOG_SEC:
                     entry['suppressed'] += 1
                     continue
                 held, entry['loggedAt'], entry['suppressed'] = entry['suppressed'], now, 0
-                while len(self._radar_level3_site_errors) > 32:
-                    self._radar_level3_site_errors.pop(next(iter(self._radar_level3_site_errors)))
             Logger.warning(f'almanac_emit: radar {site} Level III scan unavailable ({entry["count"]} so far, {held} not logged) - {text}')
 
     def _radar_level3_down(self):
@@ -2820,10 +2830,23 @@ class AlmanacEmitter:
         now = time.monotonic()
         breaker = bool(self._radar_health.probe_delay({RADAR_LEVEL3_TRANSPORT}))
         active = breaker or outage is not None and now < outage['until']
-        return dict(active=bool(self._radar_native_pref and active), breakerOpen=breaker,
+        return dict(active=bool(active), breakerOpen=breaker,
                     reason=outage['reason'] if outage else ('Level III breaker open' if breaker else None),
                     since=outage['since'] if outage else None,
                     retrySec=round(max(0, outage['until']-now), 1) if outage and now < outage['until'] else None)
+
+    def _radar_native_fallback(self, snap):
+        """Describe the drawn pixels, including retained tiles during recovery."""
+        showing = snap.source_mode == 'site' and bool(snap.frames) and (snap.tiles or {}).get('variant') != 'native'
+        paused = self._radar_native_budget.snapshot()['ceilingState'] == 'paused'
+        down = self._radar_level3_down()
+        reason = 'daily-limit' if paused else 'level3-unreachable' if down else None
+        return dict(active=showing, reason=reason, recovering=showing and reason is None)
+
+    @staticmethod
+    def _radar_primary_only(ctx):
+        # Shadow mode supplies effective live; it never applies a shadow tier.
+        return ctx.get('attention') == 'watch' or not ctx.get('viewed', False)
 
     def _radar_mosaic_inputs(self, pairs, ts, ctx, deadline):
         from lib.radar_mosaic import mosaic_key, quality_control
@@ -2861,10 +2884,10 @@ class AlmanacEmitter:
                 except Exception as error:
                     ctx.setdefault('site_reasons', {})[site] = 'scan unavailable'
                     ctx['last_error'] = str(error)
-                    failures.append((site, error))
+                    failures.append((site, error, stamp))
             self._radar_level3_site_failures(failures)
             if jobs and not available and any(isinstance(e, CircuitOpen) or failure_class(e) in ('local', 'ambiguous')
-                                              or is_transport_error(e) for _, e in failures):
+                                              or is_transport_error(e) for _, e, _ in failures):
                 # Level III has its own host; IEM's site tiles can still be healthy.
                 ctx['level3_failed'] = True
                 self._radar_level3_fallback(failures[0][1])
@@ -3208,7 +3231,7 @@ class AlmanacEmitter:
                         self._radar_level3_listings.pop(victim)
                 name = matching(listed[1])
             if name is None:
-                raise ValueError('level3 scan %s %s not published' % (site, _radar_stamp_text(stamp)))
+                raise _RadarScanUnpublished('level3 scan %s %s not published' % (site, _radar_stamp_text(stamp)))
             self._radar_checkpoint(ctx)
             def validate_product(raw):
                 nonlocal scan
@@ -3233,7 +3256,7 @@ class AlmanacEmitter:
             # Preserve pass control and local/ambiguous transport classification
             # without keeping socket objects or decode tracebacks alive.
             kind = failure_class(error)
-            error_type = (type(error) if control else LocalTransportError if kind == 'local'
+            error_type = (type(error) if control or isinstance(error, _RadarScanUnpublished) else LocalTransportError if kind == 'local'
                           else AmbiguousTransportError if kind == 'ambiguous'
                           else TimeoutError if is_transport_error(error) else ValueError)
             message = type(error).__name__ + ': ' + str(error)
@@ -3318,7 +3341,13 @@ class AlmanacEmitter:
 
     def _radar_site_discover(self, ctx):
         """Concurrent per-site listings, reused by intent and idle tile warming."""
+        primary_only = self._radar_primary_only(ctx)
         sites, considered = _radar_sites(ctx['station'], ctx['bounds'])
+        if primary_only:
+            nearest = ctx.get('nexrad')
+            sites = [dict(nearest, lat=_NEXRAD_SITES[nearest['id']][0],
+                          lon=_NEXRAD_SITES[nearest['id']][1])] if nearest else []
+            considered = len(sites)
         if not sites:
             ctx['site_failure'] = 'out of view'
             raise ValueError('no viewport coverage')
@@ -3331,6 +3360,8 @@ class AlmanacEmitter:
                            for i,(a,b,_) in _NEXRAD_SITES.items()
                            if distance_meters(*ctx['station'],a,b) <= RADAR_SITE_RANGE_METERS),
                           key=lambda s:(s['distanceMeters'],s['id']))[:RADAR_SITE_MAX_COUNT]
+        if primary_only:
+            timeline = sites
         listings = {s['id']:s for s in sites}
         for site in timeline:
             listings.setdefault(site['id'], dict(site, reporting=False, newestTs=None, reason='not reporting'))
@@ -3372,7 +3403,10 @@ class AlmanacEmitter:
                         z=ctx['zoom'], x=x, y=y)
                 layers.append((site, scan, url))
             return self._radar_fill_frame(source, ts, ctx, limit, None, layers=layers)
-        candidates = stamps[-3:] if (_radar_variant(ctx, source) == 'native' and
+        primary_only = self._radar_primary_only(ctx)
+        if primary_only:
+            ctx['frames_target'] = 1
+        candidates = stamps[-1:] if primary_only else stamps[-3:] if (_radar_variant(ctx, source) == 'native' and
                                      ctx.get('native_ceiling') == 'newest-only') else stamps
         for ts in reversed(candidates):
             if now - ts >= RADAR_SITE_MAX_AGE_SEC:
@@ -3435,7 +3469,8 @@ class AlmanacEmitter:
         """Publish latest promptly, then atomically replace with bounded backfill."""
         ctx['tile_workers'] = RADAR_TILE_WORKERS
         settings = _RADAR_SOURCES[source]
-        newest_only = _radar_variant(ctx, source) == 'native' and ctx.get('native_ceiling') == 'newest-only'
+        newest_only = source == 'iem-nexrad-n0b' and (self._radar_primary_only(ctx) or
+            _radar_variant(ctx, source) == 'native' and ctx.get('native_ceiling') == 'newest-only')
         slots = [newest] if newest_only else slots or list(range(newest - RADAR_HISTORY_SEC, newest + 1, settings['cadence']))
         if newest_only:
             self._radar_publish_refresh(ctx, frameTotal=1)
@@ -3766,10 +3801,9 @@ class AlmanacEmitter:
                     continue
                 warm = dict(ctx, intent_triggered=True, prefetch=True, target_source=target, sources=list(ctx['sources']),
                             request_reserve=reserve, tile_workers=RADAR_TILE_WORKERS)
-                # The newest-only ceiling permits foreground native, but optional
-                # warming uses v1 unless native has its full live/warm allowance.
-                if warm.get('native_ceiling', 'normal') != 'normal':
-                    warm['native'] = False
+                # Warming at the soft ceiling still uses native's newest scan.
+                if target == 'iem-nexrad-n0b' and warm.get('native_ceiling') == 'newest-only':
+                    warm['viewed'] = False
                 self._radar_checkpoint(warm)
                 if target not in admitted_sources:
                     # As with the original Z±1 tier, admit a source round once
@@ -4245,8 +4279,7 @@ class AlmanacEmitter:
                 smooth = len(raw) < 128 and raw.strip() == 'on'
             except (OSError, UnicodeError):
                 smooth = False
-            self._radar_native_pref = render_preference(Path(self.output_path).with_name('radar_render')) == 'v2'
-            native = self._radar_native_pref and not self._radar_level3_down()
+            native = not self._radar_level3_down()
             self._radar_native_requested = native
             self._radar_policy_ceiling = self._radar_native_budget.snapshot()['ceilingState']
             self._radar_auto_due = None
@@ -5467,7 +5500,7 @@ class AlmanacEmitter:
                           sourcePref=self._radar_source_pref or radar_snap.source_pref,
                           sitePreferred=(self._radar_source_pref or radar_snap.source_pref) == 'site',
                           nativeBudget=self._radar_native_budget.snapshot(),
-                          renderPref='v2' if self._radar_native_pref else 'v1',
+                          nativeFallback=self._radar_native_fallback(radar_snap),
                           starting=self._radar_starting(radar_snap),
                           health=self._radar_health_payload()),
             'ts':      int(now),                     # engine heartbeat ONLY - see obsAgeSec

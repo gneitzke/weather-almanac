@@ -56,7 +56,7 @@ def camera(session=A, generation=1, claim='', epoch=0, **extra):
 def test_controllers_can_commit_and_receive_all_acknowledgements(server, tmp_path, address):
     assert server._is_controller(address)
     headers = request(server, address, **camera())
-    assert set(headers) == {'X-Radar-Intent', 'X-Radar-Smooth', 'X-Radar-Render', 'X-View-Session', 'X-Radar-Panel'}
+    assert set(headers) == {'X-Radar-Intent', 'X-Radar-Smooth', 'X-View-Session', 'X-Radar-Panel'}
     assert json.loads(headers['X-Radar-Intent'])['session'] == A
     assert server._read_radar_intent()['zoom'] == 8
     if server._is_loopback(address):
@@ -113,7 +113,7 @@ def test_nonowner_preferences_need_valid_session_but_not_camera_acceptance(serve
     request(server, **camera())
     intent = server._read_radar_intent()
     headers = request(server, radarSession=B, radarSmooth='on', radarRender='v2')
-    assert headers['X-Radar-Smooth'] == 'on' and headers['X-Radar-Render'] == 'v2'
+    assert headers['X-Radar-Smooth'] == 'on' and 'X-Radar-Render' not in headers
     for session in (None, '', 'short', [A, B]):
         params = dict(radarSmooth='off', radarRender='v1')
         if session is not None: params['radarSession'] = session
@@ -121,7 +121,7 @@ def test_nonowner_preferences_need_valid_session_but_not_camera_acceptance(serve
     for smooth, render in (('ON', 'V2'), (['off', 'on'], ['v1', 'v2']), ('', '')):
         request(server, radarSession=B, radarSmooth=smooth, radarRender=render)
     assert (tmp_path/'radar_smooth').read_text().strip() == 'on'
-    assert (tmp_path/'radar_render').read_text().strip() == 'v2'
+    assert not (tmp_path/'radar_render').exists()
     assert server._read_radar_intent() == intent
 
 

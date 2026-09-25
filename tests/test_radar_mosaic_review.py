@@ -236,6 +236,7 @@ def test_prefetch_classification_budget_refusal_is_control_flow(make_emitter, hy
 
 def test_late_hca_upgrades_all_eligible_retained_frames(make_emitter, hybrid, multisite, classified, monkeypatch):
     hybrid.now = hybrid.latest+60
+    hybrid.view()  # Keep this multi-site/backfill scenario attended after moving the clock.
     for site in multisite.scans: multisite.scans[site] = [hybrid.latest-60,hybrid.latest]
     classified.missing.add('KNEA')
     emitter = make_emitter(); emitter._do_radar()
@@ -292,6 +293,7 @@ def test_server_does_not_publish_private_frame_sidecars(monkeypatch, tmp_path):
 
 def test_missing_hca_only_in_backfill_arms_retry_and_upgrades(make_emitter, hybrid, multisite, classified, monkeypatch):
     hybrid.now = hybrid.latest+60
+    hybrid.view()  # Keep this multi-site/backfill scenario attended after moving the clock.
     for site in multisite.scans: multisite.scans[site] = [hybrid.latest-60,hybrid.latest]
     emitter = make_emitter(); retry = []; pending = [True]
     acquire = emitter._radar_level3_scan
