@@ -41,138 +41,185 @@ same station data, built to be read from across a room on a wall-mounted 7-inch
 screen. It runs on the same Raspberry Pi off the same feed and leaves the classic
 six-panel console untouched.
 
-The Almanac (this fork) reads at a glance and finds room for things the classic
-layout can't. Here, heavy rain is falling through the intensity gauge, a 7-day
-outlook runs along the foot of the page on one shared temperature scale, the
-falling barometer has already switched its outlook to rain — and a quiet "Rain
-tomorrow" sits under the headline (that line appears only when tomorrow is a
-story: thunderstorms, snow, rain, wind, or fog; ordinary days say nothing).
-Thursday in the band wears the wind glyph — a dry day whose story is its gusts:
+The Almanac reads at a glance and finds room for things the classic layout
+can't. In the screenshot below, heavy rain is falling through the intensity
+gauge. A 7-day outlook runs along the foot of the page on one shared temperature
+scale. The barometer is falling and has already switched its outlook to rain.
+Under the headline sits a quiet "Rain tomorrow". That line appears only when
+tomorrow has a story (thunderstorms, snow, rain, wind or fog); ordinary days say
+nothing. Thursday in the band wears the wind glyph: a dry day whose story is its
+gusts.
 
 ![The Almanac interface during heavy rain, with the 7-day outlook band](design/almanac/screenshots/almanac.png)
 
-While it rains, etched rain falls into the rate gauge — hatching at two depths,
-its speed and density following the measured rate, into a sine-wave water
-surface whose swell and drift also track the intensity:
+While it rains, etched rain falls into the rate gauge. The hatching falls at two
+depths, its speed and density follow the measured rate, and it lands in a
+wave-topped water surface whose swell tracks the intensity too.
 
 ![The rainfall panel during heavy rain: etched rain falls into the intensity gauge](design/almanac/screenshots/rainfall.gif)
 
-Everything live moves the way an instrument should: the vane swings the short
-way around the dial, and readings count to their new values instead of
-snapping. Forecast furniture holds still — on this console, motion means "now":
+Live readings move the way an instrument should. The vane swings the short way
+around the dial, and numbers count to their new values instead of snapping.
+Forecast elements hold still, so on this console motion means "now".
 
 ![The wind panel: the vane swings and readings count up as the wind shifts](design/almanac/screenshots/wind.gif)
 
-Winter is a first-class citizen. A pre-dawn January morning at −3.8 °F: the
-Winter Storm Warning shares the page with a compressed 7-day outlook (snow
-glyphs, sub-zero lows on the shared axis), and the rainfall panel reads
-"Snow Likely" — the Tempest's haptic sensor cannot register snowfall, so in
-freezing weather with snow forecast, the console says so instead of
-pretending it is dry:
+Winter gets the same care. Here it is −3.8 °F before dawn in January. The Winter
+Storm Warning shares the page with a compressed 7-day outlook (snow glyphs,
+sub-zero lows on the shared axis). The rainfall panel reads "Snow Likely": the
+Tempest's haptic sensor cannot register snowfall, so in freezing weather with
+snow in the forecast the console says so instead of pretending it is dry.
 
 ![The console on a winter morning: storm warning, snow outlook, Snow Likely status](design/almanac/screenshots/winter.png)
 
-The classic six-panel console (the upstream default) for comparison:
+The classic six-panel console (the upstream default), for comparison:
 
 ![The classic six-panel console](design/almanac/screenshots/classic.png)
 
-A **Radar** tab puts a live reflectivity view under the same discipline, and
-it behaves like a map you already know: drag, flick, pinch, and the picture just
-moves. Any browser on your home network can steer the radar; the panel follows.
-Geography — coastline and water, state and county
-lines, major roads, from bundled public-domain data — is rendered once by the
-engine into small tiles for every zoom and both themes, cached, and drawn by the
-page at any zoom in a few milliseconds; radar arrives as tiles the page places
-itself, so a pan reveals more and a zoom step never waits on a server and never
-replaces what you are looking at. It is centered on the station and works
-anywhere on Earth: in the US it leads with NOAA's MRMS composite at two-minute
-frames, and everywhere else — or whenever that feed can't be reached — it falls
-back to a global ten-minute mosaic, always saying which one is on screen. Every
-source's echoes are drawn on one reflectivity scale — nine bands from 10 to
-75 dBZ in the RadarScope tradition, sage through green for light rain before
-the yellows and reds, the same pixels on paper and night, nothing below 15 dBZ
-so insects and clear-air clutter never film the map, and no guessing at rain versus snow.
-Recent frames play as a smooth loop, five a second with a short crossfade and
-a hold on the newest, whose scan time is printed beside the clock and is never
-dressed up as "live"; opening the tab brings the loop up from cache in
-milliseconds, and play means play even while frames are still arriving. Three
-buttons choose the picture. **Auto**, the default, follows the zoom: close in
-(zoom 8 and up) it shows the nearest radar's own scans, wide (6 and out) the
-Region mosaic, and at 7 it keeps whatever is showing, so pinching back and forth
-never flips it. It only moves to the site when reporting radars cover the view,
-and the old picture stays up until the new one has frames. Tap Region or the
-site to hold that choice; it returns to Auto after 45 minutes untouched. **Region** blends
-many radars with a new image every two minutes. The nearest **NEXRAD** site
-keeps its callsign and nearby-site count on the button. It shows its own
-scans at their real times, every neighbouring radar whose range reaches the
-view composited underneath, and a plain caption under the buttons that says which radar,
-how far, and how often, with the radar's operating mode read from its own
-cadence: a scan every four minutes or so is precipitation mode, every ten is
-clear-air. The site button tells you before you tap when that radar is off the
-air or its last scan is stale, and a tap on a dark site says so in the same
-breath instead of trying for ten seconds. A tap acknowledges the choice at once.
-The old source stays visible while the selected source loads. A quiet +/− sets
-the zoom and remembers it across
-reboots — a zoom step keeps the loop you were watching playing until the new
-frames are in — and a **SMOOTH** toggle, off by default, softens the gate edges
-of every echo without inventing detail, interpolated on the reflectivity field
-so every pixel is still a legend colour. The site radar always uses **v2**:
-NOAA Level III, the radar's own half-degree by 250-metre cells, on every board
-including the Pi 3. It works across the US, including Alaska, Hawaii,
-Puerto Rico and Guam. IEM site tiles fill in automatically only when Level III
-is unreachable or its daily allowance is paused; the source caption plainly
-labels the fallback and recovery. Smooth applies to Region and IEM fallback
-tiles and is disabled while native frames draw.
-While unattended, watch keeps only the primary radar's newest N0B/N0H scan
-warm; opening Radar backfills the full mosaic loop. Rest and dormant fetch no
-Site tiles or Level III products. Rest keeps its four-tile MRMS sentinel at home
-every hour by day and every two hours at night. The daily cap keeps only the
-newest frame past 150 MB and uses labelled IEM fallback past 250 MB, resetting
-at midnight UTC; `/health` shows the count.
-v2 merges nearby radars pixel by pixel: each pixel shows the echo from the
-lowest beam within 230 km that sees one, so a radar blocked by mountains never
-hides its neighbour's rain, and there are no seams where one radar's coverage
-ends. NOAA's own classification removes ground clutter, and birds and insects
-outside rain, for about 25 KB more per scan; if it is late, rain still draws
-and the caption says "unfiltered". Region keeps its MRMS picture. The station glyph shows where home is
-while you're away and the view drifts back to it after a minute and a half
-untouched.
+### The Radar tab
+
+The Radar tab behaves like a map you already know: drag, flick and pinch, and
+the picture moves. Geography (coastline, water, state and county lines, major
+roads) comes from bundled public-domain data. The engine renders it once into
+small tiles for every zoom and both themes, and the page draws them in a few
+milliseconds. Radar arrives as tiles too, so a pan reveals more of the map and
+a zoom step never waits on a server or blanks what you were looking at.
+
+The map is centred on the station and works anywhere on Earth. Three buttons
+choose the picture:
+
+- **Region** shows NOAA's MRMS composite, a new image every two minutes, across
+  the US. Everywhere else, or when that feed is down, it falls back to a global
+  ten-minute mosaic, and the caption says which one is on screen.
+- **The nearest radar** (its callsign on the button, e.g. "KATX +3") shows that
+  radar's own scans at their real times, merged with every neighbour whose range
+  reaches the view. The caption names the radar, its distance and how often it
+  scans, and reads its operating mode from that cadence: about every four
+  minutes is precipitation mode, about every ten is clear-air. The button warns
+  you before you tap when the radar is off the air or its last scan is stale.
+- **Auto**, the default, follows the zoom. At zoom 8 and closer it shows the
+  nearest radar; at 6 and wider, Region. At 7 it keeps whatever is showing, so
+  pinching back and forth never flips it. It moves to the radar only when
+  reporting radars cover the view. Tapping Region or the radar holds that choice
+  until you tap Auto or leave the screen untouched for 45 minutes.
+
+A switch never blanks the map: the old picture stays until the new one has
+frames. The station glyph marks home while you are away, and the view drifts
+back to it after a minute and a half untouched. Any browser on your home network
+can steer the radar, and the panel follows whoever touched it last.
+
+**The radar's own cells.** The nearest-radar view is drawn from NOAA's Level III
+product: half-degree by 250-metre cells, the radar's native resolution, on every
+board including the Pi 3. Nearby radars are merged pixel by pixel. Each pixel
+takes the echo from the lowest beam within 230 km that sees one, so a radar
+blocked by mountains never hides its neighbour's rain and there are no seams
+where one radar's coverage ends. NOAA's classification product (about 25 KB more
+per scan) removes ground clutter, and birds and insects outside rain. If that
+classification is late, rain still draws and the caption says "unfiltered". This
+works across the US, including Alaska, Hawaii, Puerto Rico and Guam.
+
+**One colour scale.** Every source is drawn on the same reflectivity scale, nine
+bands from 10 to 75 dBZ in the RadarScope tradition: greens for light rain,
+darkening steadily to 35 dBZ, then yellows and reds. Paper and night themes use
+the same pixels. Nothing below 15 dBZ is drawn, so insects and clear-air clutter
+never film the map. There is no guessing at rain versus snow.
+
+**The loop.** Recent frames play five a second with a short crossfade and a hold
+on the newest. The newest scan time is printed beside the clock and is never
+dressed up as "live". Opening the tab brings the loop up from cache in
+milliseconds. A **+/−** control sets the zoom and remembers it across reboots,
+and a zoom step keeps the loop playing until the new frames are in. **SMOOTH**
+(off by default) softens echo edges for Region; it is disabled while the radar's
+own cells are drawn.
+
+**Data use.** Level III is downloaded only while someone is looking or the panel
+was touched in the last 45 minutes. Left alone on a rainy day, the panel keeps
+just the nearest radar's newest scan warm, about 3 to 4 MB an hour. A daily cap
+keeps it bounded: past 150 MB only the newest frame is fetched, and past 250 MB
+the radar view switches to IEM's pre-gridded tiles until midnight UTC. IEM tiles
+also fill in, automatically and labelled, whenever Level III can't be reached.
+`/health` shows the day's count.
 
 ![The Radar tab in Region mode: the NOAA MRMS mosaic over Puget Sound on a showery morning, with the Auto, Region and KATX buttons](design/almanac/screenshots/radar.png)
 
 ![The Radar tab on Auto at zoom 9: v2 draws the radar's own 250-metre cells, KATX and three neighbours merged pixel by pixel](design/almanac/screenshots/radar-site.png)
 
-![Forty minutes of v2 radar looping: showers moving across the Cascade foothills](design/almanac/screenshots/radar.gif)
+![Forty minutes of radar looping: showers moving across the Cascade foothills](design/almanac/screenshots/radar.gif)
 
-What it changes:
+### What the Almanac changes
 
-- One dominant temperature and a plain-language forecast line, in place of six equal-weight panels.
-- A barometer zone bar (Stormy / Change / Fair / Dry) and a 24-hour pressure barograph labelled with the day's high and low.
-- Active weather alerts (US National Weather Service) in a single strip below the masthead, coloured by severity and collapsed to one line when several are active. The 7-day outlook stays on screen through an alert (compressed to highs and bars) — a winter storm warning can run for days, exactly when the week ahead matters most.
-- Air quality (AQI) by the station's own latitude and longitude, with a short forecast so a rising smoke event shows before the number climbs.
-- A 7-day outlook band: each day's low–high drawn as a bar on ONE shared axis for the week (so a cool-down is visibly a shorter, lower bar), condition glyphs beside the highs — sun, cloud, fog, rain, snow, thunderstorm, wind, and the compound marks wind-driven rain and blowing snow (a gusty wet day keeps its water but the drops slant to the engraver's driving-rain angle behind a wind curl) — precipitation probability only when it matters, the day's expected amount beside it in the station's own unit (dry days print nothing), and today's bar carrying a dot at the observed temperature.
-- A one-line hint about tomorrow under the conditions headline ("Rain tomorrow", "Wind-driven rain tomorrow", "Freezing rain tomorrow", "Blowing snow tomorrow"…), led by tomorrow's own band glyph, that appears only when tomorrow is a story — its absence is the fair-weather signal.
-- A Radar tab (above): a map you drag and pinch like any other, geography and radar both as locally cached tiles so nothing waits on a server; two-minute NOAA MRMS frames in the US, a ten-minute global mosaic elsewhere, one dBZ scale for every source, a five-a-second loop with a crossfade, a remembered zoom, and a NEXRAD view that composites every radar in reach.
-- A rainfall rate gauge scaled by intensity rather than linearly — the five named bands (Very Light through Very Heavy) each take an equal fifth of the tube, so drizzle registers and a downpour doesn't pin the needle. Light rain never reads as dry: the Tempest's haptic sensor logs drizzle as an occasional trace minute with zeros between, so the rate carries a 10-minute window that bridges those gaps. Rain arrives and leaves like weather, not like a switch — the volume of falling drops counts up quickly and down slowly, column by column, toward the measured rate (so the sensor's wet/dry flip between minutes reads as a swell and a settle), the drops shorten and slow as it eases, and the last column leaves through a fade.
+- One dominant temperature and a plain-language forecast line, in place of six
+  equal-weight panels.
+- A barometer zone bar (Stormy / Change / Fair / Dry) and a 24-hour pressure
+  barograph labelled with the day's high and low.
+- Active US National Weather Service alerts in one strip below the masthead,
+  coloured by severity and collapsed to one line when several are active. The
+  7-day outlook stays on screen during an alert, compressed to highs and bars,
+  because a winter storm warning can run for days, exactly when the week ahead
+  matters most.
+- Air quality (AQI) for the station's own coordinates, with a short forecast, so
+  a rising smoke event shows before the number climbs.
+- A 7-day outlook band. Each day's low and high is drawn as a bar on one shared
+  axis, so a cool-down is visibly a shorter, lower bar. Condition glyphs sit
+  beside the highs: sun, cloud, fog, rain, snow, thunderstorm, wind, and the
+  compound marks for wind-driven rain and blowing snow. Rain chance appears only
+  when it matters, with the expected amount in the station's own unit. Today's
+  bar carries a dot at the observed temperature.
+- A one-line hint about tomorrow under the headline ("Rain tomorrow",
+  "Freezing rain tomorrow", "Blowing snow tomorrow"…), led by tomorrow's glyph.
+  It appears only when tomorrow has a story; no line means fair weather.
+- The Radar tab described above.
+- A rainfall gauge scaled by intensity rather than linearly. The five named
+  bands (Very Light through Very Heavy) each take a fifth of the tube, so
+  drizzle registers and a downpour doesn't pin the needle. Light rain never reads
+  as dry: the Tempest logs drizzle as an occasional trace minute with zeros
+  between, so the rate uses a 10-minute window that bridges those gaps. The
+  falling-rain animation builds quickly and eases slowly, so the sensor's
+  minute-to-minute wet/dry flips read as a swell and a settle.
 - A wind panel that resolves to one current reading, with a bolder compass.
-- Animated updates: values count up, the vane swings — and while rain falls, etched rain falls through the gauge into a waving water surface, with fall speed, density, swell, and drift all tracking the measured rate.
-- Snow-aware: in freezing weather with snow in the forecast, a dry rain sensor reads "Snow Likely" rather than "Currently Dry" (the Tempest's haptic sensor cannot register snowfall).
-- Day/night aware. After sunset the Sun & Sky panel becomes Moon & Sky (phase, illumination, moonrise/set).
-- Storm-aware layout: while lightning is being detected, the Lightning tile takes the Sun & Sky slot so rain and strikes stay on screen together.
-- The forecast-today curve begins at the current reading and blends onto the real hourly forecast over the next few hours — the sensor is the better guide for the next hour or two, the model for the rest of the day — arriving exactly at the model's own peak, which is labelled at the hour it occurs and always agrees with the printed HIGH. With no hourly data it draws nothing forward rather than guess.
-- Honest about silence: the masthead reads STALE when nothing new is reaching the screen and SILENT when the engine is fine but the station itself has stopped reporting - a fresh file is never mistaken for a live sensor. `/health` reports the same distinction for monitoring. Before the first frame ever arrives — a cold boot, or the engine down — every value reads "—" rather than a sample number, so an empty console can never be mistaken for a forecast.
+- Snow awareness: in freezing weather with snow forecast, a dry rain sensor reads
+  "Snow Likely" rather than "Currently Dry".
+- Day and night: after sunset the Sun & Sky panel becomes Moon & Sky (phase,
+  illumination, moonrise and moonset).
+- A storm-aware layout: while lightning is detected, the Lightning tile takes the
+  Sun & Sky slot so rain and strikes stay on screen together.
+- A forecast curve for today that starts at the current reading and blends onto
+  the hourly forecast over the next few hours. The sensor is the better guide
+  for the next hour or two; the model is better for the rest of the day. The
+  curve arrives at the model's own peak, labelled at its hour, which always
+  matches the printed HIGH. Without hourly data it draws nothing ahead rather
+  than guess.
+- Honesty about silence. The masthead reads STALE when nothing new is reaching
+  the screen, and SILENT when the engine is fine but the station has stopped
+  reporting. `/health` reports the same difference. Before the first frame ever
+  arrives (a cold boot, or the engine down), every value reads "—" rather than a
+  sample number.
 
-Both extra data sources degrade quietly. Weather alerts come from the US National
-Weather Service, so outside the US the strip simply stays hidden. Air quality is
-worldwide (Open-Meteo), and its panel hides itself wherever a reading isn't
-available. Neither one can stall the display: they are fetched off the main
-thread, keep their last good value through a network blip, and are marked stale
-rather than shown as current if the connection stays down.
+Both extra data sources degrade quietly. Alerts come from the US National
+Weather Service, so outside the US the strip stays hidden. Air quality is
+worldwide (Open-Meteo), and its panel hides wherever no reading is available.
+Neither can stall the display: both are fetched off the main thread, keep their
+last good value through a network blip, and are marked stale if the connection
+stays down.
+
+### Running the Almanac
+
+- **HTML kiosk (recommended).** The console runs headless as a data engine, and
+  `chromium --kiosk` draws the interface, using about half a core on a Pi. A
+  systemd-supervised watchdog relaunches any piece that dies, restarts the engine
+  if the feed goes stale, and checks for a wedged screen. Setup, management and
+  revert steps are in [`design/almanac/kiosk/README.md`](design/almanac/kiosk/README.md).
+- **Native Kivy layout.** Set `[Display] LayoutStyle = almanac` in the config.
+- **12-hour clock.** Set `[Display] TimeFormat = 12 hr` in `wfpiconsole.ini`. The
+  upstream default is `24 hr`. Every clock on the page follows this one setting.
+
+For the architecture, the `wx.json` data contract and upgrade notes, see
+[`design/almanac/ARCHITECTURE.md`](design/almanac/ARCHITECTURE.md).
 
 ### Viewing the Almanac remotely
 
 Once the kiosk is running, the page is also reachable from any device on your
-local network — phone, laptop, tablet — without any extra software:
+local network (phone, laptop, tablet) without any extra software:
 
 ```
 http://weather.local:8137
@@ -193,7 +240,7 @@ that line from `~/.config/systemd/user/almanac-kiosk.service` and run
 
 ### Do I need a WeatherFlow Tempest?
 
-For live weather readings (temperature, wind, rain, pressure) **yes** — the
+For live weather readings (temperature, wind, rain, pressure), **yes**. The
 console is built entirely around WeatherFlow's data formats and has no support
 for other hardware brands (Ecowitt, Davis, Ambient, etc.).
 
@@ -207,17 +254,16 @@ The three connection modes are all WeatherFlow-only:
 
 **No hardware? Use a nearby public station.** Many WeatherFlow owners share
 their stations publicly, and the console can read one of them. During first-run
-setup (Websocket + REST mode), when you say you don't own hardware, the wizard
-offers to find nearby public stations: enter an approximate latitude and
-longitude and it lists the closest ones by distance, each with its hardware
-type. Pick one and it fills in the station and device IDs for you, so you get
+setup (Websocket + REST mode), if you say you don't own hardware, the wizard
+offers to find nearby public stations. Enter an approximate latitude and
+longitude, and it lists the closest ones by distance with their hardware type. Pick one and it fills in the station and device IDs for you, so you get
 full live readings with no hardware of your own. All you need is a free
 WeatherFlow account and a Personal Access Token (see below). The station belongs
 to someone else, so the feed stops if its owner makes it private or takes it
 offline; re-run the wizard to choose another.
 
-**What works without a Tempest:** the Almanac's supplementary panels — air
-quality, weather forecasts, and astronomy — pull from public APIs keyed only on
+**What works without a Tempest:** the Almanac's supplementary panels (air
+quality, weather forecasts and astronomy) pull from public APIs keyed only on
 latitude and longitude. If you set those manually in `wfpiconsole.ini`, those
 panels display correctly even with no hardware attached.
 
@@ -235,8 +281,8 @@ station ID and device IDs are under the WeatherFlow app: gear icon → Stations
 
 ### Air quality source
 
-By default the AQI panel pulls from Open-Meteo (a CAMS satellite model — no
-account needed). For readings that match [airnow.gov](https://www.airnow.gov/)
+By default the AQI panel pulls from Open-Meteo, a CAMS satellite model that
+needs no account. For readings that match [airnow.gov](https://www.airnow.gov/)
 exactly, configure a free WAQI token: it switches the source to the nearest
 EPA/AirNow monitoring station.
 
@@ -252,65 +298,52 @@ it to `wfpiconsole.ini`. Leave the field blank to clear an existing token and
 revert to Open-Meteo. A free token takes under a minute to obtain at
 [aqicn.org/data-platform/token](https://aqicn.org/data-platform/token/).
 
-Two ways to run it:
-
-- **HTML kiosk (recommended).** The console runs headless as a data engine and `chromium --kiosk` renders the interface, pixel-identical and low-power (~½ core total on a Pi). A systemd-supervised watchdog keeps the whole chain alive: it relaunches any component that dies, restarts the engine if the feed goes stale (a hung websocket the classic UI would sit in), and re-checks for a wedged render. It self-heals: I confirmed that by killing the watchdog and watching systemd bring the display back on its own. Setup, management, and revert steps are in [`design/almanac/kiosk/README.md`](design/almanac/kiosk/README.md).
-- **12-hour clock.** Set `[Display] TimeFormat = 12 hr` in `wfpiconsole.ini`. The
-  upstream default is `24 hr`; every clock string in the payload follows this one
-  setting, so the panel never mixes styles.
-- **Native Kivy layout.** Set `[Display] LayoutStyle = almanac` in the config.
-
-For the architecture, the `wx.json` data contract, and upgrade notes, see
-[`design/almanac/ARCHITECTURE.md`](design/almanac/ARCHITECTURE.md).
-
 ### Operating the radar
 
-The radar engine reports its own health at `/health` under `radar`:
+The engine reports its radar health at `/health`, under `radar`:
 
-- `cache`: the tile cache's live file count and bytes, its caps, whether the
-  boot scan has finished, and that scan's summary (files indexed, directories
-  purged, tiles evicted, seconds taken). Caps are derived from free space at
-  boot: 2 % of the free bytes on the cache's disk, between 8,000 files / 64 MB
-  and 12,000 files / 256 MB. The file ceiling is the boot validation cost, not
-  disk: the Pi 4 validates about 200 tiles a second, and the first radar pass
-  waits for the scan.
+- `cache`: the tile cache's file count and bytes, its caps, and a summary of the
+  boot scan. The caps come from free space at boot: 2 % of the free bytes on the
+  cache's disk, between 8,000 files / 64 MB and 12,000 files / 256 MB. The file
+  ceiling reflects boot time, not disk: the Pi 4 checks about 200 tiles a
+  second, and the first radar pass waits for that scan.
 - `lastError`, `localFailures`, `ambiguousFailures`, `breaker`, `hosts`: the
-  fetch layer. Consecutive local failures (a dead route, an exhausted client)
-  back the retry off from 2 s to 60 s; provider failures advance the fallback
-  chain instead; a stalled reused socket does neither.
+  fetch layer. Repeated local failures (a dead route, an exhausted client) stretch
+  the retry from 2 s to 60 s. Provider failures move on to the next source
+  instead. A stalled reused socket does neither.
+- `native`, `nativeFallback`, `classification`, `mosaic`: Level III. Today's byte
+  count and cap state, whether IEM tiles are filling in and why, and per-radar
+  failures.
+- `attention`: which of five tiers the engine is in (`live`, `warm`, `watch`,
+  `rest`, `dormant`), why and since when, the weather holds, recent transitions
+  and bytes per tier. With the tab closed and quiet weather, the engine checks
+  scan listings plus a four-tile MRMS sentinel at home every hour by day (every
+  two hours at night). Rain, lightning, a wet forecast, a touch or an
+  approaching echo wakes it.
 - `discovery`, `pending`, `phases`, `requests`: the acquisition schedule and the
   last 128 requests.
 
-A Radar tab left open with nobody touching the screen for 30 minutes keeps its
-8-frame loop current but stops the zoom and source prefetch; a touch restores it.
-The Rainfall tile reads "Rain Starting" the moment the station senses rain, before
-the next minute's observation arrives.
+A few behaviours worth knowing:
 
-A panel with the tab bar off (`WFP_TABS=0`, for a screen without touch) runs no
-radar at all; set `WFP_RADAR=1` on the service to override.
+- A Radar tab left open with nobody touching the screen for 30 minutes keeps its
+  loop current but stops prefetching other zooms and sources. A touch restores it.
+- The Rainfall tile reads "Rain Starting" the moment the station senses rain,
+  before the next minute's observation arrives.
+- A panel with the tab bar off (`WFP_TABS=0`, for a screen without touch) runs no
+  radar at all. Set `WFP_RADAR=1` on the service to override.
+- After a restart the Radar tab reads "Starting · checking N saved tiles" until
+  the first pass publishes, about a minute on the Pi 4. Other panels show the
+  previous run's last readings, marked with their age, until live data arrives.
 
-After a restart the Radar tab stays and reads "Starting · checking N saved
-tiles" until the first pass publishes, about a minute on the Pi 4; the other
-panels show the previous run's last observations, marked by their age, until the
-first live reading arrives.
+The engine logs one line per radar pass (`radar pass outcome=...`). A pass that
+yields to an internal budget says `error=deferred: <reason>`. On the Pi 4 kiosk
+the engine log is `/tmp/almanac_data.log`; the two previous runs are kept as
+`.1` and `.2`, each starting with the reason the engine was started. The tile
+cache lives under `~/almanac_web/radar`.
 
-- `attention`: which of the five acquisition tiers the engine is in (`live`,
-  `warm`, `watch`, `rest`, `dormant`), why, since when, the weather holds, the
-  last transitions, and bytes fetched per tier. With the tab closed the engine
-  rests on listings plus a four-tile MRMS sentinel at home every hour by day
-  (every two hours at night) until rain, lightning, a wet forecast, a touch on
-  the device or an approaching echo warms it. Rest and dormant fetch no Site
-  tiles or Level III products; dormant has no sentinel.
-
-The engine logs one summary line per radar pass (`radar pass outcome=...`); a
-pass that yields on an internal budget says `error=deferred: <reason>`. On the
-Pi 4 kiosk the engine log is `/tmp/almanac_data.log` (the two previous runs as
-`.1` and `.2`, each starting with the reason the engine was started) and the tile cache lives
-under `~/almanac_web/radar`.
-
-To inspect the running page itself, the kiosk's Chromium listens on the loopback
-debug port; `design/almanac/kiosk/tools/cdp_probe.py` evaluates a JavaScript
-expression there and prints the result:
+To inspect the running page, the kiosk's Chromium listens on a loopback debug
+port. `design/almanac/kiosk/tools/cdp_probe.py` evaluates a JavaScript expression
+there and prints the result:
 
 ```bash
 python3 design/almanac/kiosk/tools/cdp_probe.py 'radarReady().length'
@@ -319,9 +352,9 @@ python3 design/almanac/kiosk/tools/cdp_probe.py '({mem: radarMemory(), cap: RAD_
 
 ### Tests
 
-The fork's data pipeline (the observation parser, the `wx.json` emitter, and a
-merge-safety guard) has an offline pytest suite that needs no Kivy, display, or
-network, so paths like a lightning strike are verified without waiting for real
+The fork's data pipeline (the observation parser, the `wx.json` emitter and a
+merge-safety guard) has an offline pytest suite. It needs no Kivy, display or
+network, so paths like a lightning strike are tested without waiting for real
 weather:
 
 ```bash
@@ -337,7 +370,10 @@ cleanly.
 
 ## Contents
 
-**[The Almanac UI (this fork)](#the-almanac-ui-this-fork)**<br>
+**[The Almanac UI (this fork)](#the-almanac-ui)**<br>
+&nbsp;&nbsp;&nbsp;&nbsp;[The Radar tab](#the-radar-tab)<br>
+&nbsp;&nbsp;&nbsp;&nbsp;[What the Almanac changes](#what-the-almanac-changes)<br>
+&nbsp;&nbsp;&nbsp;&nbsp;[Running the Almanac](#running-the-almanac)<br>
 &nbsp;&nbsp;&nbsp;&nbsp;[Viewing the Almanac remotely](#viewing-the-almanac-remotely)<br>
 &nbsp;&nbsp;&nbsp;&nbsp;[Do I need a WeatherFlow Tempest?](#do-i-need-a-weatherflow-tempest)<br>
 &nbsp;&nbsp;&nbsp;&nbsp;[Air quality source](#air-quality-source)<br>
