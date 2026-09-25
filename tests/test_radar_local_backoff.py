@@ -63,9 +63,10 @@ def test_a_synthetic_pass_error_is_classified_by_what_failed_underneath(make_emi
 
 def test_health_counters_classify_when_the_ctx_flags_are_missing(make_emitter, hybrid):
     e = make_emitter()
-    e._radar_health.local_failures = 3
+    for _ in range(3):
+        e._radar_health.record(SRC, ae.RADAR_IEM_METADATA_URL, False, http.LocalTransportError('no route'))
     assert failed_passes(e, [TimeoutError('x')]*2, ctx={'local_failure_start': 2}) == [2, 4]
-    e._radar_health.ambiguous_failures = 1
+    e._radar_health.record(SRC, ae.RADAR_IEM_METADATA_URL, False, http.AmbiguousTransportError('no first byte'))
     assert failed_passes(e, [TimeoutError('x')], ctx={'local_failure_start': 3, 'ambiguous_failure_start': 0}) == [2]
     assert e._radar_local_failure_streak == 0 and SRC not in e._radar_transport_failures
 

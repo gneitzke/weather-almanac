@@ -159,6 +159,7 @@ RADAR_N0H_FRAME_BUDGET_SEC = 2.5
 RADAR_N0H_UPGRADE_SEC = 180
 # Two products, two boundary hours, plus two hours of headroom.
 RADAR_LEVEL3_LISTING_CACHE = RADAR_SITE_MAX_COUNT * len(RADAR_LEVEL3_TRANSPORTS) * 4
+RADAR_LEVEL3_FALLBACK_SEC = 120   # draw IEM site tiles before retrying Level III
 RADAR_LEVEL3_RETRY_SEC = 60       # a scan S3 lacks is not re-requested per tile
 RADAR_RAINVIEWER_COLOR = 2
 RADAR_RAINVIEWER_TILE_OPTS = "0_0"
@@ -1130,6 +1131,12 @@ class AlmanacEmitter:
         self._radar_level3_failed = {}             # (site, stamp) -> (retry at, error text)
         self._radar_level3_listings = {}           # (site, hour prefix) -> (listed at, keys)
         self._radar_native_requested = render_preference(Path(output_path).with_name('radar_render')) == 'v2'
+        self._radar_native_pref = self._radar_native_requested
+        self._radar_level3_outage = None  # until, since, reason and one recovery wakeup
+        self._radar_qc_failures = 0
+        self._radar_qc_last_error = None
+        self._radar_qc_logged = set()  # (site, reason) already logged
+        self._radar_level3_site_errors = {}
         self._radar_native_budget = NativeBudget(Path(output_path).with_name('radar_native_bytes.json'), clock=lambda: time.time())
         self._radar_auto_switch = None
         self._radar_auto_evidence = {}
@@ -1730,7 +1737,7 @@ class AlmanacEmitter:
             self._radar_retained_refresh('idle')
             return
         self._radar_quiet_at = now
-        local_failures = self._radar_health.local_failures
+        local_failures = self._radar_health.failure_counts('iem-nexrad-n0b', 'iem-mrms-lcref')['local']
         try:
             if self._radar_session is None or self._radar_provider != 'iem':
                 if self._radar_session is not None:
@@ -1747,14 +1754,14 @@ class AlmanacEmitter:
                     pass
             sentinel_every = knobs['sentinel']
             due = sentinel_every and (self._radar_sentinel is None or now - self._radar_sentinel['at'] >= sentinel_every)
-            if (due and self._radar_health.local_failures == local_failures
+            if (due and self._radar_health.failure_counts('iem-nexrad-n0b', 'iem-mrms-lcref')['local'] == local_failures
                     and _radar_iem_eligible(ctx['station'][0], ctx['station'][1])):
                 self._radar_sentinel_pass(ctx)
         except (_RadarBudget, CircuitOpen, TimeoutError, OSError, ValueError) as error:
             self._radar_note_yield(error)
         finally:
             self._radar_local_failure_streak = (self._radar_local_failure_streak + 1
-                if self._radar_health.local_failures > local_failures else 0)
+                if self._radar_health.failure_counts('iem-nexrad-n0b', 'iem-mrms-lcref')['local'] > local_failures else 0)
             with self._radar_lock:
                 if self._radar_pass['outcome'] not in ('failed',):
                     self._radar_pass['outcome'] = 'quiet'
@@ -1820,10 +1827,16 @@ class AlmanacEmitter:
         health = self._radar_health.snapshot()
         health['enabled'] = RADAR_ENABLED
         health['native'] = self._radar_native_budget.snapshot()
+        health['nativeFallback'] = self._radar_level3_fallback_health()
         newest = self._radar_result.frames[-1] if self._radar_result.frames else {}
         health['classification'] = self._radar_n0h_health.snapshot()
+        with self._radar_lock:
+            health['classification']['qcFailures'] = self._radar_qc_failures
+            health['classification']['lastQcError'] = self._radar_qc_last_error
+            site_failures = {site: dict(entry) for site, entry in self._radar_level3_site_errors.items()}
         health['mosaic'] = dict(key=newest.get('mosaicKey'),
-                                unfilteredSites=list(newest.get('unfilteredSites', ())))
+                                unfilteredSites=list(newest.get('unfilteredSites', ())),
+                                siteFailures=site_failures)
         health['phases'] = list(self._radar_phase_metrics)
         health['requests'] = list(self._radar_request_metrics)
         health['pending'] = dict(self._radar_pending)
@@ -1922,6 +1935,10 @@ class AlmanacEmitter:
                 self._radar_restart = True
         if self._radar_auto_due is not None and time.monotonic() >= self._radar_auto_due:
             self._radar_auto_due = None
+            self._radar_restart = True
+        outage = self._radar_level3_outage
+        if outage is not None and outage['wake'] and time.monotonic() >= outage['until']:
+            outage['wake'] = False
             self._radar_restart = True
         viewed = self._radar_is_viewed()
         # The demand hint lasts 15 minutes; the live session also catches a
@@ -2744,6 +2761,70 @@ class AlmanacEmitter:
                 return metadata
         return None
 
+    def _radar_level3_fallback(self, error):
+        now = time.monotonic()
+        reason = f'{type(error).__name__}: {error}'[:200]
+        with self._radar_lock:
+            first = self._radar_level3_outage is None or now >= self._radar_level3_outage['until']
+            self._radar_level3_outage = dict(until=now + RADAR_LEVEL3_FALLBACK_SEC, wake=True, reason=reason,
+                since=time.time() if first else self._radar_level3_outage['since'])
+        if first:
+            Logger.warning(f'almanac_emit: radar Level III unreachable, the site radar draws v1 for {RADAR_LEVEL3_FALLBACK_SEC} s - {reason}')
+
+    def _radar_qc_failed(self, site, volume_ts, error):
+        text = f'{type(error).__name__}: {error}'[:200]
+        with self._radar_lock:
+            self._radar_qc_failures += 1
+            self._radar_qc_last_error = dict(site=site, volumeTs=volume_ts, error=text, ts=time.time())
+            key = (site, text)
+            first = key not in self._radar_qc_logged and len(self._radar_qc_logged) < 256
+            if first:
+                self._radar_qc_logged.add(key)
+            # The decoded N0H is cached, and a cached classification makes the
+            # frame "due" for its upgrade on every pass. Drop it and remember the
+            # failure past the upgrade window, so the same QC is not rerun.
+            self._radar_level3_scans.pop((site, volume_ts, 'N0H'), None)
+        self._radar_remember_level3_failure((site, volume_ts, 'N0H'), RADAR_N0H_UPGRADE_SEC + 60,
+                                            'classification QC failed: ' + text, type(error))
+        if first:
+            Logger.warning(f'almanac_emit: radar {site} classification (N0H) QC failed, drawing it unfiltered - {text}')
+
+    def _radar_level3_site_failures(self, failures):
+        """ Per-site Level III failures inside a frame that still drew: counted
+        in /health.radar.mosaic.siteFailures and logged at most every
+        RADAR_FAILURE_LOG_SEC per site, with the number held back. """
+        now = time.time()
+        for site, error in failures:
+            if isinstance(error, (_RadarSuperseded, _RadarBudget)):
+                continue
+            text = f'{type(error).__name__}: {error}'[:200]
+            with self._radar_lock:
+                entry = self._radar_level3_site_errors.setdefault(site, dict(count=0, loggedAt=None, suppressed=0))
+                entry.update(count=entry['count'] + 1, lastError=text, lastTs=now)
+                if entry['loggedAt'] is not None and now - entry['loggedAt'] < RADAR_FAILURE_LOG_SEC:
+                    entry['suppressed'] += 1
+                    continue
+                held, entry['loggedAt'], entry['suppressed'] = entry['suppressed'], now, 0
+                while len(self._radar_level3_site_errors) > 32:
+                    self._radar_level3_site_errors.pop(next(iter(self._radar_level3_site_errors)))
+            Logger.warning(f'almanac_emit: radar {site} Level III scan unavailable ({entry["count"]} so far, {held} not logged) - {text}')
+
+    def _radar_level3_down(self):
+        outage = self._radar_level3_outage
+        if outage is not None and time.monotonic() < outage['until']:
+            return True
+        return bool(self._radar_health.probe_delay({RADAR_LEVEL3_TRANSPORT}))
+
+    def _radar_level3_fallback_health(self):
+        outage = self._radar_level3_outage
+        now = time.monotonic()
+        breaker = bool(self._radar_health.probe_delay({RADAR_LEVEL3_TRANSPORT}))
+        active = breaker or outage is not None and now < outage['until']
+        return dict(active=bool(self._radar_native_pref and active), breakerOpen=breaker,
+                    reason=outage['reason'] if outage else ('Level III breaker open' if breaker else None),
+                    since=outage['since'] if outage else None,
+                    retrySec=round(max(0, outage['until']-now), 1) if outage and now < outage['until'] else None)
+
     def _radar_mosaic_inputs(self, pairs, ts, ctx, deadline):
         from lib.radar_mosaic import mosaic_key, quality_control
         scans, contributors, identities = [], [], []
@@ -2769,6 +2850,7 @@ class AlmanacEmitter:
         pool = self._radar_input_pool
         jobs = [(site, stamp, pool.submit(acquire, site, stamp)) for site, stamp in sorted(pairs)
                 if ts - 480 <= stamp <= ts + 60]
+        failures = []
         try:
             for site, stamp, job in jobs:
                 try:
@@ -2779,25 +2861,37 @@ class AlmanacEmitter:
                 except Exception as error:
                     ctx.setdefault('site_reasons', {})[site] = 'scan unavailable'
                     ctx['last_error'] = str(error)
+                    failures.append((site, error))
+            self._radar_level3_site_failures(failures)
+            if jobs and not available and any(isinstance(e, CircuitOpen) or failure_class(e) in ('local', 'ambiguous')
+                                              or is_transport_error(e) for _, e in failures):
+                # Level III has its own host; IEM's site tiles can still be healthy.
+                ctx['level3_failed'] = True
+                self._radar_level3_fallback(failures[0][1])
             # One wait for the frame, never a timeout multiplied by site count.
             end = min(deadline - 2, time.monotonic() + RADAR_N0H_FRAME_BUDGET_SEC)
             arrived, _ = wait([p[3] for p in available], timeout=max(0, end-time.monotonic()))
             for site, stamp, scan, hca in available:
-                filtered, has_hca = scan, False
+                filtered, has_hca, qc = scan, False, False
                 try:
                     if hca not in arrived:
                         if ctx.get('prefetch'):
                             raise _RadarClassificationPending('classification unfinished for prefetch')
                     else:
-                        filtered = quality_control(scan, hca.result())
+                        classification = hca.result()  # failed fetches keep their own retry
+                        qc = True
+                        filtered = quality_control(scan, classification)
                         has_hca = True
                 except (_RadarSuperseded, _RadarClassificationPending):
                     raise
                 except _RadarBudget:
                     if ctx.get('prefetch'):
                         raise
-                except Exception:
-                    pass  # This site's optional classification cannot block N0B.
+                except Exception as error:
+                    # Optional classification cannot block N0B. Rest failed QC
+                    # past this volume's upgrade window, but keep fetch retries.
+                    if qc:
+                        self._radar_qc_failed(site, scan.volume_ts, error)
                 scans.append(filtered)
                 contributors.append(dict(id=site, ts=stamp, volumeTs=scan.volume_ts, filtered=has_hca))
                 identities.append((site, scan.volume_ts, has_hca))
@@ -3914,14 +4008,22 @@ class AlmanacEmitter:
         """Only consecutive provider failures may advance the fallback chain."""
         self._radar_pass["outcome"] = "failed"
         self._radar_log_failure(source, error)
+        if ctx.get('level3_failed'):
+            # A failure on the Level III host says nothing about IEM's route.
+            # Retry on v1 soon without resetting or advancing IEM's failures.
+            self._radar_local_failure_streak = 0
+            self._radar_retained_refresh('failed')
+            self._radar_budget_retry(source, 1, min_delay=2, reason='provider')
+            return False
         outcome, health = failure_class(error), self._radar_health
+        failures = health.failure_counts(source)
         # The pass error is often a synthetic TimeoutError ("visible newest
         # incomplete"); the tile loop's per-class flags and the health counters
         # say what actually failed underneath it.
         truly_local = (outcome == 'local' or ctx.get('local_failure')
-                       or health.local_failures > ctx.get('local_failure_start', health.local_failures))
+                       or failures['local'] > ctx.get('local_failure_start', failures['local']))
         ambiguous = (outcome == 'ambiguous' or ctx.get('ambiguous_failure')
-                     or health.ambiguous_failures > ctx.get('ambiguous_failure_start', health.ambiguous_failures))
+                     or failures['ambiguous'] > ctx.get('ambiguous_failure_start', failures['ambiguous']))
         local = truly_local or ambiguous  # neither may advance the fallback chain
         if local:
             self._radar_transport_failures.pop(source, None)
@@ -4143,7 +4245,8 @@ class AlmanacEmitter:
                 smooth = len(raw) < 128 and raw.strip() == 'on'
             except (OSError, UnicodeError):
                 smooth = False
-            native = render_preference(Path(self.output_path).with_name('radar_render')) == 'v2'
+            self._radar_native_pref = render_preference(Path(self.output_path).with_name('radar_render')) == 'v2'
+            native = self._radar_native_pref and not self._radar_level3_down()
             self._radar_native_requested = native
             self._radar_policy_ceiling = self._radar_native_budget.snapshot()['ceilingState']
             self._radar_auto_due = None
@@ -4235,9 +4338,10 @@ class AlmanacEmitter:
             for source, adapter in adapters:
                 ctx['target_source'] = self._radar_target_source = source
                 self._radar_pass.update(source=source, site=site["id"] if source == "iem-nexrad-n0b" and site else None)
-                for kind in ('local', 'ambiguous'):
+                ctx.pop('level3_failed', None)
+                for kind, count in self._radar_health.failure_counts(source).items():
                     ctx.pop(kind+'_failure', None)
-                    ctx[kind+'_failure_start'] = getattr(self._radar_health, kind+'_failures')
+                    ctx[kind+'_failure_start'] = count
                 ctx.pop('staging_source', None)
                 ctx['switch_reason'] = 'user source/zoom selection' if not same_mode else 'initial source selection'
                 if errors:
@@ -4309,8 +4413,18 @@ class AlmanacEmitter:
                 try:
                     for probe_url, is_metadata in probes:
                         probe_source = RADAR_LEVEL3_TRANSPORT if probe_url.startswith(RADAR_LEVEL3_BUCKET) else source
-                        raw = self._radar_request(probe_source, probe_url, ctx['deadline'],
-                            method='GET' if is_metadata else 'HEAD', metadata=True)
+                        try:
+                            raw = self._radar_request(probe_source, probe_url, ctx['deadline'],
+                                method='GET' if is_metadata else 'HEAD', metadata=True)
+                        except (_RadarBudget, _RadarSuperseded):
+                            raise
+                        except Exception as error:
+                            # Recovery probes precede frame inputs but need the
+                            # same host isolation and v1 fallback on failure.
+                            if probe_source == RADAR_LEVEL3_TRANSPORT:
+                                ctx['level3_failed'] = True
+                                self._radar_level3_fallback(error)
+                            raise
                         if is_metadata:
                             self._radar_probe_reuse[probe_url] = raw
                     ctx['tile_workers'] = RADAR_NEWEST_TILE_WORKERS
@@ -5353,7 +5467,7 @@ class AlmanacEmitter:
                           sourcePref=self._radar_source_pref or radar_snap.source_pref,
                           sitePreferred=(self._radar_source_pref or radar_snap.source_pref) == 'site',
                           nativeBudget=self._radar_native_budget.snapshot(),
-                          renderPref='v2' if self._radar_native_requested else 'v1',
+                          renderPref='v2' if self._radar_native_pref else 'v1',
                           starting=self._radar_starting(radar_snap),
                           health=self._radar_health_payload()),
             'ts':      int(now),                     # engine heartbeat ONLY - see obsAgeSec

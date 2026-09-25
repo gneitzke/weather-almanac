@@ -108,7 +108,7 @@ class HostHealth:
         host = urlsplit(url).netloc
         self.sources.setdefault(source, set()).add(host)
         state = self.hosts.setdefault(host, dict(samples=deque(), until=0, probe=False,
-                                                url=url, metadata=False))
+                                                url=url, metadata=False, local=0, ambiguous=0))
         self._prune(state)
         return state
 
@@ -144,8 +144,10 @@ class HostHealth:
             if error is not None and failure_class(error) != 'host':
                 if failure_class(error) == 'local':
                     self.local_failures += 1
+                    s['local'] += 1
                 else:
                     self.ambiguous_failures += 1
+                    s['ambiguous'] += 1
                 if probe:
                     s['probe'] = False
                 return
@@ -157,6 +159,13 @@ class HostHealth:
             if not s['until'] and len(s['samples']) >= 6:
                 if sum(ok for _, ok in s['samples']) / len(s['samples']) < .5:
                     s['until'] = time.monotonic()+self.COOLDOWN
+
+    def failure_counts(self, *sources):
+        """Local and ambiguous failures on these sources' hosts, counted once."""
+        with self.lock:
+            hosts = {h for source in sources for h in self.sources.get(source, ())}
+            states = [self.hosts[h] for h in hosts]
+            return {kind: sum(s[kind] for s in states) for kind in ('local', 'ambiguous')}
 
     def probes(self, source):
         with self.lock:
