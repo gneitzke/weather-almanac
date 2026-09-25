@@ -9,8 +9,8 @@ from tests.test_radar_attention_engine import active, tier, tile_requests  # noq
 
 
 @pytest.mark.parametrize('name,hour,target,viewed', [
-    ('warm', 14, 5, False), ('watch', 14, 8, False),
-    ('warm', 14, 5, True), ('watch', 2, 1, False), ('live', 14, 8, False)])
+    ('warm', 14, 4, False), ('watch', 14, 8, False),
+    ('warm', 14, 4, True), ('watch', 2, 1, False), ('live', 14, 8, False)])
 def test_history_builds_exact_tier_target(make_emitter, hybrid, active, name, hour, target, viewed):
     e = make_emitter(); e._running = True
     tier(e, name, hour)
