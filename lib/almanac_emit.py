@@ -4170,11 +4170,18 @@ class AlmanacEmitter:
             # never from the newest advertised scan: IEM renews that every
             # few minutes, so a stalled S3 feed would never reach the bound.
             site, stamp = ctx.get('site_id'), ctx['unpublished_stamp']
+            now = time.time()
             with self._radar_lock:
                 stall = self._radar_level3_stall
-                if stall is None or stall['site'] != site:
+                # A streak is continuous evidence: watch sees a late scan about
+                # once a minute. One not observed for the bound is abandoned
+                # (the tier left watch, Auto chose Region), and extending it
+                # would turn a routine delay hours later into a false stall.
+                if (stall is None or stall['site'] != site
+                        or now - stall.get('seen', now) > RADAR_LEVEL3_UNPUBLISHED_LOG_SEC):
                     stall = self._radar_level3_stall = dict(site=site, since=stamp, loggedAt=None, suppressed=0)
                 stall['since'] = since = min(stall['since'], stamp)
+                stall['seen'] = now
             if time.time() - since > RADAR_LEVEL3_UNPUBLISHED_LOG_SEC:
                 # Level III is unavailable for the site view. IEM's route is
                 # healthy: no strike, no local backoff, v1 retry now.

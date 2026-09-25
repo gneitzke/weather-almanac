@@ -249,3 +249,39 @@ assert.equal($('rad-note').textContent,note);
 assert.doesNotMatch(shown,/sharpening/i);
 assert.doesNotMatch($('rad-note').textContent,/Level III|IEM tiles|delayed|unreachable/);
 '''.replace('CASE', json.dumps(case)))
+
+
+def test_an_abandoned_stall_streak_cannot_fire_hours_later(make_emitter, hybrid, multisite, native, monkeypatch, tmp_path):
+    """Opus review (probe_j): a routine delay starts a streak, the tier drops
+    before the late scan is fetched, and hours later the next routine 90 s
+    delay was measured from the abandoned streak: a false 'Level III delayed'
+    fallback. A streak not observed for the bound starts over."""
+    from tests.test_radar_v2_only_review import tier
+    msgs = []
+    monkeypatch.setattr(ae.Logger, 'warning', msgs.append)
+    e = make_emitter(); tier(e, tmp_path, 'watch')
+    e._do_radar()
+    T = hybrid.latest + 300
+    for s in ('KNEA', 'KMID'):
+        multisite.scans[s].append(T)
+    native.missing.add(T)
+    hybrid.mono = T + 90 - (hybrid.latest + 360)
+    e._do_radar(discovery=True, intent_triggered=False)
+    assert e._radar_level3_stall is not None                 # a routine lag starts a streak
+    native.missing.clear()
+    tier(e, tmp_path, 'rest')
+    hybrid.mono += 7200                                      # two hours away from watch
+    X = T + 7200
+    multisite.scans['KNEA'] = [X - 300, X]; multisite.scans['KMID'] = [X - 300, X]
+    native.missing.add(X)
+    hybrid.mono = X + 90 - (hybrid.latest + 360)
+    tier(e, tmp_path, 'watch')
+    hybrid.latest = X - 120
+    import os
+    os.utime(tmp_path / 'radar_source', (ae.time.time(), ae.time.time()))
+    e._do_radar(discovery=True, intent_triggered=False)
+    r = e._build_payload()['radar']
+    assert e._radar_pass.get('outcome') == 'unpublished'     # an ordinary lag, not a stall
+    assert not (r.get('nativeFallback') or {}).get('active')
+    assert e._radar_level3_stall['since'] == X
+    assert not any('stalled' in m for m in msgs)
