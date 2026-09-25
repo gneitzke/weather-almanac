@@ -15,9 +15,17 @@ to shared upstream code that the classic console benefits from too.
   off-tab. Shadow no longer applies watch's primary-only restriction.
 - **Cooldown fallback and honest recovery.** N0B cooldowns select IEM tiles;
   Level III Retry-After is capped at five minutes. An expired timer alone does
-  not claim recovery: a validated N0B fetch must succeed. Corner notes use the
-  same fallback/recovery wording as captions. Level III budget notices are Site
+  not claim recovery: a validated N0B fetch must succeed. Level III budget notices are Site
   only, without duplicate fallback-caption text or replacing Region's scale note.
+- **Second v2-only review fixes.** A Level III 429 inside a pass now switches
+  Site to labelled IEM tiles within seconds instead of waiting out the
+  cooldown. A stalled NOAA feed in watch is measured from the first unpublished
+  scan: after ten minutes it warns (rate limited) and draws IEM tiles captioned
+  "NOAA Level III delayed", returning to v2 when a newer product publishes.
+  Watch skips a dark nearest radar for the next reporting one, as live does.
+  Watch holds only a mode Auto chose; a Region forced by Site failures is
+  re-evaluated. The fallback reason appears once, in the caption; renderer
+  changes say "updating newest frame".
 - **Review regression coverage.** Native-on Region evidence checks are restored,
   including a cooldown beginning during a pass. General hybrid tests no longer
   force native off; the IEM topology fixture owns that override.

@@ -75,7 +75,11 @@ def test_watch_overdue_publication_reaches_warning_bound(
     hybrid.mono = 60
     emitter._do_radar(discovery=True, intent_triggered=False)
     assert any('scan unavailable' in message for message in warnings)
-    assert emitter._radar_transport_failures[SITE] == 1
+    # Past the bound Level III is stalled for the site view: IEM draws it,
+    # labelled, and IEM's own fallback chain takes no strike.
+    assert any('Level III stalled' in message for message in warnings)
+    assert not emitter._radar_transport_failures
+    assert emitter._radar_level3_outage['kind'] == 'stalled'
 
 
 @pytest.mark.parametrize('neighbours', [False, True])
@@ -216,8 +220,9 @@ radarView.refresh={state:'idle'};
 Object.assign(radarView.data,{sourceMode:'site',native:!RECOVERY});
 radarView.pendingSource={variantOnly:true,frames:[],data:{native:RECOVERY,nativeFallback:{active:true,reason:'level3-unreachable'}}};
 radarNoteRender();
-assert.equal($('rad-note').textContent,RECOVERY?'Restoring NOAA Level III · showing IEM tiles':'Level III unreachable · loading IEM tiles · showing NOAA Level III');
-assert.doesNotMatch($('rad-note').textContent,/sharpening/i);
+// The source caption names the fallback/recovery; the note keeps loop state.
+assert.equal($('rad-note').textContent,'Playing previous view · updating newest frame');
+assert.doesNotMatch($('rad-note').textContent,/sharpening|Level III|IEM tiles/i);
 '''.replace('RECOVERY', json.dumps(recovering)))
 
 

@@ -3276,7 +3276,7 @@
     var fallback=changing&&!pending.data.native?pending.data.nativeFallback:r.nativeFallback;
     if(!changing&&!(r.sourceMode==='site'&&!r.native&&fallback?.active))return '';
     if(changing&&pending.data.native||fallback?.recovering)return 'Restoring NOAA Level III · showing IEM tiles';
-    var reason=fallback?.reason==='daily-limit'?'Daily Level III limit reached':'Level III unreachable';
+    var reason=fallback?.reason==='daily-limit'?'Daily Level III limit reached':fallback?.reason==='level3-stalled'?'NOAA Level III delayed':'Level III unreachable';
     return reason+(r.native?' · loading IEM tiles · showing NOAA Level III':' · showing IEM tiles');
   }
   function radarNoteRender(){
@@ -3295,8 +3295,9 @@
     else if(r.attention?.waking)copy=radarView.current?.bitmap?
       'Waking radar · showing '+radarFrameLabel(radarView.current)+' while the newest scan loads':
       'Waking radar · fetching the first scan';
-    else if(radarFallbackText(r,radarView.pendingSource))copy=radarFallbackText(r,radarView.pendingSource);
-    else if(radarView.pendingSource&&f.state!=='failed')copy=radarView.pendingSource.variantOnly?'Playing previous view · sharpening newest frame':'Playing previous view · sharpening '+radarView.pendingSource.frames.filter(f=>f.bitmap).length+' of '+radarStartCount(radarView.pendingSource.data);
+    // The source caption carries any Level III fallback reason, once. A
+    // renderer-only change (v2/IEM or Smooth) keeps neutral loop wording.
+    else if(radarView.pendingSource&&f.state!=='failed')copy=radarView.pendingSource.variantOnly?'Playing previous view · updating newest frame':'Playing previous view · sharpening '+radarView.pendingSource.frames.filter(f=>f.bitmap).length+' of '+radarStartCount(radarView.pendingSource.data);
     else if(radarView.holdingWindow&&f.state!=='failed')copy=(radarView.nextAt?'Playing previous view':'Previous view')+' · sharpening '+radarView.loaded.filter(f=>f.bitmap).length+' of '+Math.min(8,Math.max(radarView.loaded.length,r.frameCount||0));
     else if((radarView.current?.bitmap&&radarView.loaded.some(f=>!f.bitmap))&&f.state!=='failed')copy='Refreshing · frame '+radarView.loaded.filter(f=>f.bitmap).length+' of '+Math.min(8,Math.max(radarView.loaded.length,r.frameCount||0));
     else if(f.state==='newest')copy='Refreshing · newest frame';

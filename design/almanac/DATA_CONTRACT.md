@@ -698,9 +698,13 @@ advertised target, not just the frames published so far. Tile scheduling and
 acceptance use the same readiness predicate. A renderer-only change on the same
 source/site accepts as soon as the new variant's newest frame is decoded;
 history backfills normally. A degradation says `Level III unreachable` (or
-`Daily Level III limit reached`), then `loading IEM tiles · showing NOAA Level III`
+`Daily Level III limit reached`, or `NOAA Level III delayed` for a stalled feed),
+then `loading IEM tiles · showing NOAA Level III`
 until decoded fallback tiles replace native. While fallback tiles draw, it says
 `showing IEM tiles`. Recovery says `Restoring NOAA Level III · showing IEM tiles`.
+The source caption carries this text once; the corner note does not repeat it.
+During any renderer-only change (v2/IEM or Smooth) the note says
+`Playing previous view · updating newest frame`.
 Renderer transitions never use “Sharpening” and never blank the existing map.
 Region still has a native zoom ceiling of 9; Auto
 can select Site at camera zoom 10 when the guards permit it.
@@ -1746,7 +1750,7 @@ Gates are measurements, not matched colours, so `unmatchedPixels` and
 true only for Smooth, so the page never interpolates v2 pixels. The payload adds
 `radar.native` (the drawn variant). `radar.nativeFallback` contains `active`
 (true only when the published site frames are IEM tiles), `reason`
-(`level3-unreachable`, `daily-limit`, or null), and `recovering` (true when IEM
+(`level3-unreachable`, `level3-stalled`, `daily-limit`, or null), and `recovering` (true when IEM
 frames remain displayed after a validated N0B product fetch succeeds;
 an expired outage timer or half-open breaker alone is not recovery). There is no `renderPref`.
 The page uses the drawn/staged manifest for captions, retaining the old loop
@@ -1756,12 +1760,18 @@ until the replacement newest frame decodes. Native attribution reads `NOAA Level
 
 **Attention and daily bytes.** Watch keeps exactly one site and one newest
 Level III scan warm: the primary in-view radar, with its matching optional N0H.
-Discovery lists only that site; a saved viewport with no radar coverage is
+The primary is the nearest in-view radar that reports, as in live. Discovery
+lists in-view sites nearest first and stops at the first that reports; fresh
+not-reporting evidence (within one 300-second cadence) skips a site without a
+listing, and a failed listing stops the search. A saved viewport with no radar coverage is
 reported as out of view and fetches no Site products. No older scan is downloaded
 if the newest is unpublished. Warm keeps the full native mosaic: newest plus
 four history frames, including when unviewed. Live retains its eight-frame target.
-Watch's primary-only discovery cannot change Auto's existing mode; a cold watch
-uses cached neighbour status for coverage without fetching neighbours.
+Watch's primary-only discovery cannot change a mode Auto itself chose from
+reporting Site evidence; a cold watch uses cached neighbour status for coverage
+without fetching neighbours. A Region the fallback chain forced after Site
+strikes, or that failed or unknown Site evidence selected, is not held: watch
+re-evaluates Site on each discovery pass.
 Rest and dormant fetch no Site tiles or Level III products. Rest keeps its four-tile zoom-5 MRMS sentinel at home every hour by
 day and every two hours at night; dormant only lists.
 Shadow tiers do not apply acquisition restrictions; the effective tier remains
@@ -1835,10 +1845,15 @@ may fail first, in which case its normal local backoff applies without trying
 Level III. Existing pixels remain while both routes are unavailable.
 An active N0B transport cooldown also selects IEM fallback, with the unreachable
 caption. Level III Retry-After values (seconds or HTTP dates, N0B and optional
-N0H independently) are capped at 300 seconds. The caption keeps its unreachable
+N0H independently) are capped at 300 seconds. A 429 inside a pass is a Level III
+outage, not a local yield: the pass fails on the Level III path, and IEM draws
+the newest scan on the 2-second retry. Once an outage is recorded, the requested
+variant is IEM, so no retry, discovery or probe schedule waits on the Level III
+cooldown. A pass that loses Level III never falls back to older cached products. The caption keeps its unreachable
 reason across retry windows until a validated N0B product succeeds. Recovery
 still happens automatically without a restart. The corner note names the same
-fallback/recovery as the source caption; renderer changes never say sharpening.
+fallback/recovery once, in the source caption; the corner note keeps loop
+state only, and renderer changes never say sharpening.
 Daily-limit and byte-ledger notices appear only in Site mode, use Level III names,
 and are not repeated inside the fallback caption. Region retains its scale note.
 All per-site input failures remain counted in `/health.radar.mosaic.siteFailures`.
@@ -1849,7 +1864,13 @@ IEM-to-S3 publication lag and other validation errors do not warn. In watch,
 a newest scan unpublished for at most 600 seconds retains the current frame
 (or leaves a cold view waiting), schedules retry at its 60-second negative-cache
 expiry (including the discovery wakeup), and adds no provider failure, fallback-chain strike or pass warning.
-After 600 seconds the ordinary failed-pass handling and overdue warning apply.
+Watch measures that lag from the first unpublished scan of the primary's
+current streak, not from the newest advertised scan. The streak ends only when
+that site publishes a product at or after its first unpublished scan. Past 600
+seconds Level III is stalled for the site view: the pass fails on the Level III
+path with no fallback-chain strike, IEM tiles draw on the 2-second retry with
+`nativeFallback.reason` `level3-stalled`, and a warning logs at most once per
+600 seconds. Level III is checked again every 120 seconds.
 Eligible warnings retain the existing per-site rate limit and suppressed count.
 
 **Scan identity.** IEM names a scan by its volume start floored to the minute;
