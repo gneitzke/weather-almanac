@@ -513,6 +513,12 @@
   #rose .needle-s { opacity: 0.8; }                               /* tail defers to the tip */
   .panel:nth-child(1) .p-body { gap: 10px; }                      /* buys the bigger dial */
   .panel:nth-child(1) .lrow .k { letter-spacing: 0.06em; }        /* AVERAGE fits beside it */
+  /* the AVERAGE row is wider than the column beside the dial, so it ran past
+     the column edge while GUST and MAX stopped at it and their values ended
+     ~15px short. Size the ledger to its widest row: every row shares that
+     width, the values end on one right edge and the shorter rows' leaders
+     stretch to meet them. */
+  .panel:nth-child(1) .ledger { width: max-content; min-width: 100%; }
   /* compass + heading stacked; direction reads directly under the dial */
   .wind-rose  { display: flex; flex-direction: column; align-items: center; flex: none; }
   .wind-head  { text-align: center; margin-top: -1px; white-space: nowrap; }

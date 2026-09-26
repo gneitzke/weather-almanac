@@ -4,6 +4,14 @@ Changes in Weather Almanac, newest first. The upstream WeatherFlow
 PiConsole keeps its own release notes; entries under **Core** below are fixes
 to shared upstream code that the classic console benefits from too.
 
+## 2026-09-26
+
+### Console
+- **Wind figures line up.** The AVERAGE row was wider than the column beside
+  the dial, so its value ran about 15 px past GUST and MAX. The wind ledger now
+  takes its widest row's width: all three values end on one right edge and the
+  shorter rows' dot leaders stretch to meet them. The labels do not move.
+
 ## 2026-09-25
 
 ### Radar
