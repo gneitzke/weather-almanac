@@ -255,8 +255,8 @@ def test_toggle_has_one_footprint_and_an_honest_count():
     button = re.search(r'<button[^>]*id="rad-warnings"[^>]*>.*?</button>', css).group(0)
     assert '>Warning areas<' in button and 'id="rad-warnings-count"' in button
     run(r'''
-radarWarnUpdate(payload([]));assert.equal($('rad-warnings-count').textContent,'None');
-assert.equal($('rad-warnings').getAttribute('aria-label'),'Warning areas, none in force');
+radarWarnUpdate(payload([]));assert.equal($('rad-warnings-count').textContent,'');
+assert.equal($('rad-warnings').getAttribute('aria-label'),'Warning areas');
 radarWarnUpdate(payload([item('a'),item('b',{polygon:[RING(-122.0,47.9)]})]));
 assert.equal($('rad-warnings-count').textContent,'Shown · 2');
 assert.equal($('rad-warnings').getAttribute('aria-label'),'Warning areas, 2 shown');
@@ -378,7 +378,7 @@ def test_the_warning_toggle_keeps_its_footprint(browser):
     assert len(widths) == 1, size                      # same box, and the rail does not move
     w, h, _ = widths.pop()
     assert w == 112 and h == 44
-    assert [t.split('\n')[-1] for *_, t in size] == ['None', 'Shown · 5', 'Hidden · 5']
+    assert [t.strip().split('\n')[-1].casefold() for *_, t in size] == ['warning areas', 'shown · 5', 'hidden · 5']
 
 
 def test_small_and_clipped_warnings_offer_a_complete_ordered_list():
@@ -424,11 +424,12 @@ def test_counts_follow_the_unobstructed_view_when_camera_moves():
     run(r'''
 radarWarnUpdate(payload([item('home'),item('far',{polygon:[RING(-115,40)]})]));
 assert.equal(count(),'Shown · 1');
-assert.ok($('rad-warnings').getAttribute('aria-label').endsWith('1 off map'));
+assert.equal($('rad-warnings').getAttribute('aria-label'),'Warning areas, 1 shown');
 radarCamera={lat:40,lon:-115,zoom:10};radarWarnPlace();
 assert.equal(count(),'Shown · 1');
 radarCamera={lat:35,lon:-110,zoom:10};radarWarnPlace();
-assert.equal(count(),'Off map · 2');
+assert.equal(count(),'');
+assert.equal($('rad-warn-list').hidden,true);
 ''')
 
 

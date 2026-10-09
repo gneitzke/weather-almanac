@@ -339,8 +339,14 @@ waiting up to 15 minutes.
   other intersecting warning under "Also here" (56 px rows). A 56 px
   nearby cue appears for small/clipped geometry and at zoom 6 or below. It names
   the first local warning, distance to its nearest boundary (in station units),
-  compass direction from the station, and the list count. It opens every active
-  area in local-first order, including off-map warnings. Enter/Space on a focused outline
+  compass direction from the station, and the list count. The cue, list and
+  off-map counts include only relevant active areas: intersecting the current
+  unobstructed map, nearest boundary within 200 miles of the camera center,
+  or covering the station (always). The fixed radius keeps off-screen context
+  local regardless of zoom; visible areas count at any distance. The national
+  fetch and outlines are retained, so panning/zooming updates relevance without
+  waiting for a fetch. The list preserves the payload's local-first order.
+  Enter/Space on a focused outline
   opens it; Escape, Close (44 px) or a tap on open map closes it.
   **Card.** Opaque page surface, hazard keyline, 20 px name and 16 px body:
   name; "At this station"/"Not at this station" · until · time left;
@@ -364,9 +370,10 @@ waiting up to 15 minutes.
   (`aria-pressed`, a fixed 112 x 44 px in every state, so the rail never moves)
   hides or shows the outlines, their chips and details; the station tag
   stays. Its second line counts active polygon areas intersecting the unobstructed
-  view: "Shown · 5", "Hidden · 5" (accent), "None", or "Unavailable" with
-  stale data. When all active areas are off map it reads "Off map · 5"; the
-  list button and accessible label also report the off-map count. Counts
+  view: "Shown · 5", "Hidden · 5" (accent), or "Unavailable" with
+  stale data. With no relevant areas it simply reads "Warning areas", with no
+  count or nearby cue. When all relevant areas are off map it reads "Off map · 5";
+  the list button and accessible label also report only relevant off-map areas. Counts
   follow camera movement, including when areas are hidden. It is shown only when
   `available` is true. It is per viewer: the choice lives in the page's
   `localStorage` (key `radarWarnings`), wrapped in try/catch so a browser that

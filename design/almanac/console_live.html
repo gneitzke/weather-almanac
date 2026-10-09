@@ -3374,6 +3374,9 @@
   // Touch: an outline answers within 12 px of its edge, and a small one (under
   // 32 px either way) through a 56 px box around its centre.
   var RAD_WARN_EDGE=12,RAD_WARN_SMALL=32,RAD_WARN_TARGET=56;
+  // Off-screen context stays local at every zoom; visible areas and station
+  // coverage always count. Keep the national payload/outlines for later pans.
+  var RAD_WARN_NEAR_METERS=200*1609.344;
   // The unobstructed map for labels: below the caption/legend band, 12 px above the control band.
   var RAD_WARN_BOTTOM=426,RAD_WARN_SAFE={l:12,t:60,r:944,b:414};
   var radarWarn={data:null,payloadTs:null,on:radarWarnStored(),shown:false,unavailable:false,failed:false,timer:null,selected:null,also:[],listMode:false,lead:null,card:null,paths:[],nodes:new Map(),chips:new Map(),down:null};
@@ -3442,7 +3445,6 @@
     var at=radarWarnStaleAt(),now=radarServerNow(),counting=radarWarn.lead||radarWarn.selected;
     var next=Math.min(...live.map(i=>i.expires).filter(isNum),...(!stale&&isNum(at)?[at]:[]),...(counting?[now+15]:[]));
     if(isFinite(next))radarWarn.timer=setTimeout(radarWarnBuild,Math.max(250,(next-now)*1000+50));
-    radarWarnToggleRender(live,stale);
     if((was!==radarWarn.unavailable||wasFailed!==radarWarn.failed)&&radarView.data)radarState();}
   function radarWarnProblem(){return radarWarn.unavailable?'Warnings unavailable':radarWarn.failed?'Warnings refresh failed':'';}
   function radarWarnHealthRender(){var node=$('rad-warn-health'),problem=radarWarnProblem();
@@ -3476,35 +3478,41 @@
     return h.rings.some(ring=>radarWarnInside(r.l,r.t,ring)||ring.some((p,k)=>edge(p,ring[(k+1)%ring.length])));}
   function radarWarnViewportItems(live){var v=radarWarnScreen();return !v?live:live.filter(it=>{var h=radarWarn.nodes.get(it.id)||radarWarnGeometry(it,radarView.data.center);return h&&radarWarnVisible(h,v);});}
   function radarWarnPlace(){var box=$('rad-warn-chips'),v=radarWarnScreen(),seen=new Set(),S=RAD_WARN_SAFE,needsList=false;
+    var live=radarWarnLive(),visible=radarWarnViewportItems(live),relevant=radarWarnListItems(live,visible),ids=new Set(relevant.map(i=>i.id));
     if(v&&radarOverlay&&radarOverlay.warnClip){var rect=radarOverlay.warnClip;for(var [k,n] of Object.entries({x:-v.tx/v.s,y:-v.ty/v.s,width:956/v.s,height:RAD_WARN_BOTTOM/v.s}))rect.setAttribute(k,n);}
     for(var h of v?radarWarn.paths:[]){var it=h.item,b=h.box,x0=b.x0*v.s+v.tx,x1=b.x1*v.s+v.tx,y0=b.y0*v.s+v.ty,y1=b.y1*v.s+v.ty;
       var small=String(x1-x0<RAD_WARN_SMALL||y1-y0<RAD_WARN_SMALL);
-      if(small==='true'||x0<0||x1>956||y0<0||y1>RAD_WARN_BOTTOM)needsList=true;if(h.node.getAttribute('data-small')!==small)h.node.setAttribute('data-small',small);
+      if(ids.has(it.id)&&(small==='true'||x0<0||x1>956||y0<0||y1>RAD_WARN_BOTTOM))needsList=true;if(h.node.getAttribute('data-small')!==small)h.node.setAttribute('data-small',small);
       if(radarWarnTier(it)<2||(radarWarn.lead&&radarWarn.lead.id===it.id))continue;
       if(x1<S.l||x0>S.r||y1<S.t||y0>S.b)continue;
       var chip=radarWarn.chips.get(it.id);if(!chip){chip=document.createElement('div');chip.className='rad-warn-chip';box.appendChild(chip);radarWarn.chips.set(it.id,chip);}
       var name=radarWarnName(it);if(chip.textContent!==name)chip.textContent=name;chip.dataset.kind=it.kind||'other';chip.dataset.threat=it.threat||'';
       chip.style.left=clamp((x0+x1)/2,S.l+90,S.r-90)+'px';chip.style.top=clamp(y0-5,S.t+24,S.b)+'px';seen.add(it.id);}
     for(var [id,chip] of radarWarn.chips)if(!seen.has(id)){chip.remove();radarWarn.chips.delete(id);}
-    var live=radarWarnLive(),visible=radarWarnViewportItems(live),off=live.length-visible.length,list=$('rad-warn-list'),nearby=radarWarnListItems(live)[0];
-    list.hidden=!radarWarn.on||!(needsList||nearby&&!nearby.affectsStation||radarCamera&&radarCamera.zoom<=6)||!live.length||!!radarWarn.selected;
-    var title=(nearby?radarWarnName(nearby)+'\n'+radarWarnLocation(nearby)+' · ':'')+live.length+' warning area'+(live.length===1?'':'s')+' · list'+(off?' · '+off+' off map':'');
+    var off=relevant.length-visible.length,list=$('rad-warn-list'),nearby=relevant[0];
+    list.hidden=!radarWarn.on||!(needsList||nearby&&!nearby.affectsStation||radarCamera&&radarCamera.zoom<=6)||!relevant.length||!!radarWarn.selected;
+    var title=(nearby?radarWarnName(nearby)+'\n'+radarWarnLocation(nearby)+' · ':'')+relevant.length+' warning area'+(relevant.length===1?'':'s')+' · list'+(off?' · '+off+' off map':'');
     if(list.textContent!==title)list.textContent=title;
-    radarWarnToggleRender(live,radarWarnStale());}
+    radarWarnToggleRender(relevant,radarWarnStale(),visible);}
 
   // The payload is local-first. A nearby cue supplements, never replaces, the
   // station danger tag. Its distance is to the closest boundary, not a centroid.
-  function radarWarnListItems(live){return live;}
-  function radarWarnLocation(it){if(it.affectsStation)return 'At this station';
-    var center=radarView.data&&radarView.data.center;if(!center)return 'Nearby';
+  function radarWarnListItems(live,visible=radarWarnViewportItems(live)){var ids=new Set(visible.map(i=>i.id));
+    return live.filter(it=>it.affectsStation||ids.has(it.id)||(radarWarnDistance(it,radarCamera)?.meters??Infinity)<=RAD_WARN_NEAR_METERS);}
+  // Nearest boundary in the same wrapped projection as the outlines, converted
+  // to ground distance. Shared by camera relevance and the station caption.
+  function radarWarnDistance(it,center){if(!center)return null;
     var g=radarWarnGeometry(it,center),p=radarWorldPoint(center.lat,center.lon,9),best=Infinity,q=null;
     for(var ring of g?g.rings:[])for(var k=0;k<ring.length;k++){var a=ring[k],b=ring[(k+1)%ring.length],dx=b[0]-a[0],dy=b[1]-a[1],l=dx*dx+dy*dy;
       var t=l?clamp(((p[0]-a[0])*dx+(p[1]-a[1])*dy)/l,0,1):0,x=a[0]+t*dx,y=a[1]+t*dy,d=Math.hypot(x-p[0],y-p[1]);if(d<best){best=d;q=[x,y];}}
-    if(!q)return 'Nearby';var dest=radarWorldInverse(...q,9),r=Math.PI/180,a=center.lat*r,b=dest.lat*r,dl=(dest.lon-center.lon)*r;
+    if(!q)return null;var dest=radarWorldInverse(...q,9),r=Math.PI/180,a=center.lat*r,b=dest.lat*r,dl=(dest.lon-center.lon)*r;
     var h=Math.sin((b-a)/2)**2+Math.cos(a)*Math.cos(b)*Math.sin(dl/2)**2,m=6371000*2*Math.asin(Math.min(1,Math.sqrt(h)));
     var bearing=(Math.atan2(Math.sin(dl)*Math.cos(b),Math.cos(a)*Math.sin(b)-Math.sin(a)*Math.cos(b)*Math.cos(dl))/r+360)%360;
-    var units=radarView.data.units==='km'?'km':'mi',distance=m/(units==='km'?1000:1609.344);
-    return (distance<1?'Under 1':String(Math.round(distance)))+' '+units+' '+['N','NE','E','SE','S','SW','W','NW'][Math.round(bearing/45)%8]+' of station';}
+    return {meters:m,bearing};}
+  function radarWarnLocation(it){if(it.affectsStation)return 'At this station';
+    var d=radarWarnDistance(it,radarView.data&&radarView.data.center);if(!d)return 'Nearby';
+    var units=radarView.data.units==='km'?'km':'mi',distance=d.meters/(units==='km'?1000:1609.344);
+    return (distance<1?'Under 1':String(Math.round(distance)))+' '+units+' '+['N','NE','E','SE','S','SW','W','NW'][Math.round(d.bearing/45)%8]+' of station';}
   // Fit to the right of the warning cues, respecting the same zoom and pan
   // limits as gestures. Close the card before moving so it cannot hide the fit.
   function radarWarnFitCamera(item){var r=radarView.data,g=r&&radarWarnGeometry(item,r.center);if(!g)return null;
@@ -3566,12 +3574,13 @@
     if(JSON.stringify(it)!==JSON.stringify(c.item)||JSON.stringify(also)!==JSON.stringify(radarWarn.also)){
       radarWarnSelect(it,[it,...also],radarWarn.listMode);return;}
     var t=radarWarnWhen(it);if(c.when.textContent!==t)c.when.textContent=t;radarWarnOverflow();}
-  function radarWarnToggleRender(live,stale){var b=$('rad-warnings'),w=radarWarn.data,n=radarWarnViewportItems(live).length,off=live.length-n;b.hidden=!(w&&w.available!==false);
+  function radarWarnToggleRender(relevant,stale,visible){var b=$('rad-warnings'),w=radarWarn.data,n=visible.length,off=relevant.length-n;b.hidden=!(w&&w.available!==false);
     b.setAttribute('aria-pressed',String(radarWarn.on));
-    var v=stale?'Unavailable':!n?(off?'Off map · '+off:'None'):(radarWarn.on?'Shown · ':'Hidden · ')+n;
+    var v=stale?'Unavailable':!n?(off?'Off map · '+off:''):(radarWarn.on?'Shown · ':'Hidden · ')+n;
     if($('rad-warnings-count').textContent!==v)$('rad-warnings-count').textContent=v;
+    $('rad-warnings-count').hidden=!v;
     b.dataset.hiding=String(!radarWarn.on&&n>0);
-    b.setAttribute('aria-label','Warning areas, '+(stale?'unavailable':!live.length?'none in force':n+(radarWarn.on?' shown':' hidden')+(off?', '+off+' off map':'')));}
+    b.setAttribute('aria-label','Warning areas'+(stale?', unavailable':!relevant.length?'':', '+n+(radarWarn.on?' shown':' hidden')+(off?', '+off+' off map':'')));}
   function radarWarnToggle(){radarWarn.on=!radarWarn.on;radarWarnStore(radarWarn.on);if(!radarWarn.on){radarWarnSelect(null);radarWarn.unavailable=false;}radarWarnBuild();if(radarView.data)radarState();}
   function radarWarnWire(){var plate=$('rad-plate'),over=$('rad-over');
     $('rad-warn-card').addEventListener('scroll',radarWarnOverflow);
