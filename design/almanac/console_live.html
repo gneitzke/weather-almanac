@@ -48,6 +48,16 @@
     --moon-lit:   #EDE6D4;
     --moon-shade: rgba(38, 34, 24, 0.52);
     --grain-op:   0.55;
+    --warn-tornado:     #D70000;   /* NWS Tornado Warning #FF0000, deepened for 3:1 on paper */
+    --warn-extremewind: #B35A00;   /* NWS #FF8C00 */
+    --warn-flashflood:  #8B0000;   /* NWS #8B0000 as published */
+    --warn-severe:      #B86E00;   /* NWS Severe Thunderstorm #FFA500 */
+    --warn-marine:      #B86E00;   /* NWS Special Marine #FFA500 */
+    --warn-snowsquall:  #C71585;   /* NWS #C71585 as published */
+    --warn-dust:        #8A6A3C;   /* NWS Dust Storm #FFE4C4 (bisque), deepened */
+    --warn-ink:         #FFFFFF;   /* text on a hazard fill (emergencies only) */
+    --warn-case-dark:   #080B0D;   /* outline casings: theme-independent on purpose */
+    --warn-case-light:  #FFFFFF;
   }
   :root[data-theme="night"] {
     --paper:      #0B0D11;
@@ -67,6 +77,14 @@
     --moon-lit:   #DDD6C2;
     --moon-shade: rgba(6, 8, 12, 0.74);
     --grain-op:   0.25;
+    --warn-tornado:     #FF3B3B;   /* NWS #FF0000, lifted for 3:1 on night */
+    --warn-extremewind: #FF8C00;
+    --warn-flashflood:  #D2404A;   /* NWS #8B0000 lifted: as published it is under 2:1 on night */
+    --warn-severe:      #FFA500;
+    --warn-marine:      #FFA500;
+    --warn-snowsquall:  #E0459F;   /* NWS #C71585 lifted */
+    --warn-dust:        #FFE4C4;
+    --warn-ink:         #000000;   /* 4.5:1 on every night hazard fill */
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="paper"]):not([data-theme="light"]) {
@@ -87,6 +105,14 @@
       --moon-lit:   #DDD6C2;
       --moon-shade: rgba(6, 8, 12, 0.74);
       --grain-op:   0.25;
+      --warn-tornado:     #FF3B3B;   /* NWS #FF0000, lifted for 3:1 on night */
+      --warn-extremewind: #FF8C00;
+      --warn-flashflood:  #D2404A;   /* NWS #8B0000 lifted: as published it is under 2:1 on night */
+      --warn-severe:      #FFA500;
+      --warn-marine:      #FFA500;
+      --warn-snowsquall:  #E0459F;   /* NWS #C71585 lifted */
+      --warn-dust:        #FFE4C4;
+      --warn-ink:         #000000;   /* 4.5:1 on every night hazard fill */
     }
   }
 
@@ -571,14 +597,25 @@
   :root[data-tabs="on"] .page[data-screen="s-radar"] .mast-station .sub { display:none; }
   :root[data-tabs="on"] .page[data-screen="s-radar"] .mast-clock { font-size:22px; line-height:1; }
   :root[data-tabs="on"] .page[data-screen="s-radar"] .mast-stale,
-  :root[data-tabs="on"] .page[data-screen="s-radar"] .mast-flag { font-size:12px; line-height:1; }
-  :root[data-tabs="on"] .page[data-screen="s-radar"][data-radar-alerts="on"] .masthead { height:22px; }
-  :root[data-tabs="on"] .page[data-screen="s-radar"][data-radar-alerts="on"] .mast-row { padding:0; }
+  :root[data-tabs="on"] .page[data-screen="s-radar"] .mast-flag { font-size:12px; line-height:1; white-space:nowrap; }   /* a collapsed (width 0) flag wrapped to two lines and stood 24 px tall */
+  /* With an alert up, the radar keeps its 490 px plate and the strip gets the
+     presence a tornado needs; the masthead and the screen head give up the
+     height. Every box sizes to its content: a fixed 22 px masthead around a
+     taller row once let the masthead hairline fall through the strip's text. */
+  :root[data-tabs="on"] .page[data-screen="s-radar"][data-radar-alerts="on"] .masthead { height:auto; }
+  :root[data-tabs="on"] .page[data-screen="s-radar"][data-radar-alerts="on"] .mast-row { padding:1px 0 2px; align-items:center; }
   :root[data-tabs="on"] .page[data-screen="s-radar"][data-radar-alerts="on"] .scotch { height:4px; }
   :root[data-tabs="on"] .page[data-screen="s-radar"][data-radar-alerts="on"] .mast-station,
   :root[data-tabs="on"] .page[data-screen="s-radar"][data-radar-alerts="on"] .mast-clock { font-size:14px; }
-  :root[data-tabs="on"] .page[data-screen="s-radar"][data-radar-alerts="on"] .mast-date { font-size:13px; }
-  :root[data-tabs="on"] .page[data-screen="s-radar"] .alert-strip { height:19px; min-height:0; padding:0 5px; margin:0; }
+  :root[data-tabs="on"] .page[data-screen="s-radar"][data-radar-alerts="on"] .mast-date { font-size:13px; line-height:1; }
+  :root[data-tabs="on"] .page[data-screen="s-radar"][data-radar-alerts="on"] .mast-moon { width:12px; height:12px; margin-left:8px; vertical-align:-1px; }
+  :root[data-tabs="on"] .page[data-screen="s-radar"][data-radar-alerts="on"] #s-radar .sc-head { padding-bottom:3px; line-height:1; }
+  :root[data-tabs="on"] .page[data-screen="s-radar"][data-radar-alerts="on"] #s-radar { padding-top:2px; }
+  :root[data-tabs="on"] .page[data-screen="s-radar"] .alert-strip { height:26px; margin:2px 0 0; padding:0 10px 0 9px; gap:10px; }
+  :root[data-tabs="on"] .page[data-screen="s-radar"] .al-event { font-size:20px; letter-spacing:.1em; line-height:1; }
+  :root[data-tabs="on"] .page[data-screen="s-radar"] .al-detail { font-size:15px; line-height:1; }
+  :root[data-tabs="on"] .page[data-screen="s-radar"] .al-more,
+  :root[data-tabs="on"] .page[data-screen="s-radar"] .al-until { font-size:12px; }
   #s-radar .sc-head { flex-shrink:0; padding-left:13px; padding-right:13px; }
   #s-radar .sc-body { display: block; gap: 0; padding: 0; }
   .rad-plate { --ink-soft:color-mix(in srgb, var(--ink) 78%, var(--paper)); position: relative; width: 956px; height: 490px;
@@ -615,7 +652,7 @@
   .rad-loop { display: flex; align-items: center; gap: 12px; margin-top: 10px; }
   .rad-loop[hidden] { display: none; }
   .rad-play { width: 44px; height: 44px; flex: 0 0 44px; border: 1px solid var(--rule);
-              background: none; color: var(--ink); font-size: 13px; line-height: 1; cursor: pointer;
+              background: var(--plate-scrim); color: var(--ink); font-size: 13px; line-height: 1; cursor: pointer;
               border-radius: 2px; font-family: var(--sans); }
   .rad-play:active { opacity: 0.5; }
   .rad-loop-cap { font: 13px var(--sans); color: var(--ink-soft); letter-spacing: 0.02em; }
@@ -623,32 +660,30 @@
   .rad-zoom[hidden] { display: none; }
   .rad-step {
     width: 44px; height: 44px; flex: 0 0 44px; border: 1px solid var(--rule);
-    background: none; color: var(--ink); font: 15px var(--sans); line-height: 1;
+    background: var(--plate-scrim); color: var(--ink); font: 15px var(--sans); line-height: 1;
     cursor: pointer; border-radius: 2px;
   }
   .rad-step:active { opacity: .5; }
-  .rad-step:disabled { opacity: .28; cursor: default; }
+  .rad-step:disabled { color: var(--rule); border-color: var(--rule-faint); cursor: default; }   /* faded glyph, surface stays opaque */
   .rad-step:focus-visible, .rad-reset:focus-visible { outline: 1px solid var(--ink); outline-offset: 2px; }
   .rad-zoom-read { font: 13px var(--sans); color: var(--ink-soft); letter-spacing: .02em; }
   .rad-zoom-k { text-transform: uppercase; letter-spacing: .1em; font-size: 11.5px; }
   .rad-zoom-dot { color: var(--rule); margin: 0 2px; }
   .rad-zoom-mode { color: var(--ink); font-weight: 800; }
   .rad-reset { margin-left: auto; width: 44px; height: 44px; border: 1px solid var(--rule);
-    background: none; color: var(--ink-soft); font: 17px var(--sans); border-radius: 2px; cursor: pointer; }
+    background: var(--plate-scrim); color: var(--ink-soft); font: 17px var(--sans); border-radius: 2px; cursor: pointer; }
   .rad-smooth { width: 64px; min-width: 44px; padding: 0 9px; font: 600 10px var(--sans); letter-spacing: .06em; }
   .rad-smooth[aria-pressed="true"] { border-color: var(--ink); text-decoration: underline; text-underline-offset: 4px; }
   .rad-reset[hidden] { display: none; }
-  .rad-smooth[aria-disabled="true"] { opacity: .38; cursor: default; }
+  .rad-smooth[aria-disabled="true"] { color: var(--rule); border-color: var(--rule-faint); cursor: default; }
   .rad-reset:active { opacity: .5; }
   .rad-zoom[data-state="pending"] .rad-zoom-read { opacity: .45; }
   #rad-status { font-size: 11.5px; }
   /* Read by assistive technology, never drawn. */
   .sr-only { position:absolute; width:1px; height:1px; margin:-1px; padding:0; border:0; overflow:hidden; clip:rect(0 0 0 0); clip-path:inset(50%); white-space:nowrap; }
-  :root { --plate-scrim: rgba(242,237,226,.82); }
-  :root[data-theme="night"] { --plate-scrim: rgba(11,13,17,.78); }
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="paper"]):not([data-theme="light"]) { --plate-scrim: rgba(11,13,17,.78); }
-  }
+  /* Opaque: a control or caption never lets the radar show through, so a
+     disabled control cannot be mistaken for one obscured by echo colour. */
+  :root { --plate-scrim: var(--paper); }
   .rad-play:disabled { opacity:1; color:var(--ink-soft); border-color:var(--rule-faint); cursor:default; }
   /* What is showing, one 13px line in the top band beside the legend. It stops
      short of the legend's left edge (x530); the fit cascade drops detail first. */
@@ -685,6 +720,123 @@
     width:1px; height:3px; background:var(--rule); }
   .rad-tick:first-child { transform:none; }
   .rad-tick:first-child::before { left:0; }
+  /* NWS storm-based warnings. Three strokes and no fill: a dark and a light
+     casing (the same in both themes: over any echo colour or either basemap
+     one of the two contrasts) under the hazard core. Hue names the hazard;
+     weight and drawing order rank it: emergency > tornado > over the station >
+     the rest. Dashes are a second cue where hues coincide or come close
+     (marine/severe, flash flood/tornado): all three strokes dash together, so
+     every dash is cased and a gap shows the map, not a dark track. Widths
+     are screen pixels at every zoom (non-scaling strokes). */
+  .rad-plate [data-kind="tornado"]     { --w: var(--warn-tornado); }
+  .rad-plate [data-kind="extremewind"] { --w: var(--warn-extremewind); }
+  .rad-plate [data-kind="flashflood"]  { --w: var(--warn-flashflood); }
+  .rad-plate [data-kind="severe"]      { --w: var(--warn-severe); }
+  .rad-plate [data-kind="marine"]      { --w: var(--warn-marine); }
+  .rad-plate [data-kind="snowsquall"]  { --w: var(--warn-snowsquall); }
+  .rad-plate [data-kind="dust"]        { --w: var(--warn-dust); }
+  .rad-over .rad-warn { --core: 2px; --sel: 0px; --dash: none; outline: none; }
+  .rad-over .rad-warn path { fill: none; stroke-linejoin: round; }
+  .rad-over .rad-warn-case { stroke: var(--warn-case-dark);  stroke-width: calc(min(var(--core) + var(--sel), 5px) + 4px); stroke-dasharray: var(--dash); }
+  .rad-over .rad-warn-halo { stroke: var(--warn-case-light); stroke-width: calc(min(var(--core) + var(--sel), 5px) + 2px); stroke-dasharray: var(--dash); }
+  .rad-over .rad-warn-core { stroke: var(--w, var(--accent)); stroke-width: min(var(--core) + var(--sel), 5px); stroke-dasharray: var(--dash); }
+  .rad-over .rad-warn-rail { display: none; stroke: var(--warn-case-dark); stroke-width: 1.5px; }
+  .rad-over .rad-warn[data-kind="extremewind"] { --dash: 12 3; }
+  .rad-over .rad-warn[data-kind="flashflood"]  { --dash: 8 3; }
+  .rad-over .rad-warn[data-kind="marine"]      { --dash: 2 3; }
+  .rad-over .rad-warn[data-kind="snowsquall"]  { --dash: 6 3 1 3; }
+  .rad-over .rad-warn[data-kind="dust"]        { --dash: 1 4; }
+  .rad-over .rad-warn[data-kind="dust"] path { stroke-linecap: round; }
+  .rad-over .rad-warn[data-covers="true"] { --core: 2.5px; }
+  .rad-over .rad-warn[data-kind="tornado"] { --core: 3px; }
+  .rad-over .rad-warn[data-kind="tornado"][data-covers="true"] { --core: 4px; }
+  /* An emergency draws a double rail (hazard / dark / hazard): unlike any
+     single line, with no new hue. */
+  .rad-over .rad-warn[data-threat="emergency"] { --core: 5px; --dash: none; }
+  .rad-over .rad-warn[data-threat="emergency"] .rad-warn-rail { display: inline; }
+  .rad-over .rad-warn[data-selected="true"], .rad-over .rad-warn:focus-visible { --sel: .5px; }
+  /* Keep both casings opaque at every size and during refresh failures.
+     Only the hazard pigment dims: the boundary retains its contrast over echoes. */
+  #rad-warn-g[data-state="failed"] .rad-warn-core { opacity: .55; }
+
+  /* The station's own warning, without a tap. A fixed slot above the loop
+     control: on the marker it would cover the echoes over the station. */
+  .rad-warn-tag { position:absolute; left:12px; bottom:76px; min-height:56px; z-index:4; display:flex; flex-direction:column;
+    align-items:flex-start; gap:4px; max-width:470px; padding:7px 14px 8px 11px; margin:0;
+    border:1px solid var(--rule); border-left:4px solid var(--w, var(--accent)); border-radius:2px;
+    background:var(--paper); color:var(--ink); font-family:var(--sans); text-align:left; cursor:pointer; }
+  .rad-warn-tag[hidden] { display:none; }
+  /* Warning freshness has its own opaque slot, beside the station message or
+     details, independent of imagery status and the area visibility preference. */
+  .rad-warn-health { position:absolute; left:12px; bottom:76px; z-index:4; max-width:470px; min-height:44px;
+    padding:7px 12px; border:1px solid var(--ink-soft); border-left:4px solid var(--accent); border-radius:2px;
+    background:var(--paper); color:var(--ink); font:600 14px/1.3 var(--sans); white-space:pre-line; }
+  .rad-warn-health[hidden] { display:none; }
+  .rad-warn-health:not([hidden]) ~ .rad-warn-tag { bottom:140px; }
+  .rad-warn-health:not([hidden]) ~ .rad-warn-card { max-height:310px; }
+  .rad-warn-health:not([hidden]) ~ .rad-warn-tag:not([hidden]) ~ .rad-warn-card { max-height:228px; }
+  .rad-warn-tag[data-state="failed"] .rad-warn-tag-when,
+  .rad-warn-card[data-state="failed"] .rad-warn-when { text-decoration:underline dotted; text-underline-offset:4px; }
+  .rad-warn-tag-name { font-size:18px; font-weight:800; line-height:1; letter-spacing:.08em; text-transform:uppercase; }
+  .rad-warn-tag-when { font-size:15px; font-weight:600; line-height:1.1; font-variant-numeric:tabular-nums; }
+  .rad-warn-tag:focus-visible, .rad-warn-close:focus-visible, .rad-warn-pick:focus-visible { outline:1px solid var(--ink); outline-offset:2px; }
+  /* Fill is reserved for emergencies, in the hazard colour. */
+  .rad-warn-tag[data-threat="emergency"], .rad-warn-chip[data-threat="emergency"] {
+    background:var(--w); color:var(--warn-ink); border-color:var(--w); }
+
+  /* Names on tornado and emergency outlines that are not the tag's subject,
+     kept inside the unobstructed map (clear of the caption band and controls). */
+  .rad-warn-chips { position:absolute; inset:0; z-index:3; pointer-events:none; overflow:hidden; }
+  .rad-warn-chip { position:absolute; transform:translate(-50%,-100%); padding:4px 8px 4px 7px;
+    border:1px solid var(--rule); border-left:3px solid var(--w, var(--accent)); border-radius:2px;
+    background:var(--paper); color:var(--ink); font:800 13px/1 var(--sans); letter-spacing:.08em;
+    text-transform:uppercase; white-space:nowrap; }
+  .rad-warn-chip[hidden] { display:none; }
+
+  /* Details: an opaque page surface, read at arm's length. */
+  .rad-warn-card { position:absolute; left:12px; top:34px; z-index:4; width:430px; max-height:376px; overflow:auto; overscroll-behavior:contain; touch-action:pan-y;
+    padding:9px 8px 12px 14px; border:1px solid var(--rule); border-left:4px solid var(--w, var(--accent)); border-radius:2px;
+    background:var(--paper); color:var(--ink); font:16px/1.35 var(--sans); }
+  .rad-warn-card[hidden] { display:none; }
+  .rad-warn-tag:not([hidden]) ~ .rad-warn-card { max-height:296px; }   /* stop above the tag */
+  .rad-warn-head { position:sticky; top:-9px; background:var(--paper); z-index:1; display:grid; grid-template-columns:1fr 44px; align-items:start; gap:4px 10px; }
+  .rad-warn-name { font-size:20px; font-weight:700; line-height:1.2; padding-top:7px; }
+  .rad-warn-card[data-threat="emergency"] .rad-warn-name { margin-left:-6px; padding:4px 7px 3px 6px; margin-top:4px;
+    background:var(--w); color:var(--warn-ink); }
+  .rad-warn-close { flex:0 0 44px; width:44px; height:44px; border:1px solid var(--rule); border-radius:2px;
+    background:var(--paper); color:var(--ink); font:17px/1 var(--sans); cursor:pointer; }
+  .rad-warn-close:active, .rad-warn-pick:active, .rad-warn-tag:active { opacity:.5; }
+  .rad-warn-scroll { grid-column:1 / -1; padding:4px 0 7px; color:var(--ink-soft); font:600 12px/1.2 var(--sans); }
+  .rad-warn-scroll[hidden] { display:none; }
+  .rad-warn-fit { min-height:44px; margin-top:6px; padding:0 12px; border:1px solid var(--rule); border-radius:2px;
+    background:var(--paper); color:var(--ink); font:600 14px var(--sans); cursor:pointer; }
+  .rad-warn-fit:focus-visible { outline:1px solid var(--ink); outline-offset:2px; }
+  .rad-warn-fit:disabled { color:var(--ink-soft); cursor:default; }
+  .rad-warn-when { font-weight:600; font-variant-numeric:tabular-nums; }
+  .rad-warn-detail { color:var(--ink-soft); }
+  .rad-warn-do { margin-top:7px; }
+  .rad-warn-src { margin-top:7px; font-size:13px; line-height:1.3; color:var(--ink-soft); }
+  /* Long official instructions and every overlap remain reachable by scrolling;
+     the sticky heading keeps Close visible. Never truncate safety text in CSS. */
+  .rad-warn-also { margin-top:9px; padding-top:6px; border-top:1px solid var(--rule-faint); }
+  .rad-warn-also-k { font-size:11.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--ink-soft); }
+  .rad-warn-pick { display:flex; align-items:center; width:calc(100% - 6px); min-height:56px; margin-top:4px; padding:0 10px;
+    border:1px solid var(--rule); border-left:3px solid var(--w, var(--accent)); border-radius:2px;
+    background:var(--paper); color:var(--ink); font:600 15px var(--sans); text-align:left; cursor:pointer; }
+
+  .rad-warn-list { position:absolute; left:12px; top:44px; z-index:3; min-width:56px; min-height:56px;
+    padding:8px 12px; border:1px solid var(--rule); border-radius:2px; max-width:470px; white-space:pre-line; text-align:left;
+    background:var(--paper); color:var(--ink); font:600 16px/1.25 var(--sans); cursor:pointer; }
+  .rad-warn-list[hidden] { display:none; }
+  .rad-warn-list:focus-visible { outline:1px solid var(--ink); outline-offset:2px; }
+  /* Warning areas toggle: one fixed footprint in every state, so the rail never moves. */
+  .rad-warn-toggle { width:112px; padding:0 6px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px; }
+  .rad-warn-toggle-k { font:600 10px/1 var(--sans); letter-spacing:.06em; text-transform:uppercase; color:var(--ink); }
+  .rad-warn-toggle-v { font:12px/1 var(--sans); color:var(--ink-soft); font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .rad-warn-toggle[aria-pressed="true"] { border-color: var(--ink); }
+  .rad-warn-toggle[aria-pressed="true"] .rad-warn-toggle-k { text-decoration: underline; text-underline-offset: 3px; }
+  .rad-warn-toggle[data-hiding="true"] .rad-warn-toggle-v { color: var(--accent); font-weight:700; }
+  .rad-warn-toggle[hidden] { display:none; }
   .rad-over .rad-site-edge { fill:none; stroke:var(--rule-faint); stroke-width:1; stroke-dasharray:2 3; }
   .rad-over .rad-site-dot { fill:var(--ink-soft); }
   .rad-over .rad-site-label { fill:var(--ink-soft); font:11.5px var(--sans); letter-spacing:.04em; }
@@ -1191,8 +1343,14 @@
           <button class="rad-step" id="rad-zoom-in" type="button" aria-label="Zoom in — closer">+</button>
           <button class="rad-reset" id="rad-zoom-reset" type="button" aria-label="Reset zoom to automatic" hidden>&#8635;</button>
           <button class="rad-reset rad-smooth" id="rad-smooth" type="button" aria-label="Smooth reflectivity" title="Softens gate edges; tiles stay 256 px. At zoom 7 they display 1:1. Enlarged views add no measured detail." aria-pressed="false">SMOOTH</button>
+          <button class="rad-reset rad-warn-toggle" id="rad-warnings" type="button" aria-label="Warning areas" title="NWS storm-based warning areas (tornado, severe thunderstorm, flash flood, marine, snow squall, extreme wind, dust storm)" aria-pressed="true" hidden><span class="rad-warn-toggle-k">Warning areas</span><span class="rad-warn-toggle-v" id="rad-warnings-count"></span></button>
         </div>
         <div id="rad-note" role="status" aria-live="polite" data-shown="false"></div>
+        <div class="rad-warn-chips" id="rad-warn-chips" aria-hidden="true"></div>
+        <button class="rad-warn-list" id="rad-warn-list" type="button" hidden></button>
+        <div class="rad-warn-health" id="rad-warn-health" role="status" aria-live="polite" hidden></div>
+        <button class="rad-warn-tag" id="rad-warn-tag" type="button" hidden><span class="rad-warn-tag-name" id="rad-warn-tag-name"></span><span class="rad-warn-tag-when" id="rad-warn-tag-when"></span></button>
+        <div class="rad-warn-card" id="rad-warn-card" role="status" aria-live="polite" hidden></div>
         <div class="rad-legend" id="rad-legend"></div>
         <div class="rad-loop" id="rad-loop" hidden>
           <button class="rad-play" id="rad-play" type="button" aria-label="Pause radar loop">&#10073;&#10073;</button>
@@ -2709,7 +2867,7 @@
 
   /* V4: a local camera, opaque raster basemaps and stamp-addressed tiles. */
   var RAD_W=956, RAD_H=490, RAD_FRAME_MS=350, RAD_HOLD_MS=1100, RAD_BLEND_MS=120;  /* 350 ms between scans: the user's call after 200 read too fast */
-  var RAD_MAX_LAT=85.05112878, RAD_CONTROLS='.rad-src-cap,.rad-legend,.rad-loop,.rad-zoom,.rad-recenter';
+  var RAD_MAX_LAT=85.05112878, RAD_CONTROLS='.rad-src-cap,.rad-legend,.rad-loop,.rad-zoom,.rad-recenter,.rad-warn-card,.rad-warn-tag,.rad-warn-list,.rad-warn-health';
   var radarView={data:null,active:false,loaded:[],readyFrames:[],cycle:[],retired:[],started:false,current:null,good:null,paused:false,
     singleSweep:false,clear:false,refresh:{state:'idle'},legendKey:null,nextAt:0};
   /* The producer's clock, from the last response's Date header (ours when it has
@@ -3200,8 +3358,237 @@
     if(!radarView.current){radarView.current=radarView.good;radarEchoDirty=true;}
     radarUpdateReady();radarPruneFrames();radarQueueTiles();radarWake();
   }
-  function radarOverlayBuild(){if(!radarCamera||!radarView.data)return;var r=radarView.data,over=$('rad-over');if(!radarOverlay){over.replaceChildren();radarOverlay={geo:el('g',{id:'rad-geo'},over),chrome:el('g',{id:'rad-chrome'},over),labels:[]};}
-    var o=radarOverlay;o.geo.replaceChildren();o.chrome.replaceChildren();o.labels=[];var p=radarWorldPoint(r.center.lat,r.center.lon,9),mpp=156543.034*Math.cos(r.center.lat*Math.PI/180)/512;
+  /* NWS-WARNINGS:BEGIN. Storm-based warning outlines (radar.warnings). Drawn
+     on #rad-over beneath the station marker and rings, above the echoes, in the
+     overlay's own z9 world coordinates. Removed the moment they expire, without
+     waiting for a payload; drawn not at all from stale data. Freshness is the
+     engine's deadline (staleAt) judged on the producer's clock (radarServerNow),
+     so a frozen payload goes stale on its own. A failed refresh before that
+     deadline (refreshFailedAt) keeps the last good outlines, dimmed, and says
+     so in a dedicated warning-status slot beside the station tag/card. Warnings are independent of the
+     imagery: every payload updates them, whatever happens to the radar source.
+     The Warning areas toggle is per viewer (localStorage) and default ON: the
+     kiosk starts each boot with a fresh profile, so the panel always comes back
+     showing warnings. It hides outlines, never the station's own warning tag. */
+  var RAD_WARN_KEY='radarWarnings',RAD_WARN_MAX_AGE=1800;
+  // Touch: an outline answers within 12 px of its edge, and a small one (under
+  // 32 px either way) through a 56 px box around its centre.
+  var RAD_WARN_EDGE=12,RAD_WARN_SMALL=32,RAD_WARN_TARGET=56;
+  // The unobstructed map for labels: below the caption/legend band, 12 px above the control band.
+  var RAD_WARN_BOTTOM=426,RAD_WARN_SAFE={l:12,t:60,r:944,b:414};
+  var radarWarn={data:null,payloadTs:null,on:radarWarnStored(),shown:false,unavailable:false,failed:false,timer:null,selected:null,also:[],listMode:false,lead:null,card:null,paths:[],nodes:new Map(),chips:new Map(),down:null};
+  function radarWarnStored(){try{return localStorage.getItem(RAD_WARN_KEY)!=='off';}catch(e){return true;}}
+  function radarWarnStore(on){try{localStorage.setItem(RAD_WARN_KEY,on?'on':'off');}catch(e){}}
+  // When the data stops being current: the engine's deadline, or (an engine
+  // that predates staleAt) its own 30-minute ceiling after the last success.
+  function radarWarnStaleAt(){var w=radarWarn.data;if(!w)return null;return isNum(w.staleAt)?w.staleAt:isNum(w.fetchedTs)?w.fetchedTs+RAD_WARN_MAX_AGE:null;}
+  function radarWarnStale(){var w=radarWarn.data,at=radarWarnStaleAt();return !!(w&&(w.stale||at===null||radarServerNow()>=at));}
+  function radarWarnFailing(){var w=radarWarn.data;return !!(w&&isNum(w.refreshFailedAt)&&!radarWarnStale());}
+  // In force now, by the engine's clock: never stale data, never past expiry.
+  function radarWarnLive(){var w=radarWarn.data;if(!w||radarWarnStale()||!Array.isArray(w.items))return [];var now=radarServerNow();
+    return w.items.filter(i=>i&&typeof i.id==='string'&&Array.isArray(i.polygon)&&i.polygon.length&&(!isNum(i.expires)||i.expires>now));}
+  // Hazard priority, highest last: emergency, tornado, over the station, the rest.
+  function radarWarnTier(i){return i.threat==='emergency'?3:i.kind==='tornado'?2:i.affectsStation?1:0;}
+  function radarWarnName(i){return i.label||i.event||'Warning';}
+  function radarWarnSay(i){return radarWarnName(i)+(i.until?' until '+i.until:'')+(i.affectsStation?', covers this station':'');}
+  // Validity left, to the event end the "until" time names (floored: never overstated).
+  function radarWarnLeft(i){var end=isNum(i.ends)?i.ends:i.expires;if(!isNum(end))return '';var m=Math.floor((end-radarServerNow())/60);
+    return m<1?'under 1 min left':m<60?m+' min left':Math.floor(m/60)+' h '+(m%60)+' min left';}
+  function radarWarnWhen(i){return [i.affectsStation?'At this station':'Not at this station',i.until?'until '+i.until:'',radarWarnLeft(i)].filter(Boolean).join(' · ');}
+  // Every payload, in order of its heartbeat (an older one never undoes a newer).
+  function radarWarnUpdate(w,ts){if(isNum(ts)&&isNum(radarWarn.payloadTs)&&ts<radarWarn.payloadTs)return;if(isNum(ts))radarWarn.payloadTs=ts;
+    radarWarn.data=w&&typeof w==='object'?w:null;radarWarnBuild();}
+  function radarWarnGeometry(it,center){var d='',rings=[],box={x0:Infinity,y0:Infinity,x1:-Infinity,y1:-Infinity};
+    for(var ring of it.polygon){if(!Array.isArray(ring)||ring.length<3)continue;var pts=[];
+      for(var v of ring){if(!Array.isArray(v)||!isNum(v[0])||!isNum(v[1]))continue;var q=radarWorldPoint(v[1],v[0],9);
+        if(center&&isNum(center.lon))q[0]+=Math.round((center.lon-v[0])/360)*256*512;pts.push(q);d+=(pts.length>1?'L':'M')+q[0].toFixed(1)+','+q[1].toFixed(1);}
+      if(pts.length>=3){rings.push(pts);d+='Z';for(var q of pts){box.x0=Math.min(box.x0,q[0]);box.y0=Math.min(box.y0,q[1]);box.x1=Math.max(box.x1,q[0]);box.y1=Math.max(box.y1,q[1]);}}}
+    return rings.length?{d,rings,box}:null;}
+  // Drawing (and hit) order: tier, then the engine's order (its most important
+  // last), the selected warning last within its own tier: selecting a lesser
+  // hazard never lifts it over a tornado.
+  function radarWarnOrder(items){return items.map((it,k)=>({it,k})).sort((a,b)=>radarWarnTier(a.it)-radarWarnTier(b.it)||
+    (a.it.id===radarWarn.selected)-(b.it.id===radarWarn.selected)||b.k-a.k).map(x=>x.it);}
+  // One group per warning (dark case, light case, hazard core, emergency rail),
+  // reconciled by warning id: an unchanged warning keeps its node (and keyboard
+  // focus); only what changed is touched, only what is out of order moves, and
+  // focus goes back to the same warning if a move took it.
+  function radarWarnReconcile(g,items){var center=radarView.data&&radarView.data.center,keep=new Map(),order=[],active=document.activeElement,focused=null;
+    for(var [id,h] of radarWarn.nodes)if(h.node===active)focused=id;
+    for(var it of radarWarnOrder(items)){var geo=radarWarnGeometry(it,center);if(!geo||keep.has(it.id))continue;
+      var node=radarWarn.nodes.get(it.id)?.node;
+      if(!node){node=el('g',{class:'rad-warn',tabindex:'0',role:'button'});for(var part of ['case','halo','core','rail'])el('path',{class:'rad-warn-'+part,'vector-effect':'non-scaling-stroke'},node);}
+      var attrs={'data-kind':it.kind||'other','data-covers':String(!!it.affectsStation),'data-threat':it.threat||'',
+        'data-selected':String(it.id===radarWarn.selected),'aria-label':radarWarnSay(it)};
+      for(var a in attrs)if(node.getAttribute(a)!==attrs[a])node.setAttribute(a,attrs[a]);
+      for(var c of [...node.children])if(c.getAttribute('d')!==geo.d)c.setAttribute('d',geo.d);
+      keep.set(it.id,{item:it,rings:geo.rings,box:geo.box,node:node});order.push(node);}
+    for(var [id,h] of radarWarn.nodes)if(!keep.has(id))h.node.remove();
+    for(var i=0;i<order.length;i++){var at=g.children[i];if(at!==order[i])g.insertBefore(order[i],at||null);}
+    radarWarn.nodes=keep;radarWarn.paths=[...keep.values()];
+    if(focused&&keep.has(focused)&&document.activeElement!==keep.get(focused).node)keep.get(focused).node.focus({preventScroll:true});}
+  function radarWarnBuild(){clearTimeout(radarWarn.timer);radarWarn.timer=null;
+    // Coverage trouble is meaningful even with areas hidden or an empty last answer.
+    var stale=radarWarnStale(),was=radarWarn.unavailable,wasFailed=radarWarn.failed;
+    radarWarn.unavailable=!!(radarWarn.data&&radarWarn.data.available!==false&&stale);
+    var live=radarWarnLive(),items=radarWarn.on?live:[],o=radarOverlay;radarWarn.shown=items.length>0;
+    radarWarn.failed=!!(radarWarn.data&&radarWarn.data.available!==false&&radarWarnFailing());
+    radarWarnHealthRender();
+    if(radarWarn.selected&&!live.some(i=>i.id===radarWarn.selected))radarWarnSelect(null);
+    if(o&&o.warn){radarWarnReconcile(o.warn,items);o.warn.setAttribute('data-state',radarWarn.failed?'failed':'current');}
+    radarWarnTagRender(live);radarWarnCardTick(live);radarWarnPlace();
+    // Wake for the next expiry or the freshness deadline, whichever is first;
+    // while a remaining time is on screen, often enough to keep it true.
+    var at=radarWarnStaleAt(),now=radarServerNow(),counting=radarWarn.lead||radarWarn.selected;
+    var next=Math.min(...live.map(i=>i.expires).filter(isNum),...(!stale&&isNum(at)?[at]:[]),...(counting?[now+15]:[]));
+    if(isFinite(next))radarWarn.timer=setTimeout(radarWarnBuild,Math.max(250,(next-now)*1000+50));
+    radarWarnToggleRender(live,stale);
+    if((was!==radarWarn.unavailable||wasFailed!==radarWarn.failed)&&radarView.data)radarState();}
+  function radarWarnProblem(){return radarWarn.unavailable?'Warnings unavailable':radarWarn.failed?'Warnings refresh failed':'';}
+  function radarWarnHealthRender(){var node=$('rad-warn-health'),problem=radarWarnProblem();
+    var text=problem+(radarWarn.unavailable?'\nCurrent warning coverage cannot be verified.':radarWarn.failed?'\nLast verified boundaries · coverage may have changed.':'');
+    if(node.textContent!==text)node.textContent=text;node.hidden=!problem;
+    for(var id of ['rad-warn-tag','rad-warn-card']){$(id).dataset.state=radarWarn.unavailable?'unavailable':radarWarn.failed?'failed':'current';$(id).setAttribute('aria-describedby',problem?'rad-warn-health':'');}}
+  // The station's own warning: the highest-priority one over the station.
+  function radarWarnTagRender(live){var tag=$('rad-warn-tag'),over=live.filter(i=>i.affectsStation),lead=null;
+    for(var i of over)if(!lead||radarWarnTier(i)>radarWarnTier(lead))lead=i;
+    radarWarn.lead=lead;
+    // The open card for the same warning says all of it, in the same words.
+    if(!lead||radarWarn.selected===lead.id){tag.hidden=true;return;}
+    tag.dataset.kind=lead.kind||'other';tag.dataset.threat=lead.threat||'';
+    var name=radarWarnName(lead),when=['At this station',lead.until?'until '+lead.until:'',radarWarnLeft(lead)].filter(Boolean).join(' · ');
+    if($('rad-warn-tag-name').textContent!==name)$('rad-warn-tag-name').textContent=name;
+    if($('rad-warn-tag-when').textContent!==when)$('rad-warn-tag-when').textContent=when;
+    tag.setAttribute('aria-label',name+', '+when+'. Show details');tag.hidden=false;}
+  // Screen position of a z9 world point under the current camera (radarOverlayPaint's transform).
+  function radarWarnScreen(){var c=radarCamera,r=radarView.data;if(!c||!r||!r.center)return null;
+    var p=radarWorldPoint(c.lat,c.lon,c.zoom),s=2**(c.zoom-9);return {s,tx:478-p[0]+Math.round((c.lon-r.center.lon)/360)*256*2**c.zoom,ty:245-p[1]};}
+  // Names on tornado and emergency outlines (the tag's own warning excepted),
+  // at the outline's top inside the unobstructed map, or not at all.
+  function radarWarnBounds(h,v){var b=h.box;return {x0:b.x0*v.s+v.tx,x1:b.x1*v.s+v.tx,y0:b.y0*v.s+v.ty,y1:b.y1*v.s+v.ty};}
+  function radarWarnVisible(h,v){var b=radarWarnBounds(h,v);if(b.x1<0||b.x0>956||b.y1<0||b.y0>=RAD_WARN_BOTTOM)return false;
+    var r={l:-v.tx/v.s,r:(956-v.tx)/v.s,t:-v.ty/v.s,b:(RAD_WARN_BOTTOM-v.ty)/v.s};
+    // Ring bounds alone overcount disjoint components and empty corners. Test
+    // the actual area: a contained vertex/corner, or an edge crossing the view.
+    function edge(a,b){var lo=0,hi=1;for(var [p,d,min,max] of [[a[0],b[0]-a[0],r.l,r.r],[a[1],b[1]-a[1],r.t,r.b]]){
+      if(d===0){if(p<min||p>max)return false;continue;}
+      var u=(min-p)/d,w=(max-p)/d;lo=Math.max(lo,Math.min(u,w));hi=Math.min(hi,Math.max(u,w));if(lo>hi)return false;}return true;}
+    return h.rings.some(ring=>radarWarnInside(r.l,r.t,ring)||ring.some((p,k)=>edge(p,ring[(k+1)%ring.length])));}
+  function radarWarnViewportItems(live){var v=radarWarnScreen();return !v?live:live.filter(it=>{var h=radarWarn.nodes.get(it.id)||radarWarnGeometry(it,radarView.data.center);return h&&radarWarnVisible(h,v);});}
+  function radarWarnPlace(){var box=$('rad-warn-chips'),v=radarWarnScreen(),seen=new Set(),S=RAD_WARN_SAFE,needsList=false;
+    if(v&&radarOverlay&&radarOverlay.warnClip){var rect=radarOverlay.warnClip;for(var [k,n] of Object.entries({x:-v.tx/v.s,y:-v.ty/v.s,width:956/v.s,height:RAD_WARN_BOTTOM/v.s}))rect.setAttribute(k,n);}
+    for(var h of v?radarWarn.paths:[]){var it=h.item,b=h.box,x0=b.x0*v.s+v.tx,x1=b.x1*v.s+v.tx,y0=b.y0*v.s+v.ty,y1=b.y1*v.s+v.ty;
+      var small=String(x1-x0<RAD_WARN_SMALL||y1-y0<RAD_WARN_SMALL);
+      if(small==='true'||x0<0||x1>956||y0<0||y1>RAD_WARN_BOTTOM)needsList=true;if(h.node.getAttribute('data-small')!==small)h.node.setAttribute('data-small',small);
+      if(radarWarnTier(it)<2||(radarWarn.lead&&radarWarn.lead.id===it.id))continue;
+      if(x1<S.l||x0>S.r||y1<S.t||y0>S.b)continue;
+      var chip=radarWarn.chips.get(it.id);if(!chip){chip=document.createElement('div');chip.className='rad-warn-chip';box.appendChild(chip);radarWarn.chips.set(it.id,chip);}
+      var name=radarWarnName(it);if(chip.textContent!==name)chip.textContent=name;chip.dataset.kind=it.kind||'other';chip.dataset.threat=it.threat||'';
+      chip.style.left=clamp((x0+x1)/2,S.l+90,S.r-90)+'px';chip.style.top=clamp(y0-5,S.t+24,S.b)+'px';seen.add(it.id);}
+    for(var [id,chip] of radarWarn.chips)if(!seen.has(id)){chip.remove();radarWarn.chips.delete(id);}
+    var live=radarWarnLive(),visible=radarWarnViewportItems(live),off=live.length-visible.length,list=$('rad-warn-list'),nearby=radarWarnListItems(live)[0];
+    list.hidden=!radarWarn.on||!(needsList||nearby&&!nearby.affectsStation||radarCamera&&radarCamera.zoom<=6)||!live.length||!!radarWarn.selected;
+    var title=(nearby?radarWarnName(nearby)+'\n'+radarWarnLocation(nearby)+' · ':'')+live.length+' warning area'+(live.length===1?'':'s')+' · list'+(off?' · '+off+' off map':'');
+    if(list.textContent!==title)list.textContent=title;
+    radarWarnToggleRender(live,radarWarnStale());}
+
+  // The payload is local-first. A nearby cue supplements, never replaces, the
+  // station danger tag. Its distance is to the closest boundary, not a centroid.
+  function radarWarnListItems(live){return live;}
+  function radarWarnLocation(it){if(it.affectsStation)return 'At this station';
+    var center=radarView.data&&radarView.data.center;if(!center)return 'Nearby';
+    var g=radarWarnGeometry(it,center),p=radarWorldPoint(center.lat,center.lon,9),best=Infinity,q=null;
+    for(var ring of g?g.rings:[])for(var k=0;k<ring.length;k++){var a=ring[k],b=ring[(k+1)%ring.length],dx=b[0]-a[0],dy=b[1]-a[1],l=dx*dx+dy*dy;
+      var t=l?clamp(((p[0]-a[0])*dx+(p[1]-a[1])*dy)/l,0,1):0,x=a[0]+t*dx,y=a[1]+t*dy,d=Math.hypot(x-p[0],y-p[1]);if(d<best){best=d;q=[x,y];}}
+    if(!q)return 'Nearby';var dest=radarWorldInverse(...q,9),r=Math.PI/180,a=center.lat*r,b=dest.lat*r,dl=(dest.lon-center.lon)*r;
+    var h=Math.sin((b-a)/2)**2+Math.cos(a)*Math.cos(b)*Math.sin(dl/2)**2,m=6371000*2*Math.asin(Math.min(1,Math.sqrt(h)));
+    var bearing=(Math.atan2(Math.sin(dl)*Math.cos(b),Math.cos(a)*Math.sin(b)-Math.sin(a)*Math.cos(b)*Math.cos(dl))/r+360)%360;
+    var units=radarView.data.units==='km'?'km':'mi',distance=m/(units==='km'?1000:1609.344);
+    return (distance<1?'Under 1':String(Math.round(distance)))+' '+units+' '+['N','NE','E','SE','S','SW','W','NW'][Math.round(bearing/45)%8]+' of station';}
+  // Fit to the right of the warning cues, respecting the same zoom and pan
+  // limits as gestures. Close the card before moving so it cannot hide the fit.
+  function radarWarnFitCamera(item){var r=radarView.data,g=r&&radarWarnGeometry(item,r.center);if(!g)return null;
+    var box=g.box,target=null;
+    for(var z=10;z>=(r.zoomMin??4);z--){var scale=2**(z-9),x=(box.x0+box.x1)/2,y=(box.y0+box.y1)/2;
+      var c=radarClampCamera({...radarWorldInverse(x*scale-232,y*scale+55,z),zoom:z});target=c;
+      var p=radarWorldPoint(c.lat,c.lon,z),tx=478-p[0]+Math.round((c.lon-r.center.lon)/360)*256*2**z,ty=245-p[1];
+      if(box.x0*scale+tx>=500&&box.x1*scale+tx<=920&&box.y0*scale+ty>=80&&box.y1*scale+ty<=300)break;
+    }return target;}
+  function radarWarnFit(item){if(radarIntent.writable===false||!radarView.active)return;var c=radarWarnFitCamera(item);if(!c)return;
+    radarWarnSelect(null);radarWarn.on=true;radarWarnStore(true);radarWarnBuild();radarZoom.auto=false;
+    radarSwitchStart();radarSourceRender();radarEase(c,160);}
+  function radarWarnOverflow(){var card=$('rad-warn-card'),cue=radarWarn.card&&radarWarn.card.overflow;if(!cue||card.hidden)return;
+    var more=card.scrollHeight-card.clientHeight>2;cue.hidden=!more;
+    var down=card.scrollTop+card.clientHeight<card.scrollHeight-2;
+    cue.textContent=(down?'Scroll for more ↓':'↑ Scroll for earlier details')+(radarWarn.also.length?' · '+radarWarn.also.length+' other warning areas':'');}
+
+  // Every outline a tap reaches, most important first: inside it, within 12 px
+  // of its edge, or within the 56 px target of a small one.
+  function radarWarnHits(x,y){var v=radarWarnScreen();if(!v||x<0||x>956||y<0||y>=RAD_WARN_BOTTOM)return [];var wx=(x-v.tx)/v.s,wy=(y-v.ty)/v.s,edge=RAD_WARN_EDGE/v.s,small=RAD_WARN_SMALL/v.s,half=RAD_WARN_TARGET/2/v.s,out=[];
+    for(var k=radarWarn.paths.length-1;k>=0;k--){var h=radarWarn.paths[k],b=h.box,hit=h.rings.some(ring=>radarWarnInside(wx,wy,ring)||radarWarnNear(wx,wy,ring,edge));
+      if(!hit&&(b.x1-b.x0<small||b.y1-b.y0<small))hit=Math.abs(wx-(b.x0+b.x1)/2)<=Math.max(half,(b.x1-b.x0)/2)&&Math.abs(wy-(b.y0+b.y1)/2)<=Math.max(half,(b.y1-b.y0)/2);
+      if(hit)out.push(h.item);}
+    return out;}
+  function radarWarnAt(x,y){return radarWarnHits(x,y)[0]||null;}
+  function radarWarnInside(x,y,ring){var inside=false;for(var i=0,j=ring.length-1;i<ring.length;j=i++){var a=ring[i],b=ring[j];
+    if((a[1]>y)!==(b[1]>y)&&x<(b[0]-a[0])*(y-a[1])/(b[1]-a[1])+a[0])inside=!inside;}return inside;}
+  function radarWarnNear(x,y,ring,d){for(var i=0,j=ring.length-1;i<ring.length;j=i++){var a=ring[j],b=ring[i],dx=b[0]-a[0],dy=b[1]-a[1],l=dx*dx+dy*dy,t=l?clamp(((x-a[0])*dx+(y-a[1])*dy)/l,0,1):0;
+    if(Math.hypot(x-a[0]-t*dx,y-a[1]-t*dy)<=d)return true;}return false;}
+  function radarWarnTap(pt){var hits=radarWarnHits(pt.x,pt.y);radarWarnSelect(hits[0]||null,hits);}
+  function radarWarnDiv(cls,text,tag){var n=document.createElement(tag||'div');n.className=cls;if(text)n.textContent=text;return n;}
+  // Details, in the order a person needs them: what and where, how long, how it
+  // is known, what to do (the warning's own words, never composed here), who issued it.
+  function radarWarnSelect(item,hits,listMode=false){var card=$('rad-warn-card');radarWarn.selected=item?item.id:null;
+    radarWarn.listMode=!!item&&listMode;radarWarn.also=item?(hits||[]).filter(i=>i.id!==item.id).sort((a,b)=>radarWarnTier(b)-radarWarnTier(a)):[];
+    for(var h of radarWarn.paths)h.node.setAttribute('data-selected',String(!!item&&h.item.id===item.id));
+    if(radarOverlay&&radarOverlay.warn&&radarWarn.on)radarWarnReconcile(radarOverlay.warn,radarWarnLive());
+    radarWarnTagRender(radarWarnLive());
+    if(!item){radarWarn.card=null;card.hidden=true;card.replaceChildren();radarWarnPlace();return;}
+    var head=radarWarnDiv('rad-warn-head'),close=radarWarnDiv('rad-warn-close','✕','button');
+    close.setAttribute('type','button');close.setAttribute('aria-label','Close warning details');close.addEventListener('click',()=>radarWarnSelect(null));
+    var overflow=radarWarnDiv('rad-warn-scroll');overflow.hidden=true;
+    head.append(radarWarnDiv('rad-warn-name',radarWarnName(item),'b'),close,overflow);
+    var when=radarWarnDiv('rad-warn-when',radarWarnWhen(item)),fit=radarWarnDiv('rad-warn-fit','Fit warning area','button');
+    fit.setAttribute('type','button');fit.disabled=radarIntent.writable===false;fit.addEventListener('click',()=>radarWarnFit(item));
+    var lines=[head,when,fit];
+    if(typeof item.detail==='string'&&item.detail)lines.push(radarWarnDiv('rad-warn-detail',item.detail));
+    if(typeof item.instruction==='string'&&item.instruction)lines.push(radarWarnDiv('rad-warn-do',item.instruction,'p'));
+    if(typeof item.headline==='string'&&item.headline)lines.push(radarWarnDiv('rad-warn-src',item.headline));
+    if(radarWarn.also.length){var also=radarWarnDiv('rad-warn-also');also.append(radarWarnDiv('rad-warn-also-k',listMode?'Other warning areas':'Also here'));
+      for(let other of radarWarn.also){var pick=radarWarnDiv('rad-warn-pick',radarWarnName(other)+(other.until?' · until '+other.until:''),'button');
+        pick.setAttribute('type','button');pick.dataset.kind=other.kind||'other';pick.addEventListener('click',()=>radarWarnSelect(other,[item,...radarWarn.also],radarWarn.listMode));also.append(pick);}
+      lines.push(also);}
+    radarWarn.card={item,when,overflow};card.dataset.also=String(radarWarn.also.length>0);card.dataset.kind=item.kind||'other';card.dataset.threat=item.threat||'';card.replaceChildren(...lines);card.scrollTop=0;card.hidden=false;radarWarnPlace();radarWarnOverflow();}
+  // Keep the open card's remaining time true without rebuilding it (a rebuild
+  // under a finger would swallow the tap on Close).
+  function radarWarnCardTick(live){var c=radarWarn.card;if(!c)return;var it=live.find(i=>i.id===c.item.id);if(!it){radarWarnSelect(null);return;}
+    var also=radarWarn.also.map(old=>live.find(i=>i.id===old.id)).filter(Boolean);
+    if(JSON.stringify(it)!==JSON.stringify(c.item)||JSON.stringify(also)!==JSON.stringify(radarWarn.also)){
+      radarWarnSelect(it,[it,...also],radarWarn.listMode);return;}
+    var t=radarWarnWhen(it);if(c.when.textContent!==t)c.when.textContent=t;radarWarnOverflow();}
+  function radarWarnToggleRender(live,stale){var b=$('rad-warnings'),w=radarWarn.data,n=radarWarnViewportItems(live).length,off=live.length-n;b.hidden=!(w&&w.available!==false);
+    b.setAttribute('aria-pressed',String(radarWarn.on));
+    var v=stale?'Unavailable':!n?(off?'Off map · '+off:'None'):(radarWarn.on?'Shown · ':'Hidden · ')+n;
+    if($('rad-warnings-count').textContent!==v)$('rad-warnings-count').textContent=v;
+    b.dataset.hiding=String(!radarWarn.on&&n>0);
+    b.setAttribute('aria-label','Warning areas, '+(stale?'unavailable':!live.length?'none in force':n+(radarWarn.on?' shown':' hidden')+(off?', '+off+' off map':'')));}
+  function radarWarnToggle(){radarWarn.on=!radarWarn.on;radarWarnStore(radarWarn.on);if(!radarWarn.on){radarWarnSelect(null);radarWarn.unavailable=false;}radarWarnBuild();if(radarView.data)radarState();}
+  function radarWarnWire(){var plate=$('rad-plate'),over=$('rad-over');
+    $('rad-warn-card').addEventListener('scroll',radarWarnOverflow);
+    if(typeof ResizeObserver!=='undefined')new ResizeObserver(radarWarnOverflow).observe($('rad-warn-card'));
+    $('rad-warnings').addEventListener('click',radarWarnToggle);
+    $('rad-warn-list').addEventListener('click',()=>{var items=radarWarnListItems(radarWarnLive());if(items.length)radarWarnSelect(items[0],items,true);});
+    $('rad-warn-tag').addEventListener('click',()=>{var lead=radarWarn.lead;if(lead)radarWarnSelect(lead,radarWarnLive().filter(i=>i.affectsStation).sort((a,b)=>radarWarnTier(b)-radarWarnTier(a)));});
+    // A tap is a press and release within 8 px with no second finger, whoever
+    // owns the camera (a read-only viewer can still read a warning).
+    plate.addEventListener('pointerdown',e=>{if(radarWarn.down){radarWarn.down.multi=true;return;}radarWarn.down=e.target.closest&&e.target.closest(RAD_CONTROLS)?null:{...radarPointer(e),id:e.pointerId,multi:false};},true);
+    plate.addEventListener('pointerup',e=>{var d=radarWarn.down;if(!d||d.id!==e.pointerId)return;radarWarn.down=null;if(d.multi||!radarView.active)return;var p=radarPointer(e);if(Math.hypot(p.x-d.x,p.y-d.y)<8)radarWarnTap(p);},true);
+    plate.addEventListener('pointercancel',()=>{radarWarn.down=null;},true);
+    over.addEventListener('keydown',e=>{var node=e.target;if(e.key==='Escape'){radarWarnSelect(null);return;}
+      if((e.key==='Enter'||e.key===' ')&&node&&node.classList&&node.classList.contains('rad-warn')){e.preventDefault();var hit=radarWarn.paths.find(h=>h.node===node);if(hit)radarWarnSelect(radarWarn.selected===hit.item.id?null:hit.item);}});}
+  /* NWS-WARNINGS:END */
+  function radarOverlayBuild(){if(!radarCamera||!radarView.data)return;var r=radarView.data,over=$('rad-over');if(!radarOverlay){over.replaceChildren();radarOverlay={warn:el('g',{id:'rad-warn-g'},over),geo:el('g',{id:'rad-geo'},over),chrome:el('g',{id:'rad-chrome'},over),labels:[]};}
+    var o=radarOverlay;if(!o.warnClip){var clip=el('clipPath',{id:'rad-warn-clip',clipPathUnits:'userSpaceOnUse'},el('defs',{},over));o.warnClip=el('rect',{},clip);o.warn.setAttribute('clip-path','url(#rad-warn-clip)');}o.geo.replaceChildren();o.chrome.replaceChildren();o.labels=[];var p=radarWorldPoint(r.center.lat,r.center.lon,9),mpp=156543.034*Math.cos(r.center.lat*Math.PI/180)/512;
     function geo(tag,attrs){return el(tag,{...attrs,'vector-effect':'non-scaling-stroke'},o.geo);}
     for(var ring of r.rings||[]){var radius=ring.meters/mpp;geo('circle',{class:'ring',cx:p[0],cy:p[1],r:radius});var text=el('text',{x:0,y:0},o.chrome);text.textContent=ring.label;o.labels.push({translated:true,node:text,x:p[0],y:p[1]-radius,dx:8,dy:-5});}
     var iconScale=2**(9-radarCamera.zoom);
@@ -3214,9 +3601,9 @@
     var choices=r.scaleChoices||[],m=156543.034*Math.cos(radarCamera.lat*Math.PI/180)/2**radarCamera.zoom;o.scale=choices.filter(c=>c.meters/m<=490*.25).at(-1)||{meters:0,label:''};o.bar=el('path',{class:'rad-scale'},o.chrome);el('text',{x:340,y:458},o.chrome).textContent=o.scale.label;
     var cp=radarWorldPoint(radarCamera.lat,radarCamera.lon,radarCamera.zoom),sc=2**(radarCamera.zoom-9);
     o.labels=o.labels.filter(l=>{var x=l.x*sc+478-cp[0],y=l.y*sc+245-cp[1]+l.dy,keep=x>=0&&x+42<=956&&y-12>=76&&y<=412;if(!keep)l.node.remove();return keep;});
-    radarOverlayPaint();
+    radarWarnBuild();radarOverlayPaint();
   }
-  function radarOverlayPaint(){if(!radarOverlay)return;var o=radarOverlay,c=radarCamera,p=radarWorldPoint(c.lat,c.lon,c.zoom),s=2**(c.zoom-9),tx=478-p[0]+Math.round((c.lon-radarView.data.center.lon)/360)*256*2**c.zoom,ty=245-p[1];o.geo.setAttribute('transform','translate('+tx+','+ty+') scale('+s+')');
+  function radarOverlayPaint(){if(!radarOverlay)return;var o=radarOverlay,c=radarCamera,p=radarWorldPoint(c.lat,c.lon,c.zoom),s=2**(c.zoom-9),tx=478-p[0]+Math.round((c.lon-radarView.data.center.lon)/360)*256*2**c.zoom,ty=245-p[1];o.geo.setAttribute('transform','translate('+tx+','+ty+') scale('+s+')');if(o.warn)o.warn.setAttribute('transform','translate('+tx+','+ty+') scale('+s+')');radarWarnPlace();
     for(var l of o.labels){var x=l.x*s+tx+l.dx,y=l.y*s+ty+l.dy;if(l.translated)l.node.setAttribute('transform','translate('+x+','+clamp(y,88,412)+')');else{l.node.setAttribute('x',x);l.node.setAttribute('y',clamp(y,88,412));}}
     var mpp=156543.034*Math.cos(c.lat*Math.PI/180)/2**c.zoom;o.bar.setAttribute('d','M340,464v8H'+(340+o.scale.meters/mpp)+'v-8');
   }
@@ -3289,6 +3676,7 @@
   $('rad-plate').addEventListener('lostpointercapture',e=>{if(radarGesture.pointers.has(e.pointerId))radarGestureCancel();});
   $('rad-plate').addEventListener('wheel',e=>{if(!radarView.active||e.target.closest(RAD_CONTROLS)||!e.deltaY)return;e.preventDefault();radarZoomChange(e.deltaY<0?1:-1,radarPointer(e));},{passive:false});
   $('rad-plate').addEventListener('dblclick',e=>{if(!e.target.closest(RAD_CONTROLS))radarZoomChange(1,radarPointer(e));});
+  radarWarnWire();
   $('rad-recenter').addEventListener('click',radarRecenter);$('rad-zoom-in').addEventListener('click',()=>radarZoomChange(1));$('rad-zoom-out').addEventListener('click',()=>radarZoomChange(-1));$('rad-zoom-reset').addEventListener('click',()=>radarZoomChange(0));
   document.addEventListener('keydown',e=>{if(!radarView.active||e.ctrlKey||e.metaKey||e.altKey||e.target.isContentEditable||/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName))return;var step={'+':1,'=':1,'-':-1,'−':-1,'_':-1,'0':0}[e.key];if(step!==undefined&&radarIntent.writable!==false){e.preventDefault();presenceDirty=true;radarZoomChange(step);}});
   document.addEventListener('visibilitychange',()=>{if(document.hidden){radarGestureCancel();radarRelease();}else if(radarView.active)radarActivate();poll(true);});
@@ -3415,7 +3803,7 @@
     // oldest contributing scan, so a stale radar is never understated.
     var old=r.stale||retained&&age>=r.staleSec;
     radarStatusSet(state,old?'Stale · '+radarMin(retained?age:dataAge)+' min old':
-      failed?"Couldn't refresh":r.attention?.waking?'Waking':'');
+      failed?"Couldn't refresh":r.attention?.waking?'Waking':radarWarnProblem());
   }
   // Announce a change of problem (Stale, Starting, Waking...), not every minute
   // a stale count ticks over. The visible status ticks freely; the announcement
@@ -3440,6 +3828,9 @@
     radarStatusSet('starting',!(r.attention?.waiting||r.attention?.waking)?'Starting':waking?'Waking':'Resting');
     var note=$('rad-note');note.textContent='';note.dataset.shown='false';$('rad-loop').hidden=true;$('rad-zoom').hidden=true;}
   function renderRadar(d){radarPumpBlocked=null;var r=d.radar,tab=document.querySelector('.tab[data-screen="s-radar"]');if(r&&r.available)radarView.everAvailable=true;
+    // Warnings first: no imagery decision below (staging a source, a stale
+    // reorder, a restart) may hold back a cancellation or a new warning.
+    radarWarnUpdate(r&&r.warnings,d.ts);
     var starting=!!(r&&!r.available&&(r.starting||r.attention?.waiting||(radarView.everAvailable&&r.reason==='no data yet')));
     tab.hidden=!(r&&(r.available||starting));document.querySelector('.page').dataset.radarAlerts=d.alerts&&d.alerts.length?'on':'off';if(tab.hidden){radarRelease();radarView.data=null;if($('s-radar').classList.contains('active'))activate('s-obs');return;}
     tab.dataset.weather=r&&r.attention&&r.attention.weather?'on':'off';tab.setAttribute('aria-label','Radar'+(r.attention?.tier?': '+r.attention.tier:'')+(r.attention?.weather?' · weather nearby':''));

@@ -124,7 +124,13 @@ def origin(tmp_path, monkeypatch):
             if state.close_after and self.count >= state.close_after and (not state.alternate or self.ident % 2 == 0):
                 # Deliberately omit Connection: close, as an idle upstream can do.
                 self.close_connection = True
-    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    try:
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    except PermissionError:
+        # Some hermetic runners prohibit even loopback listeners. This fixture
+        # tests a real local TLS transport, so it cannot provide useful cover
+        # there; do not mistake sandbox policy for a product failure.
+        pytest.skip('loopback sockets unavailable in this environment')
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain(cert, key)
     server.socket = context.wrap_socket(server.socket, server_side=True)

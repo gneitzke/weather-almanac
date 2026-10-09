@@ -174,6 +174,209 @@ its next poll only after `render()` returned, and the server credits that mark o
 from a loopback client. The launcher's watchdog reads `renders`, because a request
 count never proved anything reached the screen.
 
+## Warning polygons on the radar (2026-10-09)
+
+`radar.warnings` carries the NWS storm-based warnings the radar camera can
+reach, drawn as outlines on the map. The station alert strip (`alerts`, `alertCount`,
+`alertsStale`, ...) is unchanged: same point query, same 15-minute cadence,
+levels and tones. The only coupling: when a fetch finds a new warning whose
+polygon covers the station, the engine refreshes the strip at once instead of
+waiting up to 15 minutes.
+
+```json
+"warnings": {
+  "available": true, "fetchedTs": 1791576900, "staleAt": 1791577860, "stale": false,
+  "refreshFailedAt": null,
+  "items": [{
+    "id": "urn:oid:2.49.0.1.840.0....001.1", "event": "Tornado Warning",
+    "label": "Tornado Warning", "kind": "tornado", "threat": null,
+    "level": "warning", "color": "#FF0000",
+    "onset": 1791576780, "expires": 1791578700, "ends": 1791578700, "until": "1:45\u00a0PM",
+    "headline": "Tornado Warning issued October 9 at 1:18PM PDT until ...",
+    "detail": "Radar indicated", "sender": "NWS Seattle WA",
+    "instruction": "TAKE COVER NOW! Move to a basement or an interior room on the lowest floor of a sturdy building. ...",
+    "affectsStation": true,
+    "polygon": [[[-122.4, 47.55], [-122.2, 47.55], [-122.18, 47.68], [-122.38, 47.7], [-122.4, 47.55]]]
+  }]
+}
+```
+
+- **What is drawn.** Status `Actual` Tornado, Severe Thunderstorm, Flash Flood,
+  Special Marine, Snow Squall, Extreme Wind and Dust Storm Warnings: the
+  storm-based products that carry their own polygon. PDS and emergency
+  variants keep the NWS event name and are flagged from `parameters`:
+  `threat` is `emergency` (tornadoDamageThreat or flashFloodDamageThreat
+  CATASTROPHIC; `label` "Tornado Emergency" / "Flash Flood Emergency",
+  `level` `emergency`), `pds` (tornado CONSIDERABLE; "PDS Tornado Warning"),
+  `considerable` or `destructive` (thunderstorm/flash flood tags), else null.
+  Zone-based alerts (watches, advisories, Flood, Winter, Tropical and other
+  zone warnings) are **not drawn**: they have no geometry or only a merged zone
+  outline. Drawing zone shapes is a possible later step.
+- **Query.** api.weather.gov has no bounding-box filter, so the engine asks
+  `alerts/active?status=actual&message_type=alert,update,cancel&area=<codes>&event=<the seven events>`.
+  `<codes>` are the state/territory and marine area codes (`AreaCode`) whose
+  padded extent the radar **camera** can reach: the page lets a viewer zoom out
+  to `zoomMin` (4) and pan the camera centre 1.5 viewport diagonals (screen
+  pixels at the zoom shown, across the world wrap) from the station, and the
+  viewport shows half its size around that centre. In Web Mercator that region
+  is the viewport rectangle grown by the pan radius around the station, largest
+  at the floor zoom, so zoom 4 bounds every view (`nws_warnings.Reach`). At
+  zoom 4 it spans most of a hemisphere: Seattle and Oklahoma City (and any US
+  station) name all 74 codes, one 490-character URL for the national
+  event-filtered feed (measured 2026-10-09: 6 warnings, 43 KB; about 7 KB per
+  warning, so ~0.7 MB with 100 in force on an outbreak day; bodies over 4 MB
+  are rejected). One query is right for every viewer, zoom and pan with no
+  fetch after a gesture; a footprint that followed the view would leave each
+  pan blank until the next fetch. Consequence: a station outside the US
+  (London) also reaches US areas at zoom 4 and fetches; it polls fast only
+  while someone is on the radar (below). A camera that reaches no code makes
+  no request: `available:false`, `stale:false`, `staleAt:null`, `items:[]`,
+  no errors, no toggle.
+- **Items.** Each item's geometry must intersect the reachable region: tested
+  exactly against the polygon (a bounding-box prefilter, then polygon vs
+  region), not by its bounds. Which messages are in force is resolved per
+  warning (VTEC office, phenomenon, significance, ETN) by chronology and
+  segment scope. CAP references (including predecessor chains) identify the
+  messages replaced; UGCs restrict that scope. CAN/EXP actions additionally
+  require full coverage of a predecessor's polygon when geometry is supplied.
+  Without references, event identity alone never cancels a different segment:
+  UGC/geometry scope must cover it. Ambiguous partial endings retain the active
+  segment rather than erasing coverage. A newer continuation survives older
+  cancellations. `Cancel` without VTEC can end its referenced segment. One
+  malformed feature is skipped on its own.
+  `expires` is the **removal deadline**: the earlier of CAP `expires` and
+  `ends`. `ends` is the event end shown to people (`ends`, else `expires`), and
+  `until` is its station-local time from the emitter's one clock helper
+  (12-hour unless `Display/TimeFormat` says otherwise; null without a station
+  timezone). Station coverage (`affectsStation`) and reach use the ORIGINAL
+  geometry, longitudes unwrapped across the antimeridian, before any
+  simplification; components the camera cannot reach are dropped and the one
+  over the station is always the first ring. All reachable warnings are kept:
+  station first, then the automatic home view, then distance, with hazard
+  severity breaking ties. There is no national item-priority cap. Every reachable
+  component is retained. `polygon` is a list of closed outer rings of `[lon, lat]`
+  (longitudes -180..180; the page re-wraps per vertex), holes dropped and rounded
+  to 0.01 degree (finer for tiny rings). Rings have at most 48 vertices. The
+  usual 96-vertex item / 1,152-vertex total targets scale to preserve the local
+  detail allowance and at least a closed triangle per distant component during
+  large outbreaks. Distance determines which distant items get spare detail. Both the incoming
+  feed and serialized public items have a 4 MiB ceiling; an oversized refresh
+  fails visibly and retains last-good data, never silently publishes a partial
+  list. Storm polygons normally have 4–20 points and pass untouched.
+  `onset`, `expires`, `ends`, `fetchedTs` and `staleAt` are UTC epoch seconds.
+  `color` is the NWS published map colour (weather.gov/help-map); the page
+  draws with theme tokens derived from it. `instruction` is the warning's own
+  complete CAP action text, with whitespace folded and no truncation; null when
+  the feed has none.
+  The page shows it verbatim and never composes advice of its own.
+- **Cadence.** A due-check runs every 15 s. It fetches every 90 s while the
+  attention tier is `warm` or `live` (someone on or just off the Radar tab,
+  panel or LAN, who can pan anywhere in reach), while a warning is in force
+  within the station's own automatic view, or while the tiers hold weather
+  nearby (`attention.weather`) and NWS covers that view; otherwise every 15
+  minutes. A change of the reachable area asks at once. Requests carry the
+  configured NWS User-Agent contact (as the strip does) and run under ONE
+  20 s end-to-end deadline (DNS, connect, TLS, request, every body read and a
+  reconnect retry, on the radar transport that recomputes the remaining time
+  before each read), so a trickled body cannot hold the warnings worker.
+- **Conditional GET.** The engine sends `If-None-Match` with the last ETag and
+  handles 304. Measured 2026-10-09: api.weather.gov sends a weak ETag and no
+  Last-Modified, and still answers a matching If-None-Match with 200 and the
+  full body, so today every poll is a full (event-filtered) download.
+- **Freshness and failure.** A failed fetch keeps the last good items.
+  Retries back off 2, 4, 8, 16 minutes, then every 30 minutes, whatever the
+  cadence; `Retry-After` is honoured within that 30-minute ceiling. `stale` is
+  true before the first answer and from `staleAt` on. A failed refresh does
+  not make the data stale: it sets `refreshFailedAt` (UTC epoch seconds of the
+  latest failed attempt since the last success; null once any fetch succeeds,
+  or with no coverage), and `staleAt` stays tied to the last success. Changed
+  2026-10-09 (UX pass): before, one failed refresh blanked every outline.
+  Note the arithmetic at the 90 s cadence: `staleAt` is the last success
+  + 150 s and the first retry is the failure + 120 s, so a single failure
+  shows dimmed outlines for 60 s, then none until the retry lands. `staleAt` is the freshness deadline: the last success plus the
+  cadence it was scheduled under (or the current one, whichever is longer, so
+  switching to the fast cadence never flashes stale) plus 60 s for a tick, the
+  fetch deadline and an emit to land; never more than 30 minutes after the
+  last success. The page enforces it on its own producer clock (the clock
+  that ages radar data), so a frozen payload goes stale on time; an older
+  engine without `staleAt` ages to `fetchedTs` + 30 minutes. Items are still
+  published when stale (minus expired ones); the page does not draw them.
+  With `refreshFailedAt` set and the deadline not yet passed, the page draws
+  the last good outlines dimmed (casing kept). A dedicated, opaque status cue
+  beside the station tag/card reads "Warnings refresh failed" and qualifies
+  the boundaries as last verified. It remains visible independently of radar
+  imagery status, even with areas hidden or an empty previous answer. At the
+  freshness deadline it changes to "Warnings unavailable", with current coverage
+  unverified. Tag/card metadata also gets a dotted underline and an accessible
+  association to that cue. Only hazard cores dim; contrast casings remain opaque.
+- **Page.** Outlines go on `#rad-over` beneath the range rings and station
+  marker, above the echoes, in the overlay's projection: one group per
+  warning of three non-scaling strokes and no fill, a dark casing
+  (`#080B0D`, core + 4 px) and a light one (`#FFFFFF`, core + 2 px), the same
+  in both themes so one of them contrasts with any echo colour or basemap,
+  under the hazard-coloured core. Core widths rank danger: 2 px; 2.5 over the
+  station; tornado 3, or 4 over the station; emergency 5 with a dark centre
+  rail (a double line). Selection adds 0.5 px (at most 5). Drawing and tap
+  order follow the same ranking (emergency > tornado > over the station >
+  the rest; the engine's order within a tier, the selection last within its
+  own tier), so selecting a lesser warning never lifts it over a tornado.
+  Flash Flood, Special Marine, Snow Squall, Extreme Wind and Dust Storm cores
+  are dashed (all three strokes dash together) as a second cue where hues
+  coincide. Casings stay at every zoom, including geometry below 32 px.
+  **Station tag.** The highest-ranked warning over the station is named in an
+  opaque tag in a fixed slot above the loop control ("Tornado Warning" /
+  "At this station · until 2:19 PM · 22 min left", floored minutes to `ends`
+  on the producer clock); an emergency's tag is filled with its hazard colour.
+  It stays when the areas are hidden, goes with stale data, and is replaced by
+  the card while that card is open. **Chips** name tornado and emergency
+  outlines that are not the tag's subject, at the outline's top, kept inside
+  the unobstructed map (x 12-944, y 60-414: below the caption band, 12 px
+  above the reserved 64 px control band), or not drawn. Warning outlines
+  are clipped at y=426, in camera coordinates; hit testing uses the same limit.
+  **Taps.** A tap reaches every outline it is inside, within 12 px of the
+  edge of, or (an outline under 32 px either way) within a 56 px box around
+  the centre of; the card shows the highest-ranked and lists every
+  other intersecting warning under "Also here" (56 px rows). A 56 px
+  nearby cue appears for small/clipped geometry and at zoom 6 or below. It names
+  the first local warning, distance to its nearest boundary (in station units),
+  compass direction from the station, and the list count. It opens every active
+  area in local-first order, including off-map warnings. Enter/Space on a focused outline
+  opens it; Escape, Close (44 px) or a tap on open map closes it.
+  **Card.** Opaque page surface, hazard keyline, 20 px name and 16 px body:
+  name; "At this station"/"Not at this station" · until · time left;
+  Fit warning area; `detail`; complete `instruction`; `headline` (issuer and
+  time). Fit closes the card, shows areas, and frames the warning in the clear
+  map space to the right of the cues, under the normal camera limits and
+  ownership rules. Long content scrolls;
+  no CSS line clamp discards published instructions or overlap rows. The
+  heading, Close and a visible "Scroll for more ↓" / "↑ Scroll for earlier
+  details" cue stay visible while scrolling; the cue also counts other areas. Changed payload content
+  updates the open card, and expired overlap choices disappear. A polygon is removed
+  on the engine clock the moment its `expires` passes, without waiting for a
+  payload. Every payload updates the warnings first, before any imagery
+  decision (source staging, an older observation, a restart), and in
+  heartbeat order. Outlines are reconciled by warning id: an unchanged warning
+  keeps its element and keyboard focus. With `stale:true` or past `staleAt`
+  nothing is drawn and the dedicated warning cue reads "Warnings unavailable",
+  including with areas hidden. Successful empty coverage clears the cue.
+  No warnings with healthy data: no outlines, tag, card or extra text.
+- **Toggle.** A "Warning areas" button in the zoom rail beside SMOOTH
+  (`aria-pressed`, a fixed 112 x 44 px in every state, so the rail never moves)
+  hides or shows the outlines, their chips and details; the station tag
+  stays. Its second line counts active polygon areas intersecting the unobstructed
+  view: "Shown · 5", "Hidden · 5" (accent), "None", or "Unavailable" with
+  stale data. When all active areas are off map it reads "Off map · 5"; the
+  list button and accessible label also report the off-map count. Counts
+  follow camera movement, including when areas are hidden. It is shown only when
+  `available` is true. It is per viewer: the choice lives in the page's
+  `localStorage` (key `radarWarnings`), wrapped in try/catch so a browser that
+  refuses storage still toggles for the session. A LAN viewer turning it off
+  does not affect the panel. The engine keeps fetching either way. The kiosk
+  Chromium starts each boot with a fresh profile, so the panel always comes
+  back ON: the intended safety default.
+- **Health.** `radar-health.json` carries `warnings`: `coverage`, `fetchedTs`,
+  `attemptedTs`, `failures`, `error`, `query`, `count`.
+
 ## Radar loop target (2026-10-09)
 
 The attention tier sets how many frames the engine builds into the loop (warm
@@ -342,17 +545,33 @@ real age. `observedTs` keeps its meaning (the anchor).
 
 Contributors are admitted by two rules. Relative: native accepts a neighbour scan
 from 8 minutes before to 60 s after the anchor; v1 (IEM site tiles) keeps 15
-minutes. Absolute: a neighbour must be younger than the site stale threshold as
-of the moment its frame stops being the newest — now for the newest frame, the
-primary's next scan for an older one — so a stale neighbour is dropped from the
-current frame instead of making it read stale, and an older frame's contributor
-set (and mosaic identity) does not change as the clock runs on.
+minutes. Absolute: a neighbour must be younger than the neighbour blend limit
+as of the moment its frame stops being the newest (now for the newest frame,
+the primary's next scan for an older one), so a stale neighbour is dropped from
+the current frame instead of making it read stale, and an older frame's
+contributor set (and mosaic identity) does not change as the clock runs on. The
+blend limit is 2.5 of the primary's scan intervals, whole minutes, within 8–15
+minutes (15 when the cadence is unknown).
 
-The site `staleSec` follows the primary's listing cadence (`scanCadenceSec`):
-2.5 scan intervals rounded up to whole minutes, within 8–15 minutes
-(`RADAR_SITE_STALE_MIN_SEC`…`RADAR_SITE_MAX_AGE_SEC`); 15 minutes when the cadence
-is unknown. Precipitation mode at ~4.5 min is stale at 12 min, SAILS at 8 min,
-clear air at 15. Region sources keep the table's fixed thresholds.
+The site `staleSec` means "a scan we should have received is missing": the
+primary's publication latency (`scanLatencySec`) plus two scan intervals
+(`scanCadenceSec`), rounded up to whole minutes, within 8–20 minutes
+(`RADAR_SITE_STALE_MIN_SEC`…`RADAR_SITE_STALE_MAX_SEC`). Latency is measured per
+site from listings, one sample at most per listing: `now − scan time` for the
+newest scan that listing reveals, and only when it is newer than every scan the
+site has ever listed (seen scans are remembered for the listing window, so an
+empty or partial listing that recovers never makes old scans look new, and a
+backlog delivered in one batch is one vote) and the previous consistent listing
+of that site was at most 180 s earlier (a quiet tier's 15-minute listings
+measure our polling, not IEM; a regressed listing does not count). The estimate
+is the 90th percentile of the last 12 samples younger than two hours; before
+three exist, 300 s is assumed, and an
+unknown cadence is taken as the nominal 300 s (so 900 s with neither). At a
+300 s cadence with ~330 s latency the frame turns stale at 960 s; the normal
+age just before the next scan lands (latency + one interval, 840–870 s on the
+panel) stays current. The previous rule (2.5 intervals, 780 s at 300 s) ignored
+latency and flashed Stale between healthy scans. `scanLatencySec` is null until
+measured. Region sources keep the table's fixed thresholds.
 
 **Coverage.** Native mosaic tiles carry two tEXt chunks, computed from the
 mosaic's own validity mask. A pixel is *measured* when some contributor returned
@@ -944,7 +1163,7 @@ while respecting the requested restart persistence.
 | Source | `sourceId` | `provider` | Nominal `cadenceSec` | Display stale at (`staleSec`) | Zoom bounds |
 | --- | --- | --- | --- | --- | --- |
 | IEM MRMS | `iem-mrms-lcref` | `iem` | 120 | 600 seconds | 4–9 |
-| IEM NEXRAD N0B | `iem-nexrad-n0b` | `iem` | 300 | 2.5 scan intervals, 480–900 seconds (900 when the cadence is unknown) | 7–10 |
+| IEM NEXRAD N0B | `iem-nexrad-n0b` | `iem` | 300 | publication latency + 2 scan intervals, 480–1200 seconds (900 with no cadence or latency measured) | 7–10 |
 | RainViewer | `rainviewer` | `rainviewer` | 600 | 1200 seconds | 4–7 |
 
 Mosaic tries IEM first for CONUS station centers, then RainViewer. A bundled
@@ -2306,7 +2525,7 @@ approximate volume cadence keeps its tilde. `#rad-status` alone states freshness
 Site-only operating metadata (independent of the nominal `cadenceSec` poll interval):
 
 ```json
-{"scanCadenceSec":240,"scanMode":"precipitation","scanModeSource":"cadence","scanningSlowly":false}
+{"scanCadenceSec":240,"scanLatencySec":330,"scanMode":"precipitation","scanModeSource":"cadence","scanningSlowly":false}
 ```
 
 `scanCadenceSec` is the median of the last three gaps in the **primary site's

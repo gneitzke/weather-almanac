@@ -159,11 +159,13 @@ def site_ctx(**scans):
                 sites=[dict(id=s, reporting=True) for s in scans], site_scans=scans)
 
 
-def test_site_stale_threshold_follows_the_scan_cadence():
-    assert ae._radar_site_stale_sec(None) == 900
-    assert ae._radar_site_stale_sec(120) == 480        # SAILS: never under 8 min
-    assert ae._radar_site_stale_sec(270) == 720        # precipitation: 2.5 scans, whole minutes
-    assert ae._radar_site_stale_sec(600) == 900        # clear air: never over 15 min
+def test_neighbour_blend_limit_follows_the_scan_cadence():
+    # The blend limit keeps L9's 2.5-interval rule. The display stale threshold
+    # (latency + two intervals) is pinned in test_radar_stale_latency.py.
+    assert ae._radar_neighbour_limit_sec(None) == 900
+    assert ae._radar_neighbour_limit_sec(120) == 480   # SAILS: never under 8 min
+    assert ae._radar_neighbour_limit_sec(270) == 720   # precipitation: 2.5 scans, whole minutes
+    assert ae._radar_neighbour_limit_sec(600) == 900   # clear air: never over 15 min
 
 
 def test_a_stale_neighbour_never_blends_into_the_newest_frame():
@@ -208,7 +210,7 @@ def test_native_age_is_the_oldest_contributor_not_the_anchor():
                                    dict(id='KMID', ts=T-240, volumeTs=T-220, filtered=True)], T, cadence=270)
     r = ae.AlmanacEmitter._radar_payload(snap, T+120, timezone.utc)
     assert r['observedRange'] == [T-240, T] and r['ageSec'] == 360
-    assert r['staleSec'] == 720 and r['stale'] is False
+    assert r['staleSec'] == 840 and r['stale'] is False    # default latency 300 + 2 x 270
 
 
 def test_region_frames_keep_the_anchor_age():

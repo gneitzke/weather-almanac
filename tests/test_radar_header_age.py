@@ -30,6 +30,7 @@ function el(id){return nodes[id]||(nodes[id]={id,dataset:{},text:'',setAttribute
 const $=el;const document={createTextNode:t=>({text:t}),createElement:()=>({text:'',set textContent(v){this.text=v}})};
 const performance={now:()=>1000};const isNum=v=>typeof v==='number'&&Number.isFinite(v);
 function radarFrameLabel(f){return 'T'+f.ts}
+function radarWarnProblem(){return ''}   // the warnings block's problem text (none here)
 const args=%s;
 const newest=100000,f={ts:newest+args.offset};
 var radarView={data:{staleSec:900,observedTs:newest,tiles:{frames:args.retained?[]:[{ts:f.ts}]},refresh:null},current:f,receivedAge:args.received,receivedAt:1000,holdingWindow:false,clear:false};

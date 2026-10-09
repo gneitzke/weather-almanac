@@ -133,6 +133,23 @@ and a zoom step keeps the loop playing until the new frames are in. **SMOOTH**
 (off by default) softens echo edges for Region; it is disabled while the radar's
 own cells are drawn.
 
+**Warnings on the map.** In the US, National Weather Service storm-based
+warnings (tornado, severe thunderstorm, flash flood, special marine, snow
+squall, extreme wind, dust storm) draw as cased outlines in their NWS colours,
+heaviest and on top for the most dangerous: emergency, tornado, then one over
+the station. The station's own warning is named at the lower left with the
+time left, no tap needed. Tap an outline (or that name) for what it is, how
+long it runs, and the warning's own instructions. Outlines cover everything
+the map can be panned to and vanish the moment a warning expires; if a refresh
+fails they stay, dimmed, until the data is too old to trust. A separate warning
+status beside the station tag/card stays visible even when radar imagery also
+has trouble or warning areas are hidden. Small or clipped warnings have a named
+cue with direction and distance; open it to read the full official instructions
+or fit the warning area on the map. Long cards show a scroll cue. **Warning areas**
+beside SMOOTH hides the outlines for the browser you are on; the panel starts
+each boot with them shown. Watches and advisories stay in the alert strip;
+they are not drawn.
+
 **Data use.** Level III is downloaded only while someone is looking or the panel
 was touched in the last 45 minutes. Left alone on a rainy day, the panel keeps
 just the nearest radar's newest scan warm, about 3 to 4 MB an hour. A daily cap

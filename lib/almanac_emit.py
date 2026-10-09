@@ -52,6 +52,7 @@ from lib.radar_http import failure_class, RadarSession, is_transport_error, Loca
 from lib.radar_fetch import HostHealth, CircuitOpen, Attempt, AttemptCancelled, tile_race
 from lib.radar_discovery import DiscoverySchedule
 from lib.radar_attention import Attention, Signals, GlanceHistory, RANK, WARM_HOLD_SEC
+from lib import nws_warnings
 from lib import radar_auto
 from lib.radar_native_budget import NativeBudget, native_allowed
 import logging
@@ -141,6 +142,12 @@ RADAR_CACHE_RETENTION_SEC = RADAR_HISTORY_SEC + max(RADAR_SITE_MAX_AGE_SEC, RADA
 RADAR_CACHE_RETRY_SEC = 5          # first retry of a failed cache boot, doubling
 RADAR_CACHE_RETRY_MAX_SEC = 300
 RADAR_SITE_STALE_MIN_SEC = 480     # a site frame is never stale sooner than 8 minutes
+RADAR_SITE_STALE_MAX_SEC = 1200    # ... and always stale after 20 (latency + two intervals, bounded)
+RADAR_SITE_LATENCY_DEFAULT_SEC = 300   # publication latency assumed before a site has measured samples
+RADAR_SITE_LATENCY_SAMPLES = 12        # first-seen latency samples kept per site
+RADAR_SITE_LATENCY_MIN_SAMPLES = 3     # fewer than this: the default applies
+RADAR_SITE_LATENCY_GAP_SEC = 180       # a sample counts only when the previous listing was this recent
+RADAR_SITE_LATENCY_MAX_AGE_SEC = 7200  # samples older than this no longer count (12 scans at a 600 s cadence)
 RADAR_HEALTH_WRITE_SEC = 15        # radar-health.json cadence (sooner on a state change)
 RADAR_MIN_ZOOM = 4
 RADAR_MAX_ZOOM = 9
@@ -976,13 +983,39 @@ def _radar_grid(ctx, zoom=None, margin=0):
     return tiles
 
 
-def _radar_site_stale_sec(cadence):
-    """A site frame is stale after about 2.5 scan intervals of the primary's
-    own listing (one scan in flight, one and a half missed), whole minutes,
-    never under 8 or over 15 minutes. Unknown cadence keeps 15 minutes."""
+def _radar_site_stale_sec(cadence, latency=None):
+    """A site frame is stale once a scan we should have received is missing:
+    the site's publication latency (scan time -> first seen in the IEM listing,
+    see _radar_scan_latency) plus two scan intervals, whole minutes, between 8
+    and 20 minutes. Modelling cadence alone (the old 2.5 x cadence) ignored
+    latency, so the normal age just before the next scan arrives (latency +
+    one interval, 840-870 s live at a 300 s cadence) crossed it and the panel
+    flashed Stale between healthy scans. Unknown cadence assumes the nominal
+    5-minute volume; unknown latency a conservative 5 minutes."""
+    cadence = cadence or _RADAR_SOURCES['iem-nexrad-n0b']['cadence']
+    latency = RADAR_SITE_LATENCY_DEFAULT_SEC if latency is None else max(0, latency)
+    return int(min(RADAR_SITE_STALE_MAX_SEC, max(RADAR_SITE_STALE_MIN_SEC,
+                                                math.ceil((latency + 2*cadence)/60)*60)))
+
+
+def _radar_neighbour_limit_sec(cadence):
+    """How old a neighbour's scan may be and still blend into a frame: about
+    2.5 of the primary's scan intervals (one in flight, one and a half missed),
+    whole minutes, 8 to 15 minutes; unknown cadence 15. Deliberately tighter
+    than the display threshold: blending is a choice to mix times, staleness
+    is a judgement that data went missing."""
     if not cadence:
         return RADAR_SITE_MAX_AGE_SEC
     return int(min(RADAR_SITE_MAX_AGE_SEC, max(RADAR_SITE_STALE_MIN_SEC, math.ceil(2.5*cadence/60)*60)))
+
+
+def _radar_scan_latency(samples):
+    """Robust high estimate of a site's publication latency: the 90th
+    percentile of its recent first-seen samples, None before three exist."""
+    values = sorted(v for v in samples if isinstance(v, (int, float)) and math.isfinite(v))
+    if len(values) < RADAR_SITE_LATENCY_MIN_SAMPLES:
+        return None
+    return int(values[min(len(values)-1, math.ceil(0.9*len(values))-1)])
 
 
 def _radar_contributors(frame):
@@ -1004,7 +1037,7 @@ def _radar_freshness(snap, now):
     observed = _radar_observed_range(newest) if newest is not None else None
     oldest = observed[0] if observed else snap.ts_frame
     age = int(now-oldest) if oldest is not None else None
-    stale_sec = (_radar_site_stale_sec(snap.scan_cadence_sec) if snap.source_mode == 'site'
+    stale_sec = (_radar_site_stale_sec(snap.scan_cadence_sec, snap.scan_latency_sec) if snap.source_mode == 'site'
                  else snap.stale_sec or RADAR_IEM_STALE_SEC)
     return dict(age=age, observed=observed, stale_sec=stale_sec,
                 stale=age is not None and age >= stale_sec)
@@ -1055,7 +1088,7 @@ def _radar_site_pairs(ctx, ts, now=None):
     timeline = ctx['site_scans'].get(primary, ()) if primary else ()
     later = next((t for t in timeline if t > ts), None)
     as_of = now if later is None else min(now, later)
-    limit = _radar_site_stale_sec(_radar_scan_cadence(timeline)['scan_cadence_sec'])
+    limit = _radar_neighbour_limit_sec(_radar_scan_cadence(timeline)['scan_cadence_sec'])
     pairs = []
     for site in ctx['sites']:
         stamps = ctx['site_scans'].get(site['id'], ()) if site['reporting'] else ()
@@ -1171,10 +1204,10 @@ def _radar_tile_manifest(source, frames, ctx):
 _RadarResult = namedtuple('_RadarResult',
     'available reason frames ts_frame center zoom mpp bounds scalebar rings nexrad ts_fetch '
     'source_id provider attribution attribution_url cadence stale_sec legend partial_coverage '
-    'max_zoom zoom_desired zoom_auto_level geo source_mode site_id sources scanning_slowly sites sites_considered tiles units scan_cadence_sec scan_mode scan_mode_source',
+    'max_zoom zoom_desired zoom_auto_level geo source_mode site_id sources scanning_slowly sites sites_considered tiles units scan_cadence_sec scan_mode scan_mode_source scan_latency_sec',
     defaults=('rainviewer', 'rainviewer', 'RainViewer', 'https://www.rainviewer.com/',
               RADAR_RAINVIEWER_FRAME_INTERVAL_SEC, RADAR_RAINVIEWER_STALE_SEC, _RADAR_DISPLAY_RAMP, False,
-              7, None, 7, None, 'mosaic', None, (), False, (), 0, None, 'mi', None, None, None))
+              7, None, 7, None, 'mosaic', None, (), False, (), 0, None, 'mi', None, None, None, None))
 _RADAR_NONE = _RadarResult(False, 'no data yet', (), None, None, None, None, None,
                            None, None, None, None)
 
@@ -1372,6 +1405,11 @@ class AlmanacEmitter:
         self._radar_health = HostHealth()
         self._radar_coverage_cache = OrderedDict()
         self._radar_site_status = {}  # last listing evidence, independent of tile validity
+        self._radar_latency = {}      # site -> dict(checked, stamps, samples): publication latency evidence
+        self._warnings = nws_warnings.Tracker()  # NWS storm-based warning polygons for the radar map
+        self._warnings_seen = frozenset()        # ids already known to cover the station (strip refresh)
+        self._warnings_session = None            # its own deadline-bounded transport (see _warnings_open)
+        self._warnings_query_cache = None        # ((lat, lon), (reach, home, codes, url), home codes)
         self._radar_discovery = DiscoverySchedule()
         self._radar_discovery_event = None
         self._radar_discovery_pending = False
@@ -1505,6 +1543,10 @@ class AlmanacEmitter:
                 self._radar_zoom_stamp = self._radar_preference_stamp()
                 self._schedule(self._check_radar_zoom, RADAR_INTENT_CHECK_SEC, interval=True)
                 self._schedule(self._check_radar_geo, RADAR_GEO_QUANTUM_SEC, interval=True)
+                # warning polygons: soon after the station alerts, then a cheap
+                # due-check every TICK_SEC (the fetch cadence is decided there)
+                self._schedule(self._check_warnings, 45)
+                self._schedule(self._check_warnings, nws_warnings.TICK_SEC, interval=True)
             else:
                 Logger.info('almanac_emit: radar disabled (WFP_RADAR=0): no acquisition, cache scan, geography or listings')
             return self._event
@@ -1539,6 +1581,9 @@ class AlmanacEmitter:
             if self._radar_session is not None and 'radar' not in self._inflight:
                 self._radar_session.close()
                 self._radar_session = None
+            if self._warnings_session is not None and 'warnings' not in self._inflight:
+                self._warnings_session.close()
+                self._warnings_session = None
 
     def _schedule(self, callback, timeout, interval=False):
         """ Schedule through the registry, so stop() reaches every handle. The
@@ -2071,6 +2116,7 @@ class AlmanacEmitter:
         health['discovery'] = self._radar_discovery.telemetry(time.time(), self._radar_result.ts_frame)
         now = time.time()
         health['attention'] = self._radar_attention_health(now, self._station_tz(getattr(self.app, 'config', {}) or {}))
+        health['warnings'] = self._warnings.health(now)
         cache = self._radar_disk_inventory
         failure = self._radar_cache_error
         health['cache'] = dict(files=len(cache), bytes=cache.bytes, maxFiles=cache.MAX_FILES,
@@ -3700,6 +3746,7 @@ class AlmanacEmitter:
                     if 0 <= now - ts <= RADAR_HISTORY_SEC + RADAR_SITE_MAX_AGE_SEC and ts % 60 == 0:
                         stamps.append(ts)
                 stamps = sorted(set(stamps))
+                self._radar_note_latency(site['id'], stamps, now)
                 self._radar_newest[(source, site['id'])] = (time.monotonic(),
                     dict(newest=stamps[-1] if stamps else None, stamps=tuple(stamps), checkedTs=now))
         except (_RadarBudget, _RadarSuperseded):
@@ -3733,6 +3780,59 @@ class AlmanacEmitter:
         if 'listing_results' in ctx and known is None:
             ctx['listing_results'][site['id']] = ({k: site[k] for k in ('reporting', 'newestTs', 'ageSec', 'reason')}, result)
         return result
+
+    def _radar_note_latency(self, site_id, stamps, now):
+        """Record publication latency from one successful listing.
+
+        A scan's latency sample is now - scan_ts on the listing where it first
+        appears, and only when that is evidence of IEM's delay:
+        - "first" is against every scan this site has EVER listed (kept for
+          the listing window), not just the previous listing, so a listing
+          that regresses (empty, partial) and then recovers never makes old
+          scans look newly published;
+        - only a scan that advances the site's newest-ever scan counts, and a
+          listing gives at most ONE sample (its newest new scan): a backlog
+          delivered in one batch is one late arrival, not several votes;
+        - the previous consistent listing must be recent
+          (RADAR_SITE_LATENCY_GAP_SEC): a quiet tier lists every 15 minutes,
+          and its gaps measure our polling, not IEM. A regressed listing does
+          not count as a recent one.
+        Samples carry their time and expire (RADAR_SITE_LATENCY_MAX_AGE_SEC),
+        so contamination cannot outlive slow polling. The first listing of a
+        site only seeds what it has seen."""
+        retention = RADAR_HISTORY_SEC + RADAR_SITE_MAX_AGE_SEC + RADAR_SITE_LATENCY_GAP_SEC
+        with self._radar_lock:
+            state = self._radar_latency.get(site_id)
+            if state is None:
+                state = self._radar_latency[site_id] = dict(checked=None, newest=None, seen={},
+                    samples=deque(maxlen=RADAR_SITE_LATENCY_SAMPLES))
+            seen = state['seen']
+            for ts in [ts for ts in seen if now - ts > retention]:
+                del seen[ts]
+            listed_newest = max(stamps, default=None)
+            regressed = state['newest'] is not None and (listed_newest is None or listed_newest < state['newest'])
+            fresh = [ts for ts in stamps if ts not in seen]
+            previous = state['checked']
+            if (fresh and not regressed and previous is not None and 0 <= now - previous <= RADAR_SITE_LATENCY_GAP_SEC
+                    and (state['newest'] is None or max(fresh) > state['newest'])):
+                ts = max(fresh)
+                if 0 <= now - ts <= RADAR_SITE_MAX_AGE_SEC + RADAR_SITE_LATENCY_GAP_SEC:
+                    state['samples'].append((now, now - ts))
+            for ts in fresh:
+                seen[ts] = now
+            if not regressed:
+                state['checked'] = now
+            if listed_newest is not None and (state['newest'] is None or listed_newest > state['newest']):
+                state['newest'] = listed_newest
+
+    def _radar_site_latency(self, site_id, now=None):
+        now = time.time() if now is None else now
+        with self._radar_lock:
+            state = self._radar_latency.get(site_id)
+            if not state:
+                return None
+            return _radar_scan_latency([value for at, value in state['samples']
+                                        if 0 <= now - at <= RADAR_SITE_LATENCY_MAX_AGE_SEC])
 
     def _radar_site_discover(self, ctx, *, primary_only=False):
         """Concurrent per-site listings, reused by intent and idle tile warming."""
@@ -3809,7 +3909,7 @@ class AlmanacEmitter:
         source = 'iem-nexrad-n0b'
         now = time.time()
         stamps, deadline = ctx.pop('auto_discovered', None) or self._radar_site_discover(ctx)
-        ctx.update(_radar_scan_cadence(stamps))
+        ctx.update(_radar_scan_cadence(stamps), scan_latency_sec=self._radar_site_latency(ctx['site_id'], now))
         self._radar_discovery_unchanged(source, stamps[-1], ctx)
         def build(ts, limit, pairs=None):
             layers = []
@@ -3955,7 +4055,7 @@ class AlmanacEmitter:
                     reason=None if any(p['id']==s['id'] for p in latest.get('siteScans', ())) else
                     (newest_reasons.get(s['id']) or s.get('reason') or 'scan unavailable')) for s in ctx.get('sites', ())), sites_considered=ctx.get('sites_considered', 0),
                 sources=tuple(dict(s) for s in ctx.get('sources', ())),
-                **({k:ctx.get(k) for k in ('scan_cadence_sec','scan_mode','scan_mode_source','scanning_slowly')}
+                **({k:ctx.get(k) for k in ('scan_cadence_sec','scan_mode','scan_mode_source','scanning_slowly','scan_latency_sec')}
                    if source == 'iem-nexrad-n0b' else dict(scanning_slowly=False)),
                 partial_coverage=_radar_partial_coverage(source, frames[newest], ctx))
             self._radar_result_stamp = ctx.get('preference_stamp')
@@ -5099,7 +5199,7 @@ class AlmanacEmitter:
             sitesConsidered=snap.sites_considered,sitesDrawn=len(snap.sites),
             refresh=refresh or dict(state='idle',frameIndex=0,frameTotal=0),loopFrames=loop,
             scanningSlowly=snap.scanning_slowly,latestOnly=snap.source_mode=='site' and snap.scan_cadence_sec is None and len(snap.frames)==1,
-            scanCadenceSec=snap.scan_cadence_sec,scanMode=snap.scan_mode,scanModeSource=snap.scan_mode_source,
+            scanCadenceSec=snap.scan_cadence_sec,scanLatencySec=snap.scan_latency_sec,scanMode=snap.scan_mode,scanModeSource=snap.scan_mode_source,
             sourceId=snap.source_id,
             attribution='NOAA NEXRAD Level III' if (snap.tiles or {}).get('variant')=='native' else snap.attribution,
             attributionUrl='https://registry.opendata.aws/noaa-nexrad/' if (snap.tiles or {}).get('variant')=='native' else snap.attribution_url,
@@ -5654,6 +5754,118 @@ class AlmanacEmitter:
         except Exception as error:                                        # noqa: BLE001
             Logger.warning(f'almanac_emit: alerts fetch failed - {error}')
 
+    # --------------------------------------------------------------------
+    # Warning polygons for the radar map (NWS storm-based warnings by area)
+    # --------------------------------------------------------------------
+    def _warnings_query(self):
+        """ (reach, home, codes, url) for the station, or None without a
+        location. `reach` is everything the page camera can show (its floor
+        zoom, RADAR_MIN_ZOOM, and pan limit: see nws_warnings.Reach); `home`
+        the station's automatic view, which decides the fast cadence. codes is
+        empty where no NWS area is in reach. """
+        config = getattr(self.app, 'config', None)
+        lat = _num(_cfg(config, 'Station', 'Latitude'))
+        lon = _num(_cfg(config, 'Station', 'Longitude'))
+        if lat is None or lon is None or not (-90 <= lat <= 90 and -180 <= lon <= 180):
+            return None
+        cached = self._warnings_query_cache
+        if cached is None or cached[0] != (lat, lon):
+            reach = nws_warnings.Reach(lat, lon, RADAR_MIN_ZOOM)
+            home = nws_warnings.Reach(lat, lon, _radar_zoom_for(lat))
+            codes = nws_warnings.area_codes(reach)
+            cached = self._warnings_query_cache = ((lat, lon), (reach, home, codes,
+                (nws_warnings.query_url(codes) if codes else None)), nws_warnings.area_codes(home))
+        return cached[1]
+
+    def _warnings_fast(self, now):
+        """ Poll fast while someone is on (or just left) the radar: they can
+        pan anywhere in reach. Without a viewer, only what concerns the
+        station's own view speeds it up: weather nearby (attention) where NWS
+        covers that view, or a warning in force within it. """
+        attention = self._radar_attention
+        if attention.tier in ('warm', 'live') or self._warnings.near(now):
+            return True
+        home_codes = self._warnings_query_cache[2] if self._warnings_query() else ()
+        return bool(home_codes) and bool(attention.weather(now))
+
+    def _check_warnings(self, _dt=None):
+        """ The TICK_SEC due-check: cheap, on the Clock thread; the fetch
+        itself runs on a daemon thread (one at a time, like every provider). """
+        try:
+            query = self._warnings_query()
+            if query is None:
+                return
+            now = time.time()
+            reach, home, codes, url = query
+            if not codes:
+                if self._warnings.coverage is not False:
+                    self._warnings.no_coverage(now)   # no NWS coverage: no polygons, no errors, no requests
+                return
+            fast = self._warnings_fast(now)
+            if self._warnings.due(now, fast, url):
+                self._spawn('warnings', lambda: self._do_warnings(url, reach, home, fast))
+        except Exception as error:                                        # noqa: BLE001
+            Logger.warning(f'almanac_emit: warnings check failed - {error}')
+
+    def _warnings_open(self, req):
+        """ One GET under ONE end-to-end deadline (FETCH_DEADLINE_SEC): DNS,
+        connect, TLS, the request, every body read and any reconnect retry.
+        urlopen's timeout bounds each socket operation, so a body trickled a
+        byte at a time could hold the only warnings worker for hours; the
+        radar transport recomputes the remaining time before every read. """
+        if self._warnings_session is None:
+            self._warnings_session = RadarSession()
+        return self._warnings_session.open(req, timeout=nws_warnings.FETCH_DEADLINE_SEC)
+
+    def _do_warnings(self, url, reach, home=None, fast=False):
+        """ One area fetch. Never raises. A failure keeps the last-good
+        polygons, counts toward backoff and reports refresh failure until staleAt. """
+        import urllib.request
+        import urllib.error
+        now = time.time()
+        self._warnings.began(now, fast)
+        try:
+            config = getattr(self.app, 'config', None)
+            contact = (_cfg(config, 'Station', 'Contact')
+                       or os.environ.get('ALMANAC_CONTACT') or ALERTS_UA_FALLBACK)
+            headers = {'User-Agent': contact, 'Accept': 'application/geo+json'}
+            if self._warnings.etag and self._warnings.query == url:
+                headers['If-None-Match'] = self._warnings.etag
+            req = urllib.request.Request(url, headers=headers)
+            try:
+                with self._warnings_open(req) as resp:
+                    body = resp.read(nws_warnings.MAX_BODY_BYTES + 1)
+                    etag = (getattr(resp, 'headers', None) or {}).get('ETag')
+            except urllib.error.HTTPError as http_error:
+                if http_error.code == 304:
+                    self._warnings.not_modified(time.time())
+                    return
+                retry = _num((http_error.headers or {}).get('Retry-After')) if http_error.headers else None
+                self._warnings.failed(time.time(), f'HTTP {http_error.code}', retry)
+                Logger.warning(f'almanac_emit: warnings fetch failed - HTTP {http_error.code}')
+                return
+            if len(body) > nws_warnings.MAX_BODY_BYTES:
+                raise ValueError('warnings response too large')
+            data = json.loads(body.decode('utf-8'))
+            features = data.get('features') if isinstance(data, dict) else None
+            if not isinstance(features, list):
+                raise ValueError('warnings response has no features')
+            tz = self._station_tz(config)
+            style = _clock_style(config or {})
+            until = (lambda ts: _clock(datetime.fromtimestamp(ts, tz), style)) if tz else None
+            done = time.time()
+            items = nws_warnings.parse(features, done, reach, until, home)
+            self._warnings.succeeded(done, items, url, etag)
+            covering = frozenset(i['id'] for i in items if i['affectsStation'])
+            if covering - self._warnings_seen:
+                # A new warning covers the station: refresh the strip now rather
+                # than on its 15-minute cadence (its semantics are unchanged).
+                self._check_alerts()
+            self._warnings_seen = covering
+        except Exception as error:                                        # noqa: BLE001
+            self._warnings.failed(time.time(), error)
+            Logger.warning(f'almanac_emit: warnings fetch failed - {error}')
+
     @staticmethod
     def _alert_level(event):
         """ NWS product level from the last word of the event name. 'Alert' products
@@ -5996,7 +6208,8 @@ class AlmanacEmitter:
             'radar': dict(self._radar_payload(radar_snap, now, tz, radar_refresh, style),
                           nativeBudget=self._radar_native_budget.snapshot(),
                           nativeFallback=self._radar_native_fallback(radar_snap),
-                          starting=self._radar_starting(radar_snap)),
+                          starting=self._radar_starting(radar_snap),
+                          warnings=self._warnings.payload(now, self._warnings_fast(now))),
             'ts':      int(now),                     # engine heartbeat ONLY - see obsAgeSec
             'obsTs':     int(obs_ts) if obs_ts is not None else None,
             'obsAgeSec': obs_age,                    # age of the newest OUTDOOR observation

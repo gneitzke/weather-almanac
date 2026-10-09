@@ -7,6 +7,64 @@ to shared upstream code that the classic console benefits from too.
 ## 2026-10-09
 
 ### Radar
+- **Warning-box review fixes.** Cancellation follows CAP references and segment
+  UGC/geometry scope, including reference chains. Every reachable warning and
+  polygon component is retained in local-first order; distant tornadoes cannot
+  displace nearby severe warnings. Input/output byte ceilings bound the payload
+  and report oversized refreshes as failures. A warning-status cue stays beside
+  the station tag/card independently of imagery status or hidden areas, in both
+  themes. Nearby cues name the hazard, direction and distance; cards offer Fit
+  warning area, full official instructions and a persistent overflow cue.
+- **NWS warning outlines on the map.** Tornado, Severe Thunderstorm, Flash
+  Flood, Special Marine, Snow Squall, Extreme Wind and Dust Storm Warnings now
+  draw as outlines in their NWS colours, beneath the station marker and above
+  the echoes, each cased in a thin dark and light line so it stays legible
+  over any echo colour, with no fill. Weight and stacking follow danger:
+  emergency, then tornado, then a warning over the station, then the rest; a
+  Tornado or Flash Flood Emergency draws a double line. The most dangerous
+  warning over the station is named in a tag at the lower left ("TORNADO
+  WARNING · At this station · until 2:19 PM · 22 min left"), with no tap
+  needed. Tap an outline, or the tag, for a card: what and where, how long,
+  how it was detected, the warning's own action text from NWS, and who issued
+  it, with a Close button and a list of any other warnings at that spot.
+  Small outlines (zoomed out) answer a 56 px target; Tornado outlines away
+  from the station carry their name. A
+  polygon disappears the moment it expires (at the earlier of its CAP expiry
+  and end). The engine fetches every warning the radar camera can reach,
+  zoomed out to 4 and panned, in one event-filtered query (in practice the
+  national feed, tens of KB), every 90 seconds while someone is on the radar,
+  a warning is near the station or weather is nearby, and every 15 minutes
+  otherwise, each fetch under one 20-second deadline. A partial cancellation
+  removes only the cancelled part. A failed refresh keeps the last good
+  outlines, dimmed, and the status reads "Warnings refresh failed"; they go
+  only when the last good fetch's freshness deadline passes ("Warnings
+  unavailable") or the warning expires. Retries back off to 30 minutes, and
+  the page ages warnings on its own clock, so a frozen feed goes stale on time. Zone-based alerts are not drawn; the alert strip is
+  unchanged, except that a new warning over the station refreshes it at once.
+- **A Warning areas toggle** beside SMOOTH hides or shows the outlines for that
+  browser only, remembered locally; the station tag stays. It keeps one size
+  in every state and counts what is in force: "Shown · 5", "Hidden · 5",
+  "None". The panel's kiosk profile is fresh each boot, so the panel always
+  starts with warnings on.
+- **The alert strip on the Radar tab no longer has a line through it.** With
+  an alert up, the masthead was squeezed into a fixed 22 px while its row
+  stood 29 px tall (a hidden lightning flag wrapped to two lines), so the
+  masthead's hairline fell through the strip's text. The masthead now sizes to
+  its content, and the strip is taller (18 px event name) while the radar
+  keeps its full height.
+- **Radar controls are opaque.** Buttons, readouts and captions no longer let
+  echoes show through, and a disabled button fades its glyph, not its surface.
+- **No more "Stale" flashes between healthy scans.** The nearest-radar view
+  turned stale at 2.5 scan intervals (13 minutes at a 5-minute cadence), but
+  a scan reaches IEM's listing several minutes after it is taken, so the normal
+  wait for the next one (latency plus one interval, 14 to 14.5 minutes on the
+  panel) crossed it. Stale now means a scan we should have received is missing:
+  the radar's measured publication latency plus two intervals, within 8 to 20
+  minutes. Latency is measured per radar from when each new scan first appears
+  in a listing (one sample per listing, never from scans seen before or filled
+  in late; 90th percentile of the last 12 within two hours; 5 minutes until
+  three are known).
+  Neighbour radars still blend only while within 2.5 intervals.
 - **No more "Refreshing · frame 4 of 8" forever.** When nobody is on the
   Radar tab the engine builds a four-frame loop, but it still listed all eight
   frames, so a page sat waiting for four that were never coming. The engine now
