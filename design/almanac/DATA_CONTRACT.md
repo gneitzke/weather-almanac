@@ -174,6 +174,42 @@ its next poll only after `render()` returned, and the server credits that mark o
 from a loopback client. The launcher's watchdog reads `renders`, because a request
 count never proved anything reached the screen.
 
+## Radar loop target (2026-10-09)
+
+The attention tier sets how many frames the engine builds into the loop (warm
+4, live 8, watch 8 by day and 1 by night; a primary-only or newest-only site 1;
+with attention off, 8 while viewed in the last 15 minutes, 4 while staging a
+source change, else 1). The payload now says so, and lists nothing beyond it
+that the engine will not fetch. Before this, a warm engine idle with four
+complete frames still listed eight slots and `frameTotal` 8, and the page read
+"Refreshing · frame 4 of 8" forever.
+
+- `radar.loopFrames` (also `refresh.loopFrames`): the loop target in force,
+  recorded when a pass sets it and kept by later idle/failed refreshes. It
+  changes when the next pass starts with a new tier (a rise wakes one at once),
+  not at the instant of the tier change. `null` only before the first pass.
+- `tiles.frames`: the newest `loopFrames` slots (complete or still being
+  fetched) plus every older frame that is already complete, oldest first. An
+  incomplete slot outside the target is withheld. Complete frames left by an
+  earlier, larger target stay listed until they leave the hour, so a fall from
+  live to warm removes nothing from the screen.
+- `refresh.frameTotal` = `min(loopFrames, slots)`; `refresh.frameIndex` counts
+  complete frames among the newest `loopFrames` slots. In `state:"history"` they
+  are progress toward the target.
+- `frameCount` still counts every candidate slot (withheld ones included) and
+  `completeFrameCount` every complete one; neither is a promise to deliver.
+
+The page takes "frames to expect" from the listing when `loopFrames` is present
+(`radarListed`: start count, loop readiness, the "Buffering · n of m" caption,
+adjacent-level warming), and from the largest of `tiles.frames.length`,
+`frameCount` and `refresh.frameTotal` for an older payload. The corner note reads
+"Refreshing · frame N of M" only while one of the newest M = `loopFrames` frames
+is on its way: the engine is acquiring (`refresh.state` `newest`/`history`, or
+`pending.newest/four/eight`), or the server already holds the frame at the
+drawn level (`levels[z]`) and only the page's decode is left. Idle at target,
+the page loops what it has with no note. A frame the engine stops listing is
+held only if it is already decoded; an undecoded one is dropped.
+
 ## Auto-only radar source and a quieter status (2026-10-09)
 
 Auto is the only source policy. There is no source picker, and nothing on the
@@ -434,6 +470,45 @@ engine treats the tab as open while the marker exists and its `last` is under
 tab is open and no touch (`presence` marker) has arrived for 30 minutes; the tier
 stays `live` with 8 frames but `prefetch` is off.
 
+## LAN viewing (2026-10-09)
+
+A LAN browser on the Radar tab counts as viewing, like the panel, and gets the
+`live` tier's eight-frame loop. This reverses the earlier panel-only rule.
+
+- **Evidence.** The page sends `view=radar` only while the Radar screen is active
+  and `document.hidden` is false; a hidden or minimised tab sends `view=none`
+  (and a `visibilitychange` sends it at once). The same page code runs on the
+  panel and on LAN browsers.
+- **Admission.** The same gate as every control side effect: a controller
+  address (loopback or private network, never a default gateway, so a forwarded
+  port cannot pose as a LAN viewer), same-origin (`Sec-Fetch-Site`, else
+  `Origin` vs `Host`), and the per-peer token bucket.
+- **Ordering.** Each LAN page is its own `viewSession`, ordered by its own
+  `viewSeq`; a delayed report cannot resurrect a view the page already left.
+  The panel keeps its single-owner `_view_transaction`; LAN pages never take
+  part in it, so neither can clear the other's view. Sessions are held in a
+  bounded table (`_LAN_VIEW_SESSIONS`, 64), forgotten after
+  `LAN_VIEW_ATTENDED_SEC` without a poll.
+- **Attended window.** A LAN view counts only while that page has sent
+  `touch=1` (pointer, key or wheel input) within `LAN_VIEW_ATTENDED_SEC`
+  (30 min, equal to `radar_attention.UNATTENDED_SEC`, the point at which an
+  open panel tab is judged on display rather than in use). Past it the view
+  stops counting: `live` drops to `warm`, which ages out 45 min after the last
+  counted view like any other attention. The next input restores `live`. The
+  panel has no such window: it is the display, and its unattended path already
+  drops prefetch.
+- **One marker.** `radar_viewing:{since,last}` is the union of every counting
+  viewer: `last` is the newest report among the panel and the counting LAN
+  pages, `since` carries over while reports stay within
+  `RADAR_VIEW_POLL_GAP_SEC`. It is removed when no viewer counts. A closed tab
+  sends nothing; its `last` lapses after `RADAR_VIEWING_LAPSE_SEC` (60 s) as a
+  silent panel's does. A counting LAN view also renews `radar_viewed`. The
+  engine reads both markers unchanged, so a counting LAN view also earns deep
+  history after 20 s of continuous viewing.
+- **Still panel-only:** `r=1` render credit (the watchdog's evidence),
+  `radar_activity` (the geography prebuild follows the panel's theme and
+  viewport), and `/radar-bad-tile` reports.
+
 `rainStatus` may read `"Rain Starting"`: the station's `evt_precip` event arrived
 after the latest observation (`precipStartTs` > `obsTs`), the observed status is
 dry, and the event was received within `RAIN_START_HOLD_SEC` (300 s). The parser keeps
@@ -459,7 +534,7 @@ worth looking at. `radar.attention` is published with every payload:
 
 | tier | when | acquisition |
 |---|---|---|
-| `live` | the Radar tab is open now (`radar_viewing` marker live) | newest at scan cadence, 8-frame loop, zoom/mode prefetch |
+| `live` | the Radar tab is open now on the panel or an attended LAN page (`radar_viewing` marker live) | newest at scan cadence, 8-frame loop, zoom/mode prefetch |
 | `warm` | a human touched the device (`presence` marker) or looked at radar within 45 min | a four-frame loop: the newest and three before it |
 | `watch` | weather present (rain hold 60 min, lightning hold 30 min, echo hold 60 min, forecast ≥ 50 % or precipitation words until < 30 %), or observations unknown (older than 5 min), or a usual glance hour, or a LAN browser polling within 15 min | Site: primary/newest Level III scan only. Region: 8 frames by day (06:00–23:00 local), newest only by night |
 | `rest` | quiet weather, nobody around | site listings every 15 min, no Site tiles or Level III products, a 4-tile zoom-5 MRMS sentinel at home every 60 min by day / 120 by night |
@@ -677,8 +752,10 @@ not the age of the last follower poll. It rechecks eligibility before firing
 and posts a normal settled commit, including the epoch claim when taking over.
 Reloaded panels recover this timer; LAN pages never auto-recenter.
 
-`_view_transaction`, `radar_viewing`, `radar_viewed`, `radar_activity` and `r=1`
-render counts are **panel-only (loopback)**. An admitted panel report updates
+`_view_transaction`, `radar_activity` and `r=1` render counts are **panel-only
+(loopback)**. `radar_viewing` and `radar_viewed` were panel-only until
+2026-10-09; an attended, visible LAN Radar tab now writes them too (see
+"LAN viewing"). An admitted panel report updates
 activity (including viewport and theme) whenever its view-ordering transaction
 accepts, regardless of camera ownership. The same acceptance gates
 `radar_viewed`, so a delayed radar poll cannot refresh the 15-minute hint after
@@ -1245,7 +1322,7 @@ Successful partial tiles survive another tile's failure or a budget yield.
 Multi-site retains eight source slots. Other-mode warming retains its existing
 adjacent-level work after its current-level tiles, within the same reserve.
 The `radar_viewed` 15-minute demand hint and runtime `radar_viewing:{since,last}`
-continuous-view gate survive. Hidden documents omit the view signal. Off-tab
+continuous-view gate survive (since 2026-10-09 an attended LAN view feeds both). Hidden documents omit the view signal. Off-tab
 passes fetch newest only and retain the hour on disk; warm view-start publishes
 that retained manifest without changed observation/fetch times. It also resumes
 missing opposite-mode warming; already resident rounds need no provider HTTP.
@@ -1342,7 +1419,8 @@ optional deployment choice, not a changed security or preference model.
 "scaleChoices":[{"meters":16093.44,"label":"10 mi"}, {"meters":40233.6,"label":"25 mi"}],
 "zoomAuto":true, "zoomAutoLevel":8, "zoomMin":4, "zoomMax":9,
 "zoomDesired":null, "zoomCapped":false, "zoomSource":"MRMS",
-"refresh":{"state":"history","frameIndex":4,"frameTotal":8}
+"loopFrames":8,
+"refresh":{"state":"history","frameIndex":4,"frameTotal":8,"loopFrames":8}
 ```
 
 `center` is **always the station**. `tiles.z/grid` describes the worker's latest
@@ -1359,8 +1437,8 @@ the actual aligned source timestamps in stacking order.
 
 The existing source, attribution, cadence, stale, observed/fetched time,
 partialCoverage, frame count/spacing/gap, site-reporting, source preference and
-fallback fields survive. `frameCount` counts candidate slots;
-`completeFrameCount` describes completed sets. The page's decoded inventory
+fallback fields survive. `frameCount` counts candidate slots (including slots
+withheld from `tiles.frames`, below); `completeFrameCount` describes completed sets. The page's decoded inventory
 (including frames on either side of a gap) reflects decoded coverage at its own current camera, not those server counters.
 
 `frameSpacingSec` is median

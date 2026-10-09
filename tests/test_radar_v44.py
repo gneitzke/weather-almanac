@@ -26,7 +26,7 @@ def test_radar_has_no_hatch_machinery_or_token():
 @pytest.mark.parametrize('count', range(9))
 @pytest.mark.parametrize('paused', [False, True])
 def test_retained_composite_stays_named_even_with_empty_inventory(count, paused):
-    script = function('radarLoopSync') + function('radarFrameWhen') + '''
+    script = function('radarLoopSync') + function('radarFrameWhen') + function('isNum') + function('radarListed') + '''
 const nodes=new Map(),$=id=>{if(!nodes.has(id))nodes.set(id,{dataset:{},style:{},setAttribute(){},removeAttribute(){}});return nodes.get(id);};
 const frames=Array.from({length:COUNT},()=>({ready:true,hasEcho:true,bitmap:{}}));
 const radarView={data:{observedTs:1,frameCount:COUNT},active:true,paused:PAUSED,current:{ts:1,ready:true,bitmap:{}},nextAt:0,loaded:frames,cycle:[]};

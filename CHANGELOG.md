@@ -7,6 +7,16 @@ to shared upstream code that the classic console benefits from too.
 ## 2026-10-09
 
 ### Radar
+- **No more "Refreshing · frame 4 of 8" forever.** When nobody is on the
+  Radar tab the engine builds a four-frame loop, but it still listed all eight
+  frames, so a page sat waiting for four that were never coming. The engine now
+  publishes the loop size it is building (`loopFrames`) and lists only those
+  frames plus any already complete; the page says "Refreshing" only while a
+  frame is actually on its way.
+- **A remote browser on the Radar tab gets the full loop.** A phone or laptop
+  showing Radar now counts as someone watching, like the panel, while the tab
+  is visible and has been touched, clicked, scrolled or typed on in the last
+  30 minutes. A hidden or forgotten tab stops counting.
 - **No source buttons.** The Auto, Region and site buttons are gone, and so is
   every trace of a manual choice: the `radar_source` file, its 45-minute hold,
   the site-refusal path and the `radarSource` poll parameter (an old page that

@@ -2967,7 +2967,7 @@
     if(pending&&radarPendingReady(pending)){radarAcceptSource();return;}
     radarTileSet(radarCamera,z).forEach(t=>add(f,t));
     if(radarGesture.state==='idle'&&radarCompositeJob)for(var t of radarCompositeJob.tiles)if(!radarCompositeJob.done.has(t.x+'/'+t.y))add(radarCompositeJob.f,t,true);
-    if(pending||radarReady().length<8){radarPumpTiles();return;}if(radarGesture.state!=='idle'){radarPumpTiles();return;}radarTileSet(radarCamera,z,1).forEach(t=>add(f,t));
+    if(pending||radarReady().length<radarFrameGoal()){radarPumpTiles();return;}if(radarGesture.state!=='idle'){radarPumpTiles();return;}radarTileSet(radarCamera,z,1).forEach(t=>add(f,t));
     for(var level of [z-1,z+1])if(level>=radarView.data.zoomMin&&level<=radarView.data.zoomMax){var p=radarWorldPoint(radarCamera.lat,radarCamera.lon,level);for(var y of [Math.floor(p[1]/256)-1,Math.floor(p[1]/256)])for(var x of [Math.floor(p[0]/256)-1,Math.floor(p[0]/256)])if(x>=0&&y>=0)add(f,{z:level,x,y});}
     if(radarGesture.state==='idle'&&radarCompositeJob)for(var t of radarCompositeJob.tiles)if(!radarCompositeJob.done.has(t.x+'/'+t.y))add(radarCompositeJob.f,t,true);
     radarPumpTiles();
@@ -3148,14 +3148,14 @@
   function radarFrameWhen(f){var day=radarDayLabel(f.ts);
     return (day?day+', ':'')+radarFrameLabel(f);
   }
-  function radarCouldLoop(){var ready=radarPlayback(),total=Math.min(8,Math.max(radarView.loaded.length,radarView.data.frameCount||0,radarView.data.refresh?.frameTotal||0))||8;return radarView.active&&!document.hidden&&ready.length>=(radarView.cycle.length?2:Math.min(4,total))&&ready.length>=2&&ready.every(f=>f.bitmap)&&ready.some(f=>f.hasEcho)&&!radarView.data.stale;}
+  function radarCouldLoop(){var ready=radarPlayback(),total=Math.min(8,Math.max(radarView.loaded.length,radarListed(radarView.data)))||8;return radarView.active&&!document.hidden&&ready.length>=(radarView.cycle.length?2:Math.min(4,total))&&ready.length>=2&&ready.every(f=>f.bitmap)&&ready.some(f=>f.hasEcho)&&!radarView.data.stale;}
   function radarLoopSync(){if(radarView.paused||radarReduced()&&!radarView.singleSweep){radarView.cycle=[];radarPruneFrames();}var r=radarView.data,ready=radarPlayback(),play=$('rad-play'),loop=$('rad-loop');if(!r||!radarView.active){loop.hidden=true;return;}
     loop.hidden=false;var intent=!radarView.paused&&(!radarReduced()||radarView.singleSweep);play.hidden=false;play.disabled=false;play.textContent=intent?'❙❙':'▶';play.setAttribute('aria-label',intent?'Pause radar loop':'Play radar loop');$('rad-track').dataset.frames=ready.length?'1':'0';
     var read=$('rad-frame-time'),f=radarView.current;read.removeAttribute('aria-label');
     /* The loop plays from four decoded scans and grows; the inventory is measured against the
        scans that EXIST in this window (a 10-min site has six per hour), never a hard eight -
        the old read said "Buffering · 6 of 8" forever while the loop was in fact running. */
-    var expected=Math.max(radarView.loaded.length,r.frameCount||0,(r.refresh&&r.refresh.frameTotal)||0);
+    var expected=Math.max(radarView.loaded.length,radarListed(r));
     var total=Math.min(8,expected)||8,startAt=Math.min(4,total);
     if(!radarView.cycle.length&&!f?.bitmap&&(ready.length<startAt||f&&!f.bitmap))read.textContent=(intent?(radarPendingRetry()?'Retrying · '+radarPendingRetry().reason+' · building loop':'Buffering'):'Paused')+' · '+ready.length+' of '+total;
     // Nothing above the display floor is not "clear": weak returns are not drawn,
@@ -3172,7 +3172,14 @@
   // acknowledgement cannot invalidate plates already decoded for that camera.
   // Source staging likewise owns the actual camera used to decode its plates.
   function radarWindowKey(r){return JSON.stringify([r.sourceId,r.siteId,r.center,r.tiles?.revision,r.tiles?.smooth,r.legend]);}
-  function radarStartCount(r=radarView.data){return Math.min(4,Math.max(r?.tiles?.frames?.length||0,r?.frameCount||0,r?.refresh?.frameTotal||0))||4;}
+  // Frames the engine will deliver. With radar.loopFrames it lists exactly its
+  // loop target plus frames already complete, so the listing is the answer;
+  // frameCount still counts every candidate slot and would promise frames it
+  // never fetches. An older payload: the largest of its counters, as before.
+  function radarListed(r){return isNum(r?.loopFrames)?(r.tiles?.frames?.length||0):Math.max(r?.tiles?.frames?.length||0,r?.frameCount||0,r?.refresh?.frameTotal||0);}
+  // Frames this window will hold once complete, at most eight.
+  function radarFrameGoal(r=radarView.data){return Math.min(8,radarListed(r))||8;}
+  function radarStartCount(r=radarView.data){return Math.min(4,radarListed(r))||4;}
   function radarPreload(r){if(!radarView.active||document.hidden)return;
     var windowKey=radarWindowKey(r);
     if(radarView.good?.revision&&radarView.good.revision!==r.tiles.revision){radarCancelJobs();radarEchoEpoch++;}
@@ -3182,7 +3189,9 @@
     radarView.loaded=frames.map(f=>{var identity={...f,sourceId:r.sourceId,revision:r.tiles.revision,smooth:!!r.tiles.smooth,remapRevision:r.tiles.remapRevision},key=radarFrameKey(identity),old=have.get(key);if(old){Object.assign(old,identity);have.delete(key);return old;}return {...identity,ready:false,hasEcho:false};});
     // An omitted scan is not a deletion. A truncated publish can arrive while
     // newest is pending; retain its decoded history until the hour expires.
-    have.forEach(f=>{if(!listed.has(f.stamp)&&f.ts>=newest-3600&&f.ts<=newest)radarView.loaded.push(f);else radarView.retired.push(f);});
+    // Only decoded frames are held: an undecoded one the engine stopped listing
+    // (outside a lowered loop target) would otherwise wait in the loop forever.
+    have.forEach(f=>{if(!listed.has(f.stamp)&&f.bitmap&&f.ts>=newest-3600&&f.ts<=newest)radarView.loaded.push(f);else radarView.retired.push(f);});
     radarView.loaded.sort((a,b)=>a.ts-b.ts);
     if(radarCompositeJob&&!radarView.loaded.includes(radarCompositeJob.f))radarCompositeJob=null;
     radarView.good=radarView.loaded.at(-1)||null;
@@ -3329,6 +3338,21 @@
     var reason=fallback?.reason==='daily-limit'?'Daily Level III limit reached':fallback?.reason==='level3-stalled'?'NOAA Level III delayed':'Level III unreachable';
     return reason+(r.native?' · loading IEM tiles · showing NOAA Level III':' · showing IEM tiles');
   }
+  // The loop the engine is building: radar.loopFrames (the attention tier's
+  // target). An older payload without it: every listed frame, at most eight.
+  function radarLoopTarget(r=radarView.data){return Math.min(8,isNum(r?.loopFrames)&&r.loopFrames>=1?r.loopFrames:Math.max(radarView.loaded.length,radarListed(r)))||8;}
+  // The engine is fetching toward that target (a pass underway, or a target
+  // milestone still pending), as opposed to idle with its loop complete.
+  function radarAcquiring(f=radarView.refresh||{}){var p=f.pending||radarView.data?.pending||{};return f.state==='newest'||f.state==='history'||!!(p.newest||p.four||p.eight);}
+  // The server already holds this frame at the level the page draws, so only
+  // decoding is left (frames from payloads without levels: assume so).
+  function radarDecodable(fr){var r=radarView.data,z=typeof radarCamera!=='undefined'&&radarCamera&&isNum(r?.zoomMin)?radarLevel():r?.tiles?.z;return !fr.levels||fr.levels[String(z)]===true;}
+  // "Refreshing · frame N of M" counts the newest M = target frames, and only
+  // while one of them is actually on its way. An idle engine at its target
+  // with a frame it will never fetch must not read as refreshing forever.
+  function radarRefreshCopy(){var loop=radarView.loaded.slice(-radarLoopTarget());
+    if(!loop.some(x=>!x.bitmap&&(radarAcquiring()||radarDecodable(x))))return '';
+    return 'Refreshing · frame '+loop.filter(x=>x.bitmap).length+' of '+loop.length;}
   function radarNoteRender(){
     var r=radarView.data,f=radarView.refresh,note=$('rad-note'),copy='';
     clearTimeout(radarIntent.noteTimer);if(!r)return;
@@ -3345,10 +3369,10 @@
     // The source caption carries any Level III fallback reason, once. A
     // renderer-only change (v2/IEM or Smooth) keeps neutral loop wording.
     else if(radarView.pendingSource&&f.state!=='failed')copy=radarView.pendingSource.variantOnly?'Playing previous view · updating newest frame':'Playing previous view · sharpening '+radarView.pendingSource.frames.filter(f=>f.bitmap).length+' of '+radarStartCount(radarView.pendingSource.data);
-    else if(radarView.holdingWindow&&f.state!=='failed')copy=(radarView.nextAt?'Playing previous view':'Previous view')+' · sharpening '+radarView.loaded.filter(f=>f.bitmap).length+' of '+Math.min(8,Math.max(radarView.loaded.length,r.frameCount||0));
-    else if((radarView.current?.bitmap&&radarView.loaded.some(f=>!f.bitmap))&&f.state!=='failed')copy='Refreshing · frame '+radarView.loaded.filter(f=>f.bitmap).length+' of '+Math.min(8,Math.max(radarView.loaded.length,r.frameCount||0));
+    else if(radarView.holdingWindow&&f.state!=='failed')copy=(radarView.nextAt?'Playing previous view':'Previous view')+' · sharpening '+radarView.loaded.filter(f=>f.bitmap).length+' of '+Math.min(8,Math.max(radarView.loaded.length,radarListed(r)));
+    else if(radarView.current?.bitmap&&f.state!=='failed'&&radarRefreshCopy())copy=radarRefreshCopy();
     else if(f.state==='newest')copy='Refreshing · newest frame';
-    else if(f.state==='history'&&radarView.loaded.length&&radarView.loaded.some(x=>!x.bitmap))copy='Refreshing · frame '+radarView.loaded.filter(x=>x.bitmap).length+' of '+Math.min(8,radarView.loaded.length);
+    else if(f.state==='history'&&radarRefreshCopy())copy=radarRefreshCopy();
     else if(f.state==='failed')copy="Couldn't refresh · showing "+radarFrameLabel(radarView.current||{});
     if(!copy)copy=radarView.zoomNote||'';
     note.textContent=copy;note.dataset.shown=String(!!copy);
@@ -3601,10 +3625,13 @@
 
   /* A human touched the screen, on any tab: the next poll tells the engine
      (its attention tiers warm the radar before the Radar tab is even tapped).
-     Pointer and keyboard input count; a browser left open never counts as a person. */
+     Pointer, keyboard and wheel input count; a browser left open never counts
+     as a person. On a LAN browser the same touch keeps its Radar view counting
+     as viewing (serve.py, LAN_VIEW_ATTENDED_SEC). */
   var presenceDirty = false;
   document.addEventListener("pointerdown", function () { presenceDirty = true; }, { passive: true, capture: true });
   document.addEventListener("keydown", function () { presenceDirty = true; }, { passive: true, capture: true });
+  document.addEventListener("wheel", function () { presenceDirty = true; }, { passive: true, capture: true });
   var POLL_MS      = 2000;
   var pollTimer = null, pollController = null;
   function schedulePoll() {

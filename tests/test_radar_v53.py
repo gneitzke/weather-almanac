@@ -30,7 +30,7 @@ def test_settled_report_is_intent_and_durable_is_only_default(serve_at, make_emi
     assert e._radar_read_intent()['zoom'] == 7
     e._do_radar()
     assert e._radar_result.zoom == 7
-    module._camera_persist_timer.join(2)
+    module._camera_persist_timer.join(2); module._flush_preferences()  # preference writer thread: wait for the durable write
     assert (tmp_path/'radar_zoom').read_text().strip() == '7'
     stamp = e._radar_preference_stamp()
     _get(url+q+'&radarMoving=0')

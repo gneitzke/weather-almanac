@@ -228,7 +228,11 @@ http://weather.local:8137
 
 Replace `weather` with your Pi's hostname if it differs. The page polls
 `/wx.json` every two seconds and renders the same live data the wall display
-shows. A status endpoint is also available:
+shows. A remote browser open on the Radar tab counts as someone watching, so
+the radar fetches its full eight-frame loop for it, as it does for the panel.
+It stops counting when the tab is hidden, or after 30 minutes with no tap,
+click, key press or scroll on that page, so a forgotten tab cannot keep the
+radar busy. A status endpoint is also available:
 
 ```
 http://weather.local:8137/health

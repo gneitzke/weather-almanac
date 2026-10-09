@@ -17,7 +17,8 @@
 #
 # Bind stays on 127.0.0.1 by default (chromium is local; no data leaves the box).
 # Set WFP_BIND=0.0.0.0 to expose /health (and the page) to the LAN for remote
-# monitoring and radar control — private-network browsers share the panel view.
+# monitoring and radar control — private-network browsers share the panel view,
+# and a visible LAN Radar tab with recent input counts as viewing (LAN viewing).
 # LAN mode protections (all also active on loopback):
 #   - Host allow-list (DNS rebinding): IP literals, localhost, this machine's
 #     hostname and hostname.local, plus WFP_ALLOWED_HOSTS (comma separated).
@@ -297,6 +298,29 @@ _count_lock = threading.Lock()
 # A separate session marker preserves radar_viewed's 15-minute demand hint.
 # The engine admits deep history only during a continuous, live view session.
 RADAR_VIEW_POLL_GAP_SEC = 5
+# The engine treats the tab as open while radar_viewing's `last` is younger than
+# this (almanac_emit.RADAR_VIEWING_LAPSE_SEC); a silent viewer lapses with it.
+RADAR_VIEWING_LAPSE_SEC = 60
+
+# LAN viewing. A LAN browser whose Radar tab is active and visible counts as
+# viewing, exactly like the panel, so it gets the live tier's full loop. The
+# page reports view=radar only while the tab is active and the document visible
+# (a hidden or minimised tab reports view=none), through the same admission as
+# every control side effect: controller address (never the default gateway),
+# same-origin, rate limited. A browser forgotten on Radar must not hold
+# acquisition at live forever, so a LAN view counts only while that page has
+# had real input (pointer, key, wheel: the page's touch=1) within
+# LAN_VIEW_ATTENDED_SEC. That is lib/radar_attention.UNATTENDED_SEC, the point
+# at which an open panel tab is judged on display rather than in use. Past it
+# the view stops counting: live falls to warm, which ages out 45 min after the
+# last touch like any other attention. The panel needs no such window: it is
+# the display itself, and its unattended path already sheds optional work.
+# Per page session, ordered by viewSeq: a delayed report cannot resurrect a
+# view the page already left. The table is bounded and forgets idle pages.
+LAN_VIEW_ATTENDED_SEC = 30 * 60
+_LAN_VIEW_SESSIONS = 64
+_lan_views = {}            # viewSession -> dict(seq, viewing, last, touched, seen)
+_panel_viewing_at = None   # the panel's last accepted view=radar report
 
 
 # A human touched a controller page (any tab): the page adds `touch` to its next
@@ -337,6 +361,49 @@ def _view_transaction(params):
     return True
 
 
+def _lan_view_transaction(params, now):
+    """Record one LAN page's ordered view report. Caller holds _count_lock and
+    has admitted the request. Returns the page's record, or None if refused."""
+    if any(len(params.get(k, [])) != 1 for k in ('viewSession', 'viewSeq', 'view')):
+        return None
+    session, seq = params['viewSession'][0], params['viewSeq'][0]
+    if (not re.fullmatch(r'[A-Za-z0-9-]{16,64}', session)
+            or not re.fullmatch(r'[0-9]{1,12}', seq)
+            or params['view'] not in (['radar'], ['none'])):
+        return None
+    for stale in [k for k, v in _lan_views.items() if not 0 <= now - v['seen'] < LAN_VIEW_ATTENDED_SEC]:
+        del _lan_views[stale]
+    record = _lan_views.get(session)
+    if record is None:
+        if len(_lan_views) >= _LAN_VIEW_SESSIONS:
+            del _lan_views[min(_lan_views, key=lambda k: _lan_views[k]['seen'])]
+        record = _lan_views[session] = dict(seq=-1, viewing=False, last=None, touched=None, seen=now)
+    if params.get('touch') == ['1']:
+        record['touched'] = now  # a delayed touch is still a person
+    seq = int(seq)
+    if seq <= record['seq']:
+        return None
+    record.update(seq=seq, seen=now, viewing=params['view'] == ['radar'])
+    if record['viewing']:
+        record['last'] = now
+    return record
+
+
+def _lan_viewing(record, now):
+    return (record['viewing'] and record['last'] is not None and record['touched'] is not None
+            and 0 <= now - record['last'] < RADAR_VIEWING_LAPSE_SEC
+            and 0 <= now - record['touched'] < LAN_VIEW_ATTENDED_SEC)
+
+
+def _publish_radar_viewing(now):
+    """radar_viewing is one marker for every viewer: the panel's report and
+    each LAN page still counting. Caller holds _count_lock."""
+    lasts = [r['last'] for r in _lan_views.values() if _lan_viewing(r, now)]
+    if _panel_viewing_at is not None and 0 <= now - _panel_viewing_at < RADAR_VIEWING_LAPSE_SEC:
+        lasts.append(_panel_viewing_at)
+    _write_radar_viewing(max(lasts) if lasts else None)
+
+
 def _note_presence():
     global _presence_at
     now = time.time()
@@ -359,28 +426,28 @@ def _note_presence():
                 pass
 
 
-def _write_radar_viewing(viewed):
+def _write_radar_viewing(last):
+    """`last`: the newest viewing report among counting viewers, or None."""
     marker = os.path.join(os.path.dirname(DATA), 'radar_viewing')
     tmp = f'{marker}.tmp.{os.getpid()}'
     try:
-        if not viewed:
+        if last is None:
             try:
                 os.unlink(marker)
             except FileNotFoundError:
                 pass
             return
-        now = time.time()
-        since = now
+        since = last
         try:
             with open(marker) as f:
                 previous = json.load(f)
-            if (0 <= now-previous['last'] < RADAR_VIEW_POLL_GAP_SEC
+            if (0 <= last-previous['last'] < RADAR_VIEW_POLL_GAP_SEC
                     and previous['since'] <= previous['last']):
                 since = previous['since']
         except (OSError, ValueError, TypeError, KeyError):
             pass
         with open(tmp, 'w') as f:
-            json.dump(dict(since=since, last=now), f)
+            json.dump(dict(since=since, last=last), f)
         os.replace(tmp, marker)
     except OSError:
         pass
@@ -918,7 +985,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if path == "/health":
             return self._health()
         if path == "/wx.json":
-            global _polls, _renders
+            global _polls, _renders, _panel_viewing_at
             address = self.client_address[0]
             panel, controller = _is_loopback(address), _is_controller(address)
             params = parse_qs(query, keep_blank_values=True)
@@ -927,21 +994,31 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             # image, a script tag) but must not steer the panel through it.
             same_site = not _cross_site(getattr(self, 'headers', None) or {})
             with _count_lock:  # staged preferences land on the writer thread
+                now = time.time()
                 _polls += 1
                 # A poll may note presence or update viewing without a
                 # camera commit. Gate all its side effects, never the read.
                 admitted = controller and same_site and _allow_control_write(address)
                 self._radar_throttled = controller and same_site and not admitted
-                view_accepted = False
+                view_accepted, viewing = False, False
                 if panel and same_site and params.get('r') == ['1']:
                     _renders += 1
                 if admitted:
                     camera_report = viewed_radar and params.get('radarTheme') in (['paper'], ['night'])
                     ordered = 'radarSession' in params
                     accepted = _camera_transaction(_radar_activity(params), params) if ordered and camera_report else panel and not ordered and _radar_owner is None and not _read_radar_intent().get('session')
+                    # The panel orders its reports by owner (_view_transaction);
+                    # each LAN page by its own session. Render credit (r=1),
+                    # radar_activity and bad-tile reports stay panel-only.
                     view_accepted = panel and _view_transaction(params)
+                    lan_view = None if panel else _lan_view_transaction(params, now)
                     if view_accepted:
-                        _write_radar_viewing(viewed_radar)
+                        _panel_viewing_at = now if viewed_radar else None
+                        viewing = viewed_radar
+                    elif lan_view is not None:
+                        viewing = _lan_viewing(lan_view, now)
+                    if view_accepted or lan_view is not None:
+                        _publish_radar_viewing(now)
                     if ordered and camera_report and accepted:
                         # Smooth changes what everyone sees: only the camera
                         # owner whose transaction was just accepted may change it.
@@ -961,14 +1038,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                         _write_radar_center(params.get('radarCenter', []))
                 if admitted and params.get('touch') == ['1']:
                     _note_presence()
-                if view_accepted and viewed_radar:
+                if viewing:
                     # Share only a timestamp with the emitter. Serialize writers
                     # and replace atomically so it never reads a partial epoch.
                     marker = os.path.join(os.path.dirname(DATA), "radar_viewed")
                     tmp = f"{marker}.tmp.{os.getpid()}"
                     try:
                         with open(tmp, "w") as f:
-                            f.write(str(time.time()))
+                            f.write(str(now))
                         os.replace(tmp, marker)
                     except OSError:
                         pass  # an optional demand hint must never break polling

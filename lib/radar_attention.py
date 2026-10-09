@@ -27,7 +27,9 @@ for two hours after that update (one missed hourly refresh), and when the
 forecast goes missing (a failed fetch blanks it) a positive call is held for at
 most 15 minutes more, never renewed by the blank. An
 observation older than five minutes is unknown, not dry: unknown keeps at
-least watch. A LAN browser polling is weak evidence: watch at most, never live.
+least watch. A LAN browser merely polling is weak evidence: watch at most. A LAN
+browser visible on the Radar tab, with input in the last 30 minutes, is viewing
+like the panel (serve.py writes radar_viewing for it): live.
 """
 from collections import Counter
 import json

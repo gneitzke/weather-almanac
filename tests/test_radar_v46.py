@@ -17,7 +17,7 @@ def function(name):
 def run(body):
     script = '\n'.join(function(name) for name in (
         'radarWindowKey', 'radarFrameKey', 'radarPruneFrames', 'radarReady', 'radarPlayback',
-        'radarUpdateReady', 'radarCouldLoop', 'radarPreload')) + '''
+        'radarUpdateReady', 'radarCouldLoop', 'radarPreload', 'isNum', 'radarListed')) + '''
 let reduced=false;const radarReduced=()=>reduced,document={hidden:false},radarGesture={state:'idle'};
 const radarQueueTiles=()=>{},radarWake=()=>{};let radarEchoDirty=false,radarCompositeJob=null;
 const radarView={active:true,paused:false,started:false,cycle:[],retired:[],loaded:[],data:{sourceId:'a',tiles:{revision:'r1'},frameCount:8}};

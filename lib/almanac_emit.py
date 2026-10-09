@@ -1845,6 +1845,18 @@ class AlmanacEmitter:
     def _radar_attention_knobs(self):
         return self._radar_attention.knobs(self._radar_local_hour)
 
+    @staticmethod
+    def _radar_loop_target(ctx):
+        """Frames this pass acquires for the loop: the attention tier's target
+        when active (warm 4, live 8, watch 8 by day / 1 by night), one for a
+        primary-only or newest-only site, otherwise 8 while the tab was viewed
+        recently, 4 while staging a source change, else the newest alone.
+        Published as radar.loopFrames: the page is never told to expect more."""
+        if ctx.get('loop_target'):
+            return ctx['loop_target']
+        limit = ctx.get('frames_target')
+        return limit if limit else (RADAR_LOOP_FRAMES if ctx.get('viewed') else 4 if ctx.get('staging_source') else 1)
+
     def _radar_effective_tier(self):
         return self._radar_attention.tier if self._radar_attention_active() else 'live'
 
@@ -2392,7 +2404,7 @@ class AlmanacEmitter:
             return False
 
     def _radar_deep_view_delay(self, ctx):
-        """Recent continuous loopback viewing AND residence at this geometry."""
+        """Recent continuous viewing (panel, or an attended LAN page) AND residence at this geometry."""
         try:
             marker = Path(self.output_path).with_name('radar_viewing')
             viewing = json.loads(marker.read_text())
@@ -2416,12 +2428,16 @@ class AlmanacEmitter:
 
     def _radar_publish_refresh(self, ctx, snapshot=None, **changes):
         self._radar_checkpoint(ctx)
+        loop = self._radar_loop_target(ctx)
         if snapshot is not None:
             snapshot = _radar_tile_snapshot(snapshot)
-            changes['frameIndex'] = sum(f['complete'] for f in snapshot.frames)
+            # Progress toward the loop the engine is building, never toward
+            # retained slots it will not fetch (published frames: _radar_payload).
+            changes['frameIndex'] = sum(f['complete'] for f in snapshot.frames[-loop:])
         refresh = dict(state='newest', frameIndex=0, frameTotal=1)
         refresh.update(ctx.get('refresh', {}))
         refresh.update({k:v for k,v in changes.items() if k in refresh})
+        refresh.update(loopFrames=loop, frameTotal=min(refresh['frameTotal'], loop))
         phase = refresh['state']
         marks = ctx.setdefault('milestones', set())
         for name, reached in (('listings', refresh['frameTotal']>1), ('fourServerFrames', refresh['frameIndex']>=4), ('eightServerFrames', refresh['frameIndex']>=8)):
@@ -2624,9 +2640,13 @@ class AlmanacEmitter:
     def _radar_retained_refresh(self, state):
         snap = self._radar_result
         with self._radar_lock:
-            self._radar_refresh = dict(state=state, frameIndex=sum(f['complete'] for f in snap.frames),
-                                      frameTotal=len(snap.frames), intent=dict(self._radar_refresh.get('intent', {})),
-                                      pending=dict(self._radar_pending), **self._radar_retry_fields())
+            # A pass that ends without a new target keeps the last one in force.
+            loop = self._radar_refresh.get('loopFrames')
+            window = snap.frames[-loop:] if loop else snap.frames
+            self._radar_refresh = dict(state=state, frameIndex=sum(f['complete'] for f in window),
+                                      frameTotal=len(window), intent=dict(self._radar_refresh.get('intent', {})),
+                                      pending=dict(self._radar_pending), **self._radar_retry_fields(),
+                                      **({'loopFrames': loop} if loop else {}))
         self._radar_emit_now()
 
     def _radar_request_gate(self, source, deadline, reserve=0):
@@ -3874,6 +3894,8 @@ class AlmanacEmitter:
         newest_only = source == 'iem-nexrad-n0b' and (self._radar_primary_only(ctx) or
             _radar_variant(ctx, source) == 'native' and ctx.get('native_ceiling') == 'newest-only')
         slots = [newest] if newest_only else slots or list(range(newest - RADAR_HISTORY_SEC, newest + 1, settings['cadence']))
+        # The loop this pass builds: every refresh and publication below says so.
+        ctx['loop_target'] = 1 if newest_only else self._radar_loop_target(dict(ctx, loop_target=None))
         if newest_only:
             self._radar_publish_refresh(ctx, frameTotal=1)
         frames = {t: _radar_frame(source, t, ctx, _radar_site_pairs(ctx, t)
@@ -3937,7 +3959,8 @@ class AlmanacEmitter:
                    if source == 'iem-nexrad-n0b' else dict(scanning_slowly=False)),
                 partial_coverage=_radar_partial_coverage(source, frames[newest], ctx))
             self._radar_result_stamp = ctx.get('preference_stamp')
-            self._radar_publish_refresh(ctx, snapshot=snapshot, frameIndex=sum(f['complete'] for f in frames.values()))
+            self._radar_publish_refresh(ctx, snapshot=snapshot,
+                frameIndex=sum(frames[t]['complete'] for t in sorted(frames)[-target:]))
             return True
         # Disk tiles survive tab closure, camera moves and emitter restarts.
         for t in slots:
@@ -3946,7 +3969,7 @@ class AlmanacEmitter:
             f['complete'] = all(all(_radar_present(ctx,source,site,scan,ctx['zoom'],x,y)
                 for x,y,_,_ in _radar_site_tiles(ctx,site)) for site,scan in pairs)
         limit = ctx.get('frames_target')  # the attention tier's loop size when active
-        target = min(limit if limit else (RADAR_LOOP_FRAMES if ctx['viewed'] else 4 if ctx.get('staging_source') else 1), len(slots))
+        target = min(ctx['loop_target'], len(slots))
         def pending_work():
             count = sum(frames[t]['complete'] for t in slots[-target:])
             self._radar_pending = dict(newest=not frames[newest]['complete'],
@@ -4045,7 +4068,7 @@ class AlmanacEmitter:
                                 for key in self._radar_native_groups.get(group, ()):
                                     if key in self._radar_tiles:
                                         self._radar_tiles.move_to_end(key)
-                        self._radar_publish_refresh(ctx, state='history', frameTotal=len(slots))
+                        self._radar_publish_refresh(ctx, state='history', frameTotal=target)
                         try:
                             frame = build(t, ctx['deadline'], pairs=pairs) if source == 'iem-nexrad-n0b' else build(t, ctx['deadline'])
                         except (TimeoutError, _RadarBudget) as error:
@@ -5054,9 +5077,17 @@ class AlmanacEmitter:
             nearest.update(ageSec=max(0, int(now-nearest['newestTs'])) if nearest['newestTs'] is not None else None,
                            checkedAt=local(nearest['checkedTs']), nextCheckAt=local(nearest['nextCheckTs']))
         tiles = dict(snap.tiles or {})
+        # The loop target in force (refresh.loopFrames). Publish the newest
+        # `loop` slots, which the engine is completing, plus any older frame
+        # that is already complete (left by an earlier, larger target). An
+        # incomplete slot outside the target is never fetched: listing it told
+        # the page to wait for it forever ("Refreshing · frame 4 of 8").
+        loop = refresh.get('loopFrames')
+        loop = loop if isinstance(loop, int) and not isinstance(loop, bool) and loop > 0 else None
+        withheld = set() if loop is None else {f['ts'] for f in snap.frames[:-loop] if not f['complete']}
         tiles['frames'] = [{k:v for k,v in dict(f,at=local(f['ts']),**({'observedRange':_radar_observed_range(f)}
                                if _radar_observed_range(f) else {})).items() if k not in ('complete','publishable','acquiredSites')}
-                           for f in tiles.get('frames',())]
+                           for f in tiles.get('frames',()) if f['ts'] not in withheld]
         return dict(available=snap.available,reason=snap.reason,geo=snap.geo,tiles=tiles,
             intent=tiles.get('intent', {}), geometry=tiles.get('geometry'), camera=tiles.get('camera'),
             advertisedTs=max((f['ts'] for f in snap.frames), default=None), acquiredTs=snap.ts_frame,
@@ -5066,7 +5097,7 @@ class AlmanacEmitter:
             sourceMode=snap.source_mode,siteId=snap.site_id,sources=list(snap.sources),
             sites=[dict(s,ageSec=int(now-s['newestTs']) if s['newestTs'] is not None else None) for s in snap.sites],
             sitesConsidered=snap.sites_considered,sitesDrawn=len(snap.sites),
-            refresh=refresh or dict(state='idle',frameIndex=0,frameTotal=0),
+            refresh=refresh or dict(state='idle',frameIndex=0,frameTotal=0),loopFrames=loop,
             scanningSlowly=snap.scanning_slowly,latestOnly=snap.source_mode=='site' and snap.scan_cadence_sec is None and len(snap.frames)==1,
             scanCadenceSec=snap.scan_cadence_sec,scanMode=snap.scan_mode,scanModeSource=snap.scan_mode_source,
             sourceId=snap.source_id,

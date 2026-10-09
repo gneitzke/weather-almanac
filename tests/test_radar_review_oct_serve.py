@@ -382,11 +382,15 @@ def test_radar_tiles_skip_utime_geography_keeps_its_lru_clock(serve_at, tmp_path
         path.parent.mkdir(parents=True)
         path.write_bytes(b'\x89PNG')
         os.utime(path, (1000, 1000))
+    # Record the server's own utime calls: the filesystem's atime is not
+    # evidence, since Linux relatime refreshes a day-old atime on any read.
+    touched, utime = [], os.utime
+    monkeypatch.setattr(os, 'utime', lambda path, *a, **k: (touched.append(os.fspath(path)), utime(path, *a, **k))[1])
     for path in (tile, geo):
         response = _raw(url, b'GET /' + str(path.relative_to(tmp_path)).encode() + b' HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n')
         assert _status(response) == 200 and b'immutable' in response
-    assert os.stat(tile).st_atime == 1000
-    assert os.stat(geo).st_atime > 1000
+    assert not any(os.path.samefile(p, tile) for p in touched)
+    assert any(os.path.samefile(p, geo) for p in touched)
 
 
 # --- B6 /health radar block -------------------------------------------------------

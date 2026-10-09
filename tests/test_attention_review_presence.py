@@ -21,7 +21,9 @@ def test_presence_failed_write_does_not_consume_throttle(server, monkeypatch, tm
     ('127.0.0.1', 'touch', False, False), ('127.0.0.1', 'touch=1&touch=0', False, False),
     ('192.168.1.2', 'touch=1&view=radar', True, False),
     ('127.0.0.1', 'view=radar', False, True)])
-def test_presence_trusts_controllers_but_viewing_only_panel(server, monkeypatch, tmp_path, ip, query, present, viewed):
+def test_presence_trusts_controllers_but_unordered_lan_view_is_not_viewing(server, monkeypatch, tmp_path, ip, query, present, viewed):
+    # A LAN page views only through an ordered report (viewSession/viewSeq) with
+    # input behind it: tests/test_radar_lan_viewing.py. A bare view=radar does not.
     # Invoke the handler without binding a socket or contacting any address.
     handler_class = next(c for c in vars(server).values() if isinstance(c, type)
         and c.__module__ == server.__name__ and hasattr(c, 'do_GET'))
