@@ -15,7 +15,7 @@ SITE = 'iem-nexrad-n0b'
 
 @pytest.fixture
 def scene(make_emitter, hybrid, multisite, tmp_path, monkeypatch):
-    (tmp_path/'radar_source').write_text('mosaic')
+    hybrid.pin('mosaic')
     emitter = make_emitter()
     contexts = []
     publish = emitter._radar_publish_refresh
@@ -80,19 +80,20 @@ def test_site_warming_lru_identity_once_and_no_history(scene, hybrid, multisite)
     assert not hybrid.calls and not multisite.calls
 
 
-@pytest.mark.parametrize('mode,zoom', [('site',7), ('site',8), ('mosaic',8)])
+@pytest.mark.parametrize('mode,zoom', [('site',7), ('site',8), ('mosaic',6)])
 def test_settled_mode_press_has_zero_listing_and_newest_requests(scene, hybrid, multisite, tmp_path, monkeypatch, mode, zoom):
     emitter, ctx = scene
     if mode == 'mosaic':
-        # Begin in site mode with no mosaic knowledge or tiles at all.
+        # Begin in site mode at zoom 7 with no mosaic knowledge or tiles at
+        # all; Auto's Site warms Region there, so zooming out to 6 is warm.
         emitter._radar_newest.clear(); emitter._radar_tiles.clear()
         for path in (tmp_path/'radar').rglob('*.png'): path.unlink()
         (tmp_path/'radar_viewed').unlink()
-        (tmp_path/'radar_source').write_text('site'); emitter._do_radar()
-        ctx.update(sites=list(emitter._radar_result.sites), refresh=dict(state='idle'),
-                   preference_stamp=emitter._radar_preference_stamp())
+        hybrid.pin('site'); (tmp_path/'radar_zoom').write_text('7'); emitter._do_radar()
+        source, site_ctx = emitter._radar_idle_context
+        assert source == SITE
         hybrid.view()
-        emitter._radar_prefetch(SITE, ctx)
+        emitter._radar_prefetch(SITE, dict(site_ctx, viewed=True, refresh=dict(state='idle')))
     else:
         emitter._radar_prefetch(MRMS, ctx)
     hybrid.calls.clear(); multisite.calls.clear()
@@ -100,7 +101,7 @@ def test_settled_mode_press_has_zero_listing_and_newest_requests(scene, hybrid, 
         if k[0]==SITE else ae.RADAR_IEM_TILE_TEMPLATE.format(stamp=ae.datetime.fromtimestamp(k[3],ae.timezone.utc).strftime('%Y%m%d%H%M'),z=k[4],x=k[5],y=k[6]) for k in emitter._radar_tiles}
     # A switch stages four frames; newest remains a cache hit, history may fetch.
     (tmp_path/'radar_viewed').unlink()
-    (tmp_path/'radar_source').write_text(mode)
+    hybrid.pin(mode)
     (tmp_path/'radar_zoom').write_text(str(zoom))
     emitter._do_radar()
     assert emitter._radar_result.source_mode == mode
@@ -146,7 +147,7 @@ def test_listing_failure_is_retried_independently(scene, multisite, monkeypatch)
 def test_site_mode_neighbour_press_is_a_cache_hit(scene, hybrid, multisite, tmp_path, zoom):
     emitter, ctx = scene
     (tmp_path/'radar_viewed').unlink()
-    (tmp_path/'radar_source').write_text('site'); emitter._do_radar()
+    hybrid.pin('site'); emitter._do_radar()
     ctx.update(preference_stamp=emitter._radar_preference_stamp(), refresh=dict(state='idle'))
     hybrid.view(); emitter._radar_prefetch(SITE, ctx)
     warm=set(emitter._radar_tiles);hybrid.calls.clear(); multisite.calls.clear()
@@ -159,7 +160,7 @@ def test_site_mode_neighbour_press_is_a_cache_hit(scene, hybrid, multisite, tmp_
 
 
 def test_settled_mosaic_newest_precedes_cross_mode_warm_and_press(make_emitter, hybrid, multisite, tmp_path, monkeypatch):
-    (tmp_path/'radar_source').write_text('mosaic'); hybrid.view()
+    hybrid.pin('mosaic'); hybrid.view()
     emitter = make_emitter()
     request = emitter._radar_request
     events = []
@@ -181,17 +182,19 @@ def test_settled_mosaic_newest_precedes_cross_mode_warm_and_press(make_emitter, 
         publish(ctx, **changes)
         if emitter._radar_result.source_mode=='site': publications.append(sum(f['complete'] for f in emitter._radar_result.frames))
     monkeypatch.setattr(emitter, '_radar_publish_refresh', capture)
-    (tmp_path/'radar_source').write_text('site'); (tmp_path/'radar_zoom').write_text('7')
+    hybrid.pin('site'); (tmp_path/'radar_zoom').write_text('7')
     emitter._do_radar()
     assert emitter._radar_result.source_mode == 'site'
-    assert publications and publications[0] >= min(4,len(emitter._radar_result.frames))
+    # Auto publishes a source switch once its newest frame is publishable; the
+    # page keeps the old loop until four of the new one are decoded.
+    assert publications and publications[0] >= 1
     assert not any('operation=list' in u for _,u in events)
 
 
 def test_other_mode_metadata_and_tiles_use_background_reserve(scene, hybrid, tmp_path, monkeypatch):
     emitter, ctx = scene
     (tmp_path/'radar_viewed').unlink()
-    (tmp_path/'radar_source').write_text('site'); emitter._do_radar()
+    hybrid.pin('site'); emitter._do_radar()
     ctx.update(preference_stamp=emitter._radar_preference_stamp())
     emitter._radar_forget(MRMS)
     hybrid.view()
@@ -219,7 +222,7 @@ def test_site_loop_cannot_evict_warmed_mode_or_zoom_tiles(scene, hybrid, multisi
     emitter._radar_forget(SITE)
     monkeypatch.setattr(ae, 'RADAR_REQUESTS_PER_MIN', 1000)
     multisite.calls.clear()
-    (tmp_path/'radar_source').write_text('site'); emitter._do_radar()
+    hybrid.pin('site'); emitter._do_radar()
     assert not any(c[0]=='tile' and ('/7/' in c[2] or '/9/' in c[2]) for c in multisite.calls)
     assert len(emitter._radar_frames) == 8
     assert all(f['complete'] for f in emitter._radar_frames)

@@ -14,7 +14,7 @@ SCENARIO = r'''async kind=>{
   radarView.receivedAt=clock;radarView.receivedAge=0;radarView.data.stale=false;
   radarGesture.state='idle';radarIdlePrefetchAt=Infinity;
   radarGeoRequest=()=>{};radarOverlayBuild=()=>{};radarPostIntent=()=>{};
-  radarQueueTiles=()=>{};radarSource.desired=null;radarView.pendingSource=null;
+  radarQueueTiles=()=>{};radarView.pendingSource=null;
   radarCamera={...radarView.data.center,zoom:8};
   radarIntent.cameraKey=JSON.stringify(radarCamera);radarIntent.postedAt=0;
   const frames=radarView.data.tiles.frames.map(f=>({...f,sourceId:radarView.data.sourceId,revision:radarView.data.tiles.revision,levels:{'6':true,'7':true,'8':true,'9':true}}));

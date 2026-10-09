@@ -24,7 +24,7 @@ def emitter_for(make_emitter, source):
 
 
 @pytest.mark.parametrize('source', [MRMS, RV])
-@pytest.mark.parametrize('trigger', ['zoom', 'center', 'restart', 'source'])
+@pytest.mark.parametrize('trigger', ['zoom', 'center', 'restart'])
 def test_intent_only_tiles_and_validation_clock_does_not_slide(make_emitter, hybrid, tmp_path, source, trigger):
     emitter = emitter_for(make_emitter, source)
     emitter._do_radar()
@@ -36,8 +36,6 @@ def test_intent_only_tiles_and_validation_clock_does_not_slide(make_emitter, hyb
         (tmp_path/'radar_zoom').write_text('7')
     elif trigger == 'center':
         (tmp_path/'radar_center').write_text('52.6,13.5' if source == RV else '47.7,-122.2')
-    elif trigger == 'source':
-        (tmp_path/'radar_source').write_text('mosaic')
     else:
         emitter._radar_restart = True
     # Force native requests even for a source-only/restart pass at the same crop.
@@ -234,19 +232,19 @@ def test_tile_time_does_not_extend_validation_lifetime(make_emitter, hybrid, sou
 
 def test_switch_back_reuses_each_sources_knowledge(make_emitter, hybrid, multisite, tmp_path):
     emitter = make_emitter()
-    (tmp_path/'radar_source').write_text('mosaic'); emitter._do_radar()
+    hybrid.pin('mosaic'); emitter._do_radar()
     mrms_validation = emitter._radar_newest[(MRMS, None)][0]
-    (tmp_path/'radar_source').write_text('site'); emitter._do_radar()
+    hybrid.pin('site'); emitter._do_radar()
     assert emitter._radar_result.source_id == SITE
     assert any(c[0] == 'list' for c in multisite.calls)
     hybrid.mono = 10
     hybrid.calls.clear(); multisite.calls.clear()
-    (tmp_path/'radar_source').write_text('mosaic')
+    hybrid.pin('mosaic')
     (tmp_path/'radar_zoom').write_text('7'); emitter._do_radar()
     assert emitter._radar_result.source_id == MRMS
     assert set(kinds(hybrid.calls)) == {'TILE'}
     assert emitter._radar_newest[(MRMS, None)][0] == mrms_validation
-    (tmp_path/'radar_source').write_text('site')
+    hybrid.pin('site')
     (tmp_path/'radar_zoom').write_text('9'); emitter._do_radar()
     assert emitter._radar_result.source_id == SITE
     assert multisite.calls and {c[0] for c in multisite.calls} == {'tile'}

@@ -31,7 +31,8 @@ def verify(browser, server, origin, patch, theme, output):
     origin.delay = .04
     origin.newest_ts = int(time.time())//120*120
     (server.root/'radar_zoom').write_text('8')
-    (server.root/'radar_source').write_text('mosaic')
+    # Auto is the only source policy; this scenario measures Region.
+    patch.setattr(ae.AlmanacEmitter, '_radar_auto_source', lambda self, ctx, site_ok: 'mosaic')
     (server.root/'radar_viewed').write_text(str(time.time()))
     app = SimpleNamespace(config=make_config(Station={'Latitude':'47.61', 'Longitude':'-122.33'}),
                           obsParser=SimpleNamespace(api_data={}))

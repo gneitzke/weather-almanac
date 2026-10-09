@@ -338,7 +338,7 @@ def test_intent_header_reports_owner_idle(server, monkeypatch):
 def test_site_to_site_handoff_says_switching():
     run_remote(r'''
 const p=page();await p.poll();
-p.run("radarView.data={...manifest(),sourceId:'iem-nexrad-n0b',sourceMode:'site',siteId:'KATX',sourcePref:'auto',native:true};radarView.pendingSource={frames:[],data:{...manifest(),sourceId:'iem-nexrad-n0b',sourceMode:'site',siteId:'KRTX'}};assert.match(caption(),/^Switching to /);radarView.data.native=false;radarView.pendingSource={frames:[],variantOnly:true,data:{...radarView.data,native:true}};assert.match(caption(),/^Restoring NOAA Level III/)");
+p.run("radarView.data={...manifest(),sourceId:'iem-nexrad-n0b',sourceMode:'site',siteId:'KATX',native:true};radarView.pendingSource={frames:[],data:{...manifest(),sourceId:'iem-nexrad-n0b',sourceMode:'site',siteId:'KRTX'}};assert.match(caption(),/^Switching to /);radarView.data.native=false;radarView.pendingSource={frames:[],variantOnly:true,data:{...radarView.data,native:true}};assert.match(caption(),/^Restoring NOAA Level III/)");
 ''')
 
 

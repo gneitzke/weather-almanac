@@ -109,7 +109,7 @@ def verify(browser, server, origin, patch, theme, output):
             painted_at = page.evaluate('ts=>radarPaints.find(p=>p.ts===ts).at', stamp)
             elapsed = (painted_at-browser_started)/1000
             latency = fired_at-ready+elapsed
-            read = page.locator('#rad-asof').inner_text()
+            read = page.locator('#rad-frame-time').inner_text()
             row = dict(stamp=stamp, readyTs=ready, pollTs=fired_at,
                        discoveryWaitSec=fired_at-ready, onScreenSec=round(latency, 3),
                        ageSec=round(fired_at-stamp+elapsed, 3),

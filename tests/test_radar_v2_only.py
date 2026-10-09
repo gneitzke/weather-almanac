@@ -256,7 +256,7 @@ assert.equal(radarView.pendingSource,null);assert.equal(radarView.data.native,!N
 
 def test_region_soft_ceiling_warms_primary_newest_native(
         make_emitter, hybrid, multisite, native, monkeypatch, tmp_path):
-    (tmp_path/'radar_source').write_text('mosaic')
+    hybrid.pin('mosaic')
     (tmp_path/'radar_viewed').unlink(); (tmp_path/'radar_viewing').unlink()
     e = make_emitter(); e._radar_native_budget.add(budget.NATIVE_NEWEST_ONLY_BYTES+1)
     e._radar_attention.forced = e._radar_attention.tier = 'live'

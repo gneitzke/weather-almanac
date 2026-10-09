@@ -47,7 +47,14 @@ def verify(browser, server, origin, patch, theme, output, flaky, cold=False, sit
         return png((12,145,16,255)) if path.startswith('/site/') else raw
     origin.response=response;origin.delay=.015
     origin.behavior=lambda path,n: 'hang' if flaky and ('/tile/' in path or '/site/' in path) and n==1 and int(hashlib.sha256(path.encode()).hexdigest()[:8],16)%10<3 else 'normal'
-    (server.root/'radar_zoom').write_text('8');(server.root/'radar_source').write_text('mosaic');(server.root/'radar_viewed').write_text(str(time.time()))
+    (server.root/'radar_zoom').write_text('8');(server.root/'radar_viewed').write_text(str(time.time()))
+    # Auto is the only source policy and a source changes only with a settled zoom.
+    # Pin its verdict to zoom (site at 9+, no coverage evidence needed) so the
+    # Region zoom steps stay Region and zoom 9 <-> 8 is the source switch.
+    def verdict(self,ctx,site_ok):
+        zoom=ctx['desired'] if ctx['desired'] is not None else ctx['auto_zoom']
+        return 'site' if site_ok and zoom>=9 else 'mosaic'
+    patch.setattr(ae.AlmanacEmitter,'_radar_auto_source',verdict)
     app=SimpleNamespace(config=make_config(Station={'Latitude':'47.61','Longitude':'-122.33'}),obsParser=SimpleNamespace(api_data={}))
     e=ae.AlmanacEmitter(SimpleNamespace(app=app,Obs={},Met={},Astro={},Sager={}),output_path=str(server.root/'wx.json'))
     publications=[];logs=[]
@@ -67,7 +74,7 @@ def verify(browser, server, origin, patch, theme, output, flaky, cold=False, sit
         nonlocal last_tick
         e._check_radar_zoom();now=time.monotonic();clock.advance(now-last_tick);last_tick=now;page.wait_for_timeout(50)
     def state():
-        return page.evaluate('''({elapsed:performance.now()-(window.v57Tap??performance.now()),camera:radarCamera,source:radarView.data?.sourceId,ready:radarReady().length,stamp:radarView.current?.stamp,bitmap:!!radarView.current?.bitmap,pending:!!radarView.pendingSource,desired:radarSource.desired,caption:document.getElementById('rad-src-cap').textContent,read:document.getElementById('rad-frame-time').textContent,note:document.getElementById('rad-note').textContent,switch:radarSwitch,owned:radarIntent.owned})''')
+        return page.evaluate('''({elapsed:performance.now()-(window.v57Tap??performance.now()),camera:radarCamera,source:radarView.data?.sourceId,ready:radarReady().length,stamp:radarView.current?.stamp,bitmap:!!radarView.current?.bitmap,pending:!!radarView.pendingSource,caption:document.getElementById('rad-src-cap').textContent,read:document.getElementById('rad-frame-time').textContent,note:document.getElementById('rad-note').textContent,switch:radarSwitch,owned:radarIntent.owned})''')
     try:
         page.goto(server.url+'/?tabs=1&theme='+theme);page.locator('.tab[data-screen="s-radar"]').click()
         end=time.monotonic()+80
@@ -77,17 +84,13 @@ def verify(browser, server, origin, patch, theme, output, flaky, cold=False, sit
             r=state()
             if r['ready']>=4 and r['owned']:break
         assert r['ready']>=4, r
-        steps=[('zoom',7),('zoom',6),('zoom',7),('zoom',8),('mode','site'),('mode','mosaic'),('mode','site'),('mode','mosaic')]
-        if cold:steps=[('mode','site'),('mode','mosaic')]
+        steps=[('zoom',7),('zoom',6),('zoom',7),('zoom',8),('zoom',9),('zoom',8),('zoom',9),('zoom',8)]
+        if cold:steps=[('zoom',9),('zoom',8)]
         for kind,value in steps:
             start=time.monotonic();before=state();seen=[];first=None;retry=None
-            expected_mode='iem-nexrad-n0b' if kind=='mode' and value=='site' else 'iem-mrms-lcref'
+            expected_mode='iem-nexrad-n0b' if value>=9 else 'iem-mrms-lcref'
             accepted_source=False
-            if kind=='zoom':
-                page.evaluate('(z)=>{window.v57Tap=performance.now();radarZoomChange(z-Math.round(radarCamera.zoom));}',value)
-            else:
-                caption=page.evaluate('''async mode=>{window.v57Tap=performance.now();radarChooseSource(mode);return await new Promise(resolve=>requestAnimationFrame(()=>resolve(document.getElementById('rad-src-cap').textContent)));}''',value)
-                assert 'Switching to' in caption, caption
+            page.evaluate('(z)=>{window.v57Tap=performance.now();radarZoomChange(z-Math.round(radarCamera.zoom));}',value)
             while time.monotonic()-start<90:
                 tick();r=state();r['elapsed']/=1000;seen.append(r)
                 assert r['source']!='rainviewer', r
@@ -95,16 +98,16 @@ def verify(browser, server, origin, patch, theme, output, flaky, cold=False, sit
                 if accepted_source:assert r['source']==expected_mode,r
                 accepted_source=accepted_source or r['source']==expected_mode
                 assert r['bitmap'] or before['bitmap'] is False, r
-                target=r['camera']['zoom']==value if kind=='zoom' else r['source']==expected_mode and not r['pending']
+                target=r['camera']['zoom']==value and r['source']==expected_mode and not r['pending']
                 if target and r['ready']>=4:
                     if first is None:first=(r['stamp'],r['elapsed'])
                     elif r['stamp']!=first[0]:break
                 # One 100ms monitor turn is allowed for real event-loop scheduling;
                 # the deterministic harness invokes the exact 20s timer callback.
-                if r['elapsed']>=20 and retry is None and (r['switch'] and r['switch']['retry'] or r['elapsed']>=20.1):
+                if r['elapsed']>=20 and retry is None and (r['switch'] and r['switch'].get('overdue') or r['elapsed']>=20.1):
                     retry=r
-                    assert r['switch'] and r['switch']['retry'], r
-                    assert 'Retry' in r['caption']+r['note']+r['read'], r
+                    assert r['switch'] and r['switch'].get('overdue'), r
+                    assert 'Retry' in r['caption']+r['note']+r['read'] or r['caption'].startswith('Updating view'), r
             assert first and r['stamp']!=first[0], dict(step=(kind,value),last=r,health=e._radar_health_payload())
             assert r['elapsed']<20 or retry is not None
             if cold:assert r['elapsed']<20, dict(step=(kind,value),last=r)

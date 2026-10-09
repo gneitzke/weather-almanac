@@ -20,10 +20,8 @@ HM = _function('hm')
 # then the payload renders. `serve(d, wallMs)` advances both clocks.
 POLLED = r'''
 function serve(d,ms){radarServerClock={ms,perf:clock};renderRadar(d);radarState();}
-function status(){return $('rad-status').text}
-const statusNode=$('rad-status');statusNode.text='';
-statusNode.replaceChildren=(...c)=>{statusNode.text=c.map(n=>n.textContent??n).join('')};
-statusNode.append=(...c)=>{statusNode.text+=c.map(n=>n.textContent??n).join('')};
+function status(){return $('rad-status').textContent??''}
+function loopRead(){return $('rad-frame-time').textContent??''}
 document.createElement=()=>({dataset:{},style:{},setAttribute(){},addEventListener(){},append(){},textContent:''});
 '''
 
@@ -37,12 +35,13 @@ const d={radar:r,ts:100900};           // written at 100900, newest scan 60 s ol
 let wallMs=100960e3;                    // first receipt: the file is already 60 s old
 serve(structuredClone(d),wallMs);
 assert.equal(radarView.data.stale,false);assert.equal($('rad-plate').dataset.state,'current');
-assert.match(status(),/ · 2 min old$/);
+assert.equal(status(),'','current radar must leave the status empty');
 // A dead emitter: the server keeps answering 200 with the same bytes every 2 s.
 for(let t=0;t<900;t++){clock+=2000;wallMs+=2000;serve(structuredClone(d),wallMs);}
 assert.equal(radarView.data.stale,true,'a frozen wx.json stayed current');
 assert.equal($('rad-plate').dataset.state,'stale');
-assert.match(status(),/ · 32 min old · stale$/);
+assert.equal(status(),'Stale · 32 min old');
+assert.equal($('rad-status').dataset.state,'stale');
 assert.equal(radarCouldLoop(),false,'a stale loop kept animating');
 ''')
 
@@ -68,6 +67,7 @@ let presenceDirty=false,pollTimer=null,pollController=null,polling=false,pollSta
 let radarServerClock=null,seen=null;const isNum=v=>typeof v==='number'&&Number.isFinite(v);
 const performance={now:()=>5000};
 const schedulePoll=()=>{},updateFreshness=()=>{},radarIdleSync=()=>{},radarFollowIntent=()=>{},validPayload=d=>!!d&&isNum(d.ts);
+const buildReload=()=>false;  // the build handshake has its own tests (test_radar_auto_only_review_page.py)
 const $=()=>({classList:{contains:()=>false}}),document={hidden:false};
 const radarIntent={generation:0,ready:false,owned:false,owner:null},radarGesture={state:'idle'},radarSmooth={pending:null},radarBaseStyle={theme:'paper'};
 let radarCamera=null;
@@ -95,41 +95,40 @@ assert.ok(Math.abs(radarView.receivedAge-120)<1e-6);
 
 # --- B2 contributor time display ------------------------------------------------
 
-def test_native_frame_spanning_scans_shows_their_age_range():
+def test_a_mosaic_goes_stale_by_its_oldest_contributing_scan():
     run_page(POLLED + r'''
 const r=manifest(),newest=r.observedTs;
-r.observedRange=[newest-480,newest];r.ageSec=840;r.staleSec=900;  // oldest scan 14 min old at write
+r.observedRange=[newest-480,newest];r.ageSec=840;r.staleSec=600;  // oldest scan 14 min old at write
 r.tiles.frames.at(-1).observedRange=[newest-480,newest];
 serve({radar:r,ts:newest+360},(newest+360)*1000);
-assert.match(status(),/ · scans 6–14 min old$/);
-// Within a minute of each other: one age, no range.
-const s=manifest();s.observedRange=[s.observedTs-40,s.observedTs];s.ageSec=100;
-radarView.data=null;serve({radar:s,ts:s.observedTs+60},(s.observedTs+60)*1000);
-assert.match(status(),/ · 1 min old$/);assert.doesNotMatch(status(),/scans/);
+// The newest scan is only 6 min old; the oldest decides, and no range is shown.
+assert.equal(status(),'Stale · 14 min old');assert.doesNotMatch(status(),/scans/);
 ''')
 
 
-def test_age_is_always_visible_and_fresh_data_says_so():
+def test_current_data_leaves_the_status_empty_and_failure_speaks():
     run_page(POLLED + r'''
 const r=manifest();r.ageSec=20;serve({radar:r,ts:r.observedTs+20},(r.observedTs+20)*1000);
-assert.match(status(),/^As of .* · under 1 min old$/);
+assert.equal(status(),'');assert.doesNotMatch(status(),/As of/);
+const f=manifest();f.ageSec=20;f.refresh={state:'failed'};serve({radar:f,ts:f.observedTs+20},(f.observedTs+20)*1000);
+assert.equal(status(),"Couldn't refresh");
 ''')
 
 
-def test_imagery_from_a_previous_day_carries_its_date():
+def test_imagery_from_a_previous_day_carries_its_date_in_the_loop_caption():
     run_page(HM + POLLED + r'''
-const r=manifest(),obs=r.observedTs;r.ageSec=1200;
+const r=manifest(),obs=r.observedTs;r.ageSec=1200;r.staleSec=3600;
 // 00:10 at the station, and the newest scan is 20 minutes old: yesterday 23:50.
-serve({radar:r,ts:obs+1200,time:'12:10 AM',date:'Fri, 09 Oct 2026'},(obs+1200)*1000);
-assert.match(status(),/^As of Thu 8 Oct, /);
+serve({radar:r,ts:obs+1200,time:'12:10 AM',date:'Fri, 09 Oct 2026'},(obs+1200)*1000);
+assert.match(loopRead(),/^Thu 8 Oct, .* · newest$/);assert.equal(status(),'');
 // Same day: no date.
-serve({radar:r,ts:obs+1200,time:'2:30 PM',date:'Fri, 09 Oct 2026'},(obs+1200)*1000);
-assert.match(status(),/^As of [^,]*$/);
+serve({radar:r,ts:obs+1200,time:'2:30 PM',date:'Fri, 09 Oct 2026'},(obs+1200)*1000);
+assert.match(loopRead(),/^[^,]* · newest$/);
 // Across a month boundary, and an unparseable date still says it is not today.
 serve({radar:r,ts:obs+1200,time:'00:05',date:'Thu, 01 Oct 2026'},(obs+1200)*1000);
-assert.match(status(),/^As of Wed 30 Sep, /);
+assert.match(loopRead(),/^Wed 30 Sep, /);
 serve({radar:r,ts:obs+1200,time:'00:05',date:'??'},(obs+1200)*1000);
-assert.match(status(),/^As of Yesterday, /);
+assert.match(loopRead(),/^Yesterday, /);
 ''')
 
 
@@ -192,10 +191,10 @@ assert.equal(radarView.current,b);assert.equal(radarView.clear,false);
 
 
 def test_no_echo_caption_names_the_floor_and_partial_coverage():
-    for setup, expected in (('', 'No echoes above 15 dBZ'),
-                            ('frames[1].uncovered=9;', 'No echoes above 15 dBZ · partial coverage'),
-                            ('radarView.data.partialCoverage=true;', 'No echoes above 15 dBZ · partial coverage'),
-                            ('frames[0].uncovered=undefined;', 'No echoes above 15 dBZ · partial coverage')):
+    for setup, expected in (('', '7 · No echoes above 15 dBZ'),
+                            ('frames[1].uncovered=9;', '7 · No echoes above 15 dBZ · partial coverage'),
+                            ('radarView.data.partialCoverage=true;', '7 · No echoes above 15 dBZ · partial coverage'),
+                            ('frames[0].uncovered=undefined;', '7 · No echoes above 15 dBZ · partial coverage')):
         run_page(r'''
 const frames=radarView.loaded.slice(-4);for(const f of frames){f.hasEcho=false;f.legend={remapped:true};f.uncovered=0;}
 radarView.cycle=frames.slice();radarView.current=frames.at(-1);radarView.data.sites=[];radarView.data.legend={floorDbz:15};

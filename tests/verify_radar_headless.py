@@ -216,10 +216,10 @@ def smoke(browser,server,theme,output):
       await new Promise(r=>setTimeout(r,650));radarEchoPaint(f);const after=ctx.getImageData(0,0,956,490).data;
       const unchanged=before.every((v,i)=>v===after[i]),unexpected=Array.from({length:956*490},(_,i)=>after[i*4+3]).filter(a=>a!==0&&a!==255).length;
       radarState();radarUpdateReady();radarView.active=true;radarLoopSync();radarView.active=false;
-      return {same,other,unchanged,unexpected,aria:document.getElementById('rad-plate').getAttribute('aria-label'),asof:document.getElementById('rad-asof').textContent,read:document.getElementById('rad-frame-time').textContent};
+      return {same,other,unchanged,unexpected,aria:document.getElementById('rad-plate').getAttribute('aria-label'),read:document.getElementById('rad-frame-time').textContent};
     }''')
     assert pixels['same']==[118,163,138,255] and pixels['other']==[0,0,0,0],pixels
-    assert pixels['unchanged'] and pixels['unexpected']==0 and pixels['aria']=='Reflectivity radar' and pixels['asof']=='17:12' and pixels['read']=='Buffering · 0 of 8',pixels
+    assert pixels['unchanged'] and pixels['unexpected']==0 and pixels['aria']=='Reflectivity radar' and pixels['read']=='Buffering · 0 of 8',pixels
     assert page.locator('#rad-plate [id*="hatch"], #rad-plate [class*="hatch"], #rad-plate pattern').count()==0
     page.screenshot(path=str(output/f'radar-mid-acquisition-{theme}.png'))
     absent=page.evaluate('''()=>{radarTiles.forEach(t=>t.bitmap.close());radarTiles.clear();radarEchoPaint(radarView.current);radarUpdateReady();radarView.active=true;radarLoopSync();radarView.active=false;const a=document.getElementById('rad-echo').getContext('2d').getImageData(0,0,956,490).data;return {marked:a.some(v=>v!==0),read:document.getElementById('rad-frame-time').textContent};}''')
@@ -300,7 +300,7 @@ def extended(page,server,theme,output):
     page.evaluate('radarCameraSet({...radarView.data.center,zoom:8});radarBaseDirty=true;radarView.paused=false;radarLoopSync()')
     page.wait_for_function('radarReady().length===8')
     initial=copy.deepcopy(server.data);site=copy.deepcopy(initial);r=site['radar']
-    r.update(sourceId='iem-nexrad-n0b',sourceMode='site',sourcePref='site',siteId='KATX',
+    r.update(sourceId='iem-nexrad-n0b',sourceMode='site',siteId='KATX',
              legend=dict(ae._RADAR_DISPLAY_RAMP,remapped=True),cadenceSec=300,staleSec=1200,
              sites=[dict(id='KATX',lat=48.194611,lon=-122.49569,primary=True,contributing=True,reason=None)])
     r['tiles'].update(source=r['sourceId'],site='KATX')
@@ -330,7 +330,7 @@ def chrome(page,theme,data,output):
     """Surviving G2.18–38/K7–17 assertions; crop/ack/fence cases retired."""
     page.wait_for_function('!polling');page.evaluate('clearTimeout(pollTimer);radarView.paused=true;radarView.current=radarView.good;radarLoopSync()')
     box=page.locator('#rad-plate').bounding_box();assert box==dict(x=34,y=76,width=956,height=490),box
-    for selector in ('#rad-src','#rad-src-cap','#rad-legend','#rad-loop','#rad-zoom','#rad-note'):
+    for selector in ('#rad-src-cap','#rad-legend','#rad-loop','#rad-zoom','#rad-note'):
         if not page.locator(selector).is_visible():continue
         b=page.locator(selector).bounding_box();x=b['x']-box['x'];y=b['y']-box['y']
         assert y>=0 and (y+b['height']<=73 or y>=418) and y+b['height']<=490,(selector,b)
@@ -348,9 +348,9 @@ def chrome(page,theme,data,output):
     assert page.locator('#rad-plate').get_attribute('aria-busy') is None
     assert page.locator('#s-radar [role="status"]').count()==1
     page.evaluate('clearTimeout(radarSwitch?.timer);radarSwitch=null;radarIntent.postedAt=0;radarView.zoomNote="Closest view for MRMS"')
-    for state,copy_ in [('newest','Refreshing · newest frame'),('history','Refreshing · frame 4 of 12'),('failed',"Couldn't refresh · showing "+page.evaluate('radarFrameLabel(radarView.current)')),('idle','Closest view for MRMS')]:
+    for state,copy_ in [('newest','Refreshing · newest frame'),('failed',"Couldn't refresh · showing "+page.evaluate('radarFrameLabel(radarView.current)')),('idle','Closest view for MRMS')]:
         page.evaluate("s=>{radarView.refresh={state:s,frameIndex:4,frameTotal:12};radarNoteRender()}",state)
-        assert page.locator('#rad-note').inner_text()==copy_
+        assert page.locator('#rad-note').inner_text()==copy_,(state,page.locator('#rad-note').inner_text())
         assert page.locator('#rad-note').bounding_box()['height']==14
     assert page.locator('#rad-note').evaluate('e=>getComputedStyle(e).pointerEvents')=='none'
     page.evaluate("radarView.refresh={state:'newest'};radarIntent.postedAt=Date.now()-400;radarNoteRender()")
@@ -358,7 +358,8 @@ def chrome(page,theme,data,output):
     page.evaluate('radarIntent.postedAt=Date.now()-800;radarNoteRender()');assert page.locator('#rad-note').get_attribute('data-shown')=='true'
     for age in (360,480,660):
         page.evaluate('age=>{radarView.receivedAge=age;radarView.receivedAt=performance.now();radarView.data.observedTs=radarView.current.ts;radarView.data.ageSec=age;radarView.data.stale=age>=600;radarState()}',age)
-        assert ('min old' in page.locator('#rad-status').inner_text().lower())==(age>=480)
+        # The status speaks only once the radar is stale; no early age suffix.
+        assert page.locator('#rad-status').text_content().startswith('Stale · ')==(age>=600),page.locator('#rad-status').text_content()
     assert page.locator('#rad-echo').evaluate('e=>getComputedStyle(e).opacity')=='0.66'
     page.evaluate('radarView.receivedAge=0;radarView.receivedAt=performance.now();radarView.data.stale=false;radarState()')
     cluster=page.locator('#rad-loop').bounding_box()
@@ -392,7 +393,7 @@ def chrome(page,theme,data,output):
     page.locator('#rad-play').click();page.wait_for_function('radarView.singleSweep');page.wait_for_function('!radarView.singleSweep && radarView.paused',timeout=10000)
     assert page.evaluate('radarView.current===radarView.good')
     page.emulate_media(reduced_motion='no-preference')
-    for target in page.locator('.rad-play,.rad-step,.rad-reset,.rad-seg').all():
+    for target in page.locator('.rad-play,.rad-step,.rad-reset').all():
         if target.is_visible():b=target.bounding_box();assert b['height']>=44 and b['width']>=44
     # Fable v4.3b assertions 1–27 run here in both themes, using actual layout.
     copy_cases=[]
@@ -401,57 +402,26 @@ def chrome(page,theme,data,output):
         if expected is not None:assert text==expected,(text,expected)
         assert all(word not in text for word in ('NEXRAD','MRMS','mosaic','volumes','dBZ')),text
         width=page.locator('#rad-src-cap').bounding_box()['width']
-        assert width<=530,(text,width)
+        assert width<=500,(text,width)  # stops short of the legend (x530)
         assert page.locator('#rad-src-cap').evaluate("e=>[getComputedStyle(e).overflow,getComputedStyle(e).whiteSpace,getComputedStyle(e).textOverflow]")==['hidden','nowrap','ellipsis']
         assert page.locator('#rad-attrib').count()==1 and page.locator('#rad-attrib').get_attribute('href') is None
         copy_cases.append(dict(text=text,width=width))
         return text
 
-    page.evaluate("radarIntent.postedAt=0;radarSource.refused=false;radarView.refresh={state:'idle'};radarSourceRender()")
-    mosaic='Many radars blended · new image every 2 min · IEM / NOAA'
-    assert page.locator('#rad-src-mosaic').inner_text()=='REGION'
-    assert page.locator('#rad-src-mosaic').text_content()=='Region'
-    assert page.locator('#rad-src-mosaic').bounding_box()['width']>=84
-    assert page.locator('#rad-src-site').inner_text()=='KATX'
-    assert page.locator('#rad-src-mosaic').get_attribute('aria-label')=='Region: many radars blended'
-    assert page.locator('#rad-src-site').get_attribute('aria-label')=='KATX: Camano Island radar, high resolution, 39 mi NE'
+    page.evaluate("radarIntent.postedAt=0;radarView.refresh={state:'idle'};radarSourceRender()")
+    mosaic='Region · new image every 2 min · IEM / NOAA'
+    assert page.locator('#rad-src, .rad-seg').count()==0  # Auto is the only policy: no picker
     caption(mosaic)
     assert page.locator('.rad-clear-note').count()==0
     page.screenshot(path=str(output/f'radar-v43b-mosaic-{theme}.png'))
     page.evaluate("radarView.data.sourceId='rainviewer';radarView.data.cadenceSec=600;radarSourceRender()")
-    caption('Worldwide blend · new image every 10 min · RainViewer · reflectivity only')
-    page.evaluate("radarView.data.sourceId='iem-mrms-lcref';radarView.data.cadenceSec=120;radarSource.desired='site';radarIntent.postedAt=Date.now()-400;radarSourceRender()")
-    pending='Switching to Camano Island radar · showing Region · IEM / NOAA'
-    caption(pending)
-    assert page.locator('#rad-src').get_attribute('data-state')=='pending'
-    # Let the shared grace timer fire by itself; no polling/frame change needed.
-    page.wait_for_function("document.getElementById('rad-src-cap').textContent.startsWith('Switching to')")
-    caption(pending)
-    page.evaluate('radarIntent.postedAt=Date.now()-800;radarSourceRender()')
-    caption(pending)
-    assert page.locator('#rad-src').get_attribute('data-state')=='pending'
+    caption('Region · new image every 10 min · RainViewer · reflectivity only')
+    # An automatic handoff names its target and keeps the old picture.
+    page.evaluate("radarView.data.sourceId='iem-mrms-lcref';radarView.data.cadenceSec=120;radarView.refresh={state:'newest',targetMode:'site'};radarIntent.postedAt=Date.now()-800;radarSourceRender()")
+    caption('Switching to Camano Island radar · showing Region · IEM / NOAA')
     page.screenshot(path=str(output/f'radar-v43b-switching-{theme}.png'))
-    page.evaluate('radarSource.desired=null;radarSourceRender()')
+    page.evaluate("d=>{radarView.refresh={state:'idle'};renderRadar(d)}",data)
     caption(mosaic)
-    # An ack while acquisition is active keeps the old picture pending.
-    page.evaluate("d=>{radarSource.desired='site';radarIntent.postedAt=Date.now()-800;renderRadar({...d,radar:{...d.radar,sourcePref:'site',refresh:{state:'newest'}}})}",data)
-    caption(pending)
-    assert page.locator('#rad-src').get_attribute('data-state')=='pending'
-    # A preference ack with the old source still displayed is a refusal, not a
-    # successful switch; unrelated stale payloads above never clear the intent.
-    page.evaluate("d=>{radarSource.desired='site';radarIntent.postedAt=Date.now()-800;renderRadar({...d,radar:{...d.radar,sourcePref:'site',refresh:{state:'idle'},sources:[{mode:'mosaic',available:true},{mode:'site',siteId:'KATX',available:false,reason:'not reporting'}]}})}",data)
-    assert page.evaluate("radarSource.desired==='site'")
-    caption(pending)
-    page.evaluate('radarSource.desired=null')
-    page.evaluate("d=>{radarSource.refused=false;renderRadar(d)}",data)
-    # A failure already present before a tap is stale evidence, not its refusal.
-    page.evaluate("d=>{radarSource.desired='site';radarSource.lastRefresh='failed';renderRadar({...d,radar:{...d.radar,refresh:{state:'failed'}}})}",data)
-    assert page.evaluate("radarSource.desired==='site'")
-    caption(pending)
-    page.evaluate("d=>{renderRadar({...d,radar:{...d.radar,refresh:{state:'newest'}}});renderRadar({...d,radar:{...d.radar,refresh:{state:'failed'}}})}",data)
-    assert page.evaluate("radarSource.desired==='site'")
-    page.evaluate('radarSource.desired=null')
-    page.evaluate("d=>{radarSource.refused=false;renderRadar(d)}",data)
     # Site legend keeps exactly the same outer and unit geometry.
     page.evaluate('r=>{radarView.data={...radarView.data,...r};radarView.current=null;radarLegendRender();radarSourceRender()}',dict(sourceId='iem-nexrad-n0b',sourceMode='site',siteId='KATX',scanCadenceSec=240,scanMode=None,legend=dict(ae._RADAR_DISPLAY_RAMP,remapped=True),sites=[dict(id='KATX',contributing=True)]))
     widths=page.locator('#rad-ramp i').evaluate_all('es=>es.map(e=>e.getBoundingClientRect().width)')
@@ -486,13 +456,10 @@ def chrome(page,theme,data,output):
     page.evaluate('sites=>{radarView.active=false;radarCamera={...radarView.data.center,zoom:7};radarView.data.sites=sites;radarOverlayBuild();radarSourceRender()}',site_rows)
     assert page.locator('.rad-site-edge').count()==3
     caption('Camano Island radar, high resolution + 2 nearby · new scan every ~4 min · IEM / NOAA')
-    assert page.locator('#rad-src-site').inner_text()=='KATX +2'
-    assert page.locator('#rad-src-site').get_attribute('aria-label')=='KATX and 2 nearby: Camano Island radar, high resolution, 39 mi NE'
     page.evaluate("radarView.data.siteId='KLGX';radarView.data.sites=[{id:'KLGX',contributing:true}];radarSourceRender()")
     neighbour=caption('Langley Hill radar, high resolution · new scan every ~4 min · IEM / NOAA')
     # 'min' necessarily contains 'mi'; test the forbidden distance clause itself.
     assert '39 mi' not in neighbour and ' NE' not in neighbour
-    assert page.locator('#rad-src-site').get_attribute('aria-label')=='KATX: Camano Island radar, high resolution, 39 mi NE'
     page.evaluate('sites=>{radarView.data.sites=sites;radarView.data.siteId="KATX";radarSourceRender()}',site_rows)
     for label in page.locator('.rad-site-label').all():assert 88<=float(label.get_attribute('y'))<=412
     assert 'KRTX' not in page.locator('.rad-site-label').all_text_contents()
@@ -500,17 +467,12 @@ def chrome(page,theme,data,output):
     page.evaluate('sites=>{radarView.data.sites=sites;radarView.data.siteId="KLGX";radarSourceRender()}',site_rows)
     assert caption().startswith('Langley Hill radar')
     assert caption().endswith('· KATX not reporting')
-    assert page.locator('#rad-src-site').inner_text()=='KATX +1'
-    assert page.locator('#rad-src-site').get_attribute('aria-label')=='KATX and 1 nearby: Camano Island radar, high resolution, 39 mi NE'
     page.evaluate("radarView.data.sites.push({id:'KOTX',contributing:true});radarSourceRender()")
-    caption('Langley Hill radar, high resolution + 2 nearby · new scan every ~4 min · IEM / NOAA · KATX not reporting')
-    page.evaluate("document.getElementById('rad-src-cap').style.maxWidth='500px';radarSourceRender()")
+    # 500 px is the caption's own limit beside the legend: resolution goes first.
     caption('Langley Hill radar + 2 nearby · new scan every ~4 min · IEM / NOAA · KATX not reporting')
-    assert page.locator('#rad-src-site').inner_text()=='KATX +2'
     page.screenshot(path=str(output/f'radar-v51-dark-closest-{theme}.png'))
     page.evaluate("window.savedNearest=radarView.data.nexrad;radarView.data.nexrad=null;radarSourceRender()")
-    assert page.locator('#rad-src-site').inner_text()=='KLGX +2'
-    assert page.locator('#rad-src-site').get_attribute('aria-label')=='KLGX and 2 nearby: Langley Hill radar, high resolution'
+    assert caption().startswith('Langley Hill radar')
     page.evaluate("radarView.data.nexrad=savedNearest;document.getElementById('rad-src-cap').style.maxWidth=''")
     # Names come from the table first, then nexrad.name, then the callsign.
     page.evaluate("window.savedSiteTable=radarSiteTable;radarSiteTable=[];radarView.data.siteId='KATX';radarView.data.sites=[{id:'KATX',contributing:true}];radarSourceRender()")
@@ -518,7 +480,7 @@ def chrome(page,theme,data,output):
     page.evaluate("radarView.data.nexrad.name='';radarSourceRender()")
     caption('KATX radar, high resolution · 39 mi NE · new scan every ~4 min · IEM / NOAA')
     page.evaluate("radarSiteTable=[{id:'KATX',name:'Langley Hill Nw Washington'}];radarView.data.nexrad.name='Ignored fallback';radarView.data.sites=['KATX','KLGX','KOTX','KMAX'].map(id=>({id,contributing:true})).concat([{id:'KRTX',contributing:false,reason:'not reporting'}]);radarSourceRender()")
-    worst=caption('Langley Hill Nw Washington radar + 3 nearby · new scan every ~4 min · IEM / NOAA · KRTX not reporting')
+    worst=caption('Langley Hill Nw Washington radar + 3 nearby · every ~4 min · IEM / NOAA · KRTX not reporting')
     # Exercise each overflow reduction independently at a measured box budget.
     # Select widths from the actual embedded font so the tests also catch order.
     fitting=page.evaluate('''()=>{
@@ -541,8 +503,8 @@ def chrome(page,theme,data,output):
     tail=caption()
     assert all(flag in tail for flag in ('IEM / NOAA','latest only','scanning slowly','KRTX not reporting','palette incomplete'))
     assert page.locator('#rad-src-cap').evaluate('e=>e.scrollWidth>e.clientWidth')
-    page.evaluate("radarView.data.siteId='KATX';radarView.data.sites=[{id:'KLGX',contributing:true},{id:'KATX',reason:'not reporting'},{id:'KRTX',reason:'scan unavailable'},{id:'KOTX',reason:'deferred'},{id:'KMAX',reason:'out of view'}];radarView.data.sourceFallback='site-zoom-floor';radarSourceRender()")
-    assert caption()=='KLGX radar · every ~4 min · IEM / NOAA · latest only · scanning slowly · KRTX scan unavailable · KOTX deferred · KMAX out of view · KATX not reporting · palette incomplete · wider than KATX reaches'
+    page.evaluate("radarView.data.siteId='KATX';radarView.data.sites=[{id:'KLGX',contributing:true},{id:'KATX',reason:'not reporting'},{id:'KRTX',reason:'scan unavailable'},{id:'KOTX',reason:'deferred'},{id:'KMAX',reason:'out of view'}];radarSourceRender()")
+    assert caption()=='KLGX radar · every ~4 min · IEM / NOAA · latest only · scanning slowly · KRTX scan unavailable · KOTX deferred · KMAX out of view · KATX not reporting · palette incomplete'
     page.evaluate('radarView.data.legend.floorDbz=10;radarLegendRender()')
     assert page.locator('.rad-clear-note').count()==0
     page.evaluate("document.getElementById('rad-src-cap').style.maxWidth='';radarSiteTable=savedSiteTable")
@@ -763,7 +725,7 @@ def review_cases(browser,server,theme):
     timer=server.module._camera_persist_timer
     if timer is not None: timer.cancel();timer.join()
     server.module._radar_owner=None
-    for marker in ('radar_intent','radar_zoom','radar_source'):
+    for marker in ('radar_intent','radar_zoom'):
         (server.root/marker).unlink(missing_ok=True)
     context=browser.new_context(viewport=dict(width=1024,height=600),has_touch=True)
     context.add_init_script(AUDIT);page=context.new_page();errors=[];page.on('pageerror',lambda e:errors.append(str(e)))
@@ -775,7 +737,8 @@ def review_cases(browser,server,theme):
     page.wait_for_function('radarMetrics.firstPaintMs!==null')
     assert page.evaluate('radarCamera.zoom')==5
     assert page.locator('#s-radar').evaluate("e=>e.classList.contains('active')")
-    assert page.locator('#rad-asof').inner_text()=='—'
+    status=page.locator('#rad-status').text_content()  # problems only: a failed cold refresh speaks
+    assert status=="Couldn't refresh" or status.startswith('Stale · '),status
     # Genuine browser input: pointer capture, stationary release, then cancellation.
     page.mouse.move(500,300);page.mouse.down();page.mouse.move(620,300,steps=6)
     assert page.evaluate('radarGesture.pointers.size')==1
@@ -809,7 +772,8 @@ def review_cases(browser,server,theme):
       if(!staged||radarView.pendingSource||radarView.data.sourceId!==old.sourceId)throw Error('obsolete transition installed');
       const primary=structuredClone(site);radarView.acceptingSource=true;renderRadar({radar:primary});radarView.acceptingSource=false;const older=structuredClone(primary);older.siteId='KLGX';older.observedTs-=60;renderRadar({radar:older});if((radarView.pendingSource?.data||radarView.data).siteId!=='KLGX'||(radarView.pendingSource?.data||radarView.data).observedTs!==older.observedTs)throw Error('primary rewind rejected');radarView.pendingSource=null;radarView.acceptingSource=true;renderRadar({radar:old});radarView.acceptingSource=false;
       radarView.current=radarView.loaded[0];const painted=radarFrameLabel(radarView.current);radarView.data.observedTs=radarView.current.ts;radarView.receivedAge=480;radarView.receivedAt=performance.now();radarState();
-      const header=document.getElementById('rad-status').textContent;if(!header.includes(painted)||!header.includes('8 min old'))throw Error('header measurement mismatch');
+      // Eight minutes old is not yet stale: the status stays empty (the loop read carries the time).
+      const header=document.getElementById('rad-status').textContent;if(header!=='')throw Error('header measurement mismatch: '+header);
       // Historical translucency remains alpha 180 with component tiles present or absent during pan.
       const c=new OffscreenCanvas(956,490),cx=c.getContext('2d');cx.fillStyle='rgba(138,163,198,'+(180/255)+')';cx.fillRect(0,0,956,490);
       const f={...radarView.loaded[0],bitmap:await createImageBitmap(c),camera:{...radarCamera},hasEcho:true,ready:true};
@@ -832,7 +796,7 @@ def check_retry_lifecycle(browser, server, theme):
     if timer is not None:
         timer.cancel(); timer.join()
     server.module._radar_owner = None
-    for marker in ('radar_intent', 'radar_zoom', 'radar_source'):
+    for marker in ('radar_intent', 'radar_zoom'):
         (server.root/marker).unlink(missing_ok=True)
     original = copy.deepcopy(server.data)
     data = copy.deepcopy(original)
@@ -853,7 +817,7 @@ def check_retry_lifecycle(browser, server, theme):
     page.wait_for_function('radarReady().length===8&&radarView.current?.bitmap&&!radarSwitch', timeout=20000)
     stamp = page.evaluate('radarView.current.stamp')
     page.wait_for_function('stamp=>radarView.current.stamp!==stamp', arg=stamp, timeout=10000)
-    assert page.locator('#rad-src-cap').inner_text().startswith('Many radars blended')
+    assert page.locator('#rad-src-cap').inner_text().startswith('Region · ')
     assert 'Retrying' not in page.locator('#rad-note').inner_text()
     result = page.evaluate(r"""d=>{
       clearTimeout(pollTimer);pollController?.abort();++pollGen;
@@ -866,7 +830,7 @@ def check_retry_lifecycle(browser, server, theme):
         // Browser clock is years ahead of the payload. Only d.ts decides retry.
         Date.now=()=> (d.ts+10*365*86400)*1000;
         lastRenderMs=Date.now();failCount=0;recvAgeSec=0;recvPerf=performance.now();
-        for(const [reason,words] of [['budget','work budget'],['deadline','acquisition deadline'],['provider','provider issue'],['local','local issue'],['not reporting','site not reporting']]){
+        for(const [reason,words] of [['deadline','acquisition deadline'],['provider','provider issue'],['local','local issue']]){
           d.radar.refresh.nextRetry=d.ts+30;d.radar.refresh.retryReason=reason;
           render(d);updateFreshness();
           if(!cap().startsWith('Retrying view · '+words)||!note().includes(words+' · next attempt 30s'))throw Error(cap()+' / '+note());
@@ -877,19 +841,18 @@ def check_retry_lifecycle(browser, server, theme):
         if(!note().includes('next attempt now')||note().includes('next attempt 0s'))throw Error(note());
         // A later payload expires the timer, regardless of the browser clock.
         d.ts+=1;render(d);
-        if(!cap().startsWith('Many radars blended')||note().includes('Retrying'))throw Error('expired '+cap()+' / '+note());
+        if(!cap().startsWith('Region · ')||note().includes('Retrying'))throw Error('expired '+cap()+' / '+note());
         Date.now=()=> (d.ts-10*365*86400)*1000;
         render(d);
         if(cap().includes('Retrying')||note().includes('next attempt'))throw Error('past retry used browser clock');
         // A missed switch deadline alone does not assert a scheduled retry.
-        radarSwitch={overdue:true};radarSourceRender();radarNoteRender();
+        radarSwitch={overdue:true,requiresIntent:true};radarSourceRender();radarNoteRender();
         if(!cap().startsWith('Updating view')||note().includes('Retrying'))throw Error('timeout invented retry');
-        radarSource.desired='site';radarSourceRender();
+        radarSwitch=null;radarView.refresh={state:'newest',targetMode:'site'};radarSourceRender();
         if(!cap().startsWith('Switching to Camano Island radar'))throw Error(cap());
-        // Off-air refusal still settles on Region with measured site evidence.
-        radarSwitch=null;radarSource.desired=null;radarSource.refused='site';
-        d.radar.nexrad={...d.radar.nexrad,reason:'not reporting',newestTs:null};render(d);
-        if(!cap().startsWith('Many radars blended')||!note().startsWith('KATX is off air · showing Region'))throw Error(cap()+' / '+note());
+        // An off-air nearest radar simply leaves Region on screen.
+        d.radar.refresh={state:'idle'};d.radar.nexrad={...d.radar.nexrad,reason:'not reporting',newestTs:null};render(d);
+        if(!cap().startsWith('Region · '))throw Error(cap()+' / '+note());
         lastRenderMs=Date.now();recvAgeSec=61;updateFreshness();
         if(!document.getElementById('staleflag').classList.contains('on'))throw Error('old data lost STALE');
       }finally{Date.now=realNow;}

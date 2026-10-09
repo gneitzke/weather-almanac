@@ -174,6 +174,97 @@ its next poll only after `render()` returned, and the server credits that mark o
 from a loopback client. The launcher's watchdog reads `renders`, because a request
 count never proved anything reached the screen.
 
+## Auto-only radar source and a quieter status (2026-10-09)
+
+Auto is the only source policy. There is no source picker, and nothing on the
+page, in the poll, on disk or in the payload records a manual choice. This
+section supersedes every older mention below of the `Auto | Region | <site>`
+picker, a held Region/Site choice and its 45-minute lease, empty-listing site
+refusal, `radar_source`, `radarSource`, `sourcePref`, `sitePreferred`,
+`sourceFallback`, `siteResumeZoom`, `site-zoom-floor`, `site-not-reporting`,
+`refresh.reason` and the `As of` status line.
+
+**Choice.** `lib/radar_auto.py:choose` decides from the settled camera exactly
+as described under "Auto source": Site (the nearest radar plus neighbours, at
+native resolution) at zoom 8 and closer when reporting radars cover at least
+85 % of the view, Region at zoom 6 and wider, beyond coverage, or when the
+nearest radar is off the air; zoom 7 keeps what is showing. The latitude-auto
+default zoom is 8 for stations up to about 61 degrees from the equator, so the
+default view is Site wherever a reporting radar covers it (Duvall, WA: zoom 8,
+KATX 63 km away, 96 % coverage from KATX alone, 100 % with its neighbours).
+
+**Control.** The poll's camera transaction is `radarSession`, `radarGeneration`,
+`radarHeartbeat`, `radarCommit=1`, `radarPolicy=auto|manual` (the zoom policy:
+Auto zoom versus a chosen level, unrelated to the source), `radarGeoZoom`,
+`radarGeoCenter` and the claim fields. `radarSource` is not a parameter: an old
+page that sends it, with any value or any number of values, is answered exactly
+as if it had not. Runtime `radar_intent` records hold no `source` or
+`sourceAcceptedAt`. Both readers (`serve.py:_read_radar_intent`, the engine's
+`_radar_read_intent`) strip those keys from a record written before the
+upgrade, so they reach neither `X-Radar-Intent`, `radar.intent` nor a rewritten
+record.
+
+**Files.** `serve.py` deletes `radar_source` (and, when it is the launcher's
+symlink, its durable target) plus any `.radar-lease-*` anchors and
+`.radar-lease.lock` at startup; the launcher removes the durable copy and no
+longer links it. Nothing reads them. The `presence` marker (a touch) still feeds
+the attention tiers and is written directly; no preference write orders it.
+
+**Payload.** `radar.sourceMode` (`site` | `mosaic`) and `radar.siteId` say what
+is drawn; `radar.sources` keeps each mode's availability and reason. Removed:
+`sourcePref`, `sitePreferred`, `sourceFallback`, `siteResumeZoom` and
+`refresh.reason`. radar-health's `summary.fallbackReason` carries only the
+native (Level III) fallback reason.
+
+**Caption.** It names what is showing without naming a mode: `Region · new image
+every 2 min · IEM / NOAA` (`Worldwide blend · …` outside the US mosaic), or `Camano Island radar, high resolution + 3 nearby ·
+precipitation mode · new scan every ~4 min · NOAA Level III`. An automatic
+handoff still says `Switching to … · showing …` while the old picture stays. The
+caption sits at the top-left of the plate (y10), stopping short of the legend.
+
+**Status (`#rad-status`, top right).** Empty while the radar is current. It
+shows text only when something is wrong: `Stale · 32 min old` (accent colour;
+the age is the oldest contributing scan's, so a mosaic is never understated),
+`Couldn't refresh`, `Waking`, `Starting` or `Resting`. Staleness belongs to the
+imagery on screen; `Couldn't refresh` belongs to the current acquisition
+(`radarView.refresh`), so a failed automatic handoff says so while the previous
+picture stays up. The visible text is not a live region. Announcements go
+through `#rad-status-say`, a visually hidden `role=status aria-live=polite`
+region present from page load whose text (`Radar: Stale · 32 min old`) changes
+only when the problem does and empties when it clears; a stale count ticking
+over each minute is not re-announced, and the same problem returning is.
+
+**Loop caption (`#rad-frame-time`, bottom left).** The time readout: `11:50 PM ·
+newest`, `11:44 PM · −6 min`, and for a frame from an earlier station-local day
+`Thu 8 Oct, 11:50 PM · newest`. A clear loop keeps its time: `11:50 PM · No
+echoes above 15 dBZ` (`Paused · Thu 8 Oct, 23:50 · No echoes above 15 dBZ`).
+The contributing-scan age range (`scans 3–9 min old`) is no longer shown; it
+still decides staleness.
+
+**Page build handshake.** A tab left open across a deploy would run the old
+page against the new server and engine (a pre-Auto-only page that last
+pressed a source button waits for a `sourcePref` that no longer exists and
+rejects every new publication). At startup
+`serve.py` snapshots `index.html`, names it by the first 16 hex digits of its
+SHA-256, and serves `/` and `/index.html` only from that snapshot (`ETag` the
+build, `Cache-Control: no-cache`) with the name stamped into
+`<meta name="almanac-build" content="">`. Every `wx.json` response carries
+`X-Almanac-Build: <build>` (all clients, not only controllers). A page whose
+stamped build differs reloads before rendering that payload, never mid-gesture,
+carrying its open screen over (`sessionStorage.almanacBuildScreen`; the camera
+is already in `sessionStorage.radarCamera`). `sessionStorage.almanacBuildReload`
+(`{target, tries, at}`) guards against loops: the first reload toward a build
+is immediate, a repeat toward the same build waits 1, 2, 4… minutes up to an
+hour, and without working sessionStorage there is no reload. No header, or an
+unstamped page (a file preview), means no handshake: a reload could not change
+what is served. Because the page comes from the snapshot, a file replaced under
+a running server never reaches a browser until the server restarts, so the
+reverse pairing (a newer page against an older server process) cannot arise
+from this server. Pages from before the handshake (through 4a8eddd) never
+reload themselves and no server response can make them: the launcher restarts
+the panel's Chromium, and a LAN tab opened before the deploy needs one manual
+refresh.
+
 ## Radar review fixes, engine side (2026-10-09)
 
 **Radar health file.** `wx.json` no longer carries `radar.health` (about 75 KB the
@@ -193,7 +284,7 @@ and a `summary`:
 | `newestObservationTs` / `newestObservationAgeSec` | the newest frame's observation time: its OLDEST contributing scan for a site frame, else the frame time (same clock as `radar.ageSec`) |
 | `lastSuccessTs` | last usable newest publication (as `health.lastSuccessTs`) |
 | `source` | `sourceId` drawn now, null when unavailable |
-| `fallbackReason` | native fallback reason while IEM draws the site view, else the source-chain fallback (`site-zoom-floor`, ...) |
+| `fallbackReason` | native fallback reason while IEM draws the site view, else null |
 | `coverage` | `full`, `partial` or `unknown`; see "Coverage" below |
 | `nextAttemptTs` | earliest scheduled retry, discovery check or cache-init retry |
 | `attentionTier` / `attentionReason` | the attention policy's decision |
@@ -306,8 +397,10 @@ seconds it has left.
 
 **Housekeeping.** The geography cache keeps running file/byte totals and walks
 the disk only when an admission would exceed a cap, then evicts least-recently
-served tiles to 90 % of the cap. Superseded `.radar-lease-<marker>-*` files are
-removed when a reader sees its marker's stamp change. The server and the engine
+served tiles to 90 % of the cap. (The `.radar-lease-*` anchors described next
+belonged to the retired manual source choice; the server now deletes them at
+startup.) Superseded `.radar-lease-<marker>-*` files were
+removed when a reader saw its marker's stamp change. The server and the engine
 both read and create leases, so every creation and removal happens under one
 advisory `flock` on `.radar-lease.lock` beside them, and the remover keeps every
 lease whose stamp it can still derive from disk under that lock (`presence`'s
@@ -479,14 +572,10 @@ about Pi CPU performance.
 - `radar.refresh.retryReason`: present alongside `nextRetry`; one of `budget`
   (request/build capacity or paced history), `deadline` (acquisition timeout),
   `provider` (provider failure, cooldown or recovery probe), `local` (local
-  connection/resources/processing), or `not reporting` (site is not reporting).
+  connection/resources/processing).
   The page uses respectively “work budget”, “acquisition deadline”,
-  “provider issue”, “local issue”, and “site not reporting”.
-- `refresh.reason` retains its existing acquisition/refusal meaning, including
-  `not reporting`; it cannot describe routine budget/deadline yields because
-  those can coexist with `state: "idle"` and `reason: null`. The distinct
-  `retryReason` carries the scheduled timer's cause. For older producers the
-  page can use a recognized `refresh.reason`, otherwise “scheduled retry”.
+  “provider issue” and “local issue”, otherwise “scheduled retry”.
+- `refresh.reason` (only ever the retired site refusal) is gone (2026-10-09).
 - Top-level `radar.nextRetry` and `radar.retryReason` mirror the optional refresh
   fields for compatibility; `refresh` is authoritative for the page.
 
@@ -519,11 +608,11 @@ and refresh-failure status.
 
 ### Intent protocol and ownership
 
-The page owns `{session, generation, camera, zoomPolicy, preferredMode}`.
+The page owns `{session, generation, camera, zoomPolicy}`.
 `radarSession` and `radarGeneration` accompany activity. `radarCommit=1`,
-`radarSource=auto|mosaic|site`, `radarPolicy=auto|manual`, `radarGeoZoom` and
-`radarGeoCenter` form one settled transaction. A mode tap commits immediately;
-settling increments generation before the network debounce. Heartbeats carry a
+`radarPolicy=auto|manual`, `radarGeoZoom` and `radarGeoCenter` form one settled
+transaction (`radarSource` is retired and ignored, 2026-10-09).
+Settling increments generation before the network debounce. Heartbeats carry a
 separate increasing `radarHeartbeat` ordinal and never invent a new intent.
 
 A reload follows the accepted runtime intent without claiming. Only a user
@@ -534,12 +623,11 @@ compares and swaps ownership and writes the camera atomically under its writer
 lock. Old sessions, generations and reordered heartbeats are rejected before
 camera intent changes. Panel activity uses independent view ordering. A page
 whose acknowledgement names another session demotes itself, discards its rejected commit and follows the accepted
-camera, zoom policy and source. Reconciliation never creates a commit.
+camera and zoom policy. Reconciliation never creates a commit.
 `X-Radar-Intent` returns `{intent, session, epoch, generation, acceptedGeneration}`.
 Runtime records include session, epoch, generation, resolved numeric zoom, zoomPolicy,
-source, center, acceptedAt and the existing worker sequence. A 250ms debounce
-persists `auto` as policy, not its resolved number. Payload/displayed source is
-never implicitly sent back as preference after a failed attempt.
+center, acceptedAt and the existing worker sequence. A 250ms debounce
+persists `auto` as policy, not its resolved number.
 
 Motion continues reporting/polling during gestures, without committing the
 intermediate camera. Moving ownership expires after five seconds; geo work
@@ -549,8 +637,8 @@ rapid zoom presses accumulate from the pending animation target.
 
 ### Remote control
 
-There is one engine view. Browsers on the home network can steer zoom, pan,
-Auto/Region/site and Smooth; the panel follows. Controllers are loopback
+There is one engine view. Browsers on the home network can steer zoom, pan
+and Smooth; the panel follows. Controllers are loopback
 and explicit private ranges: IPv4 `10/8`, `172.16/12`, `192.168/16`; IPv6
 `fc00::/7`, `fe80::/10`; IPv4-mapped IPv6 addresses use their IPv4 classification.
 The peer address is classified with `ipaddress`, not forwarded headers or the
@@ -790,19 +878,11 @@ that a radar sees every point inside that circle. `nexrad` still reports the
 nearest site within 285 miles; `distanceMeters` provides the unrounded value
 used to decide eligibility.
 
-### Auto source (2026-09-25)
+### Auto source (2026-09-25; the only policy since 2026-10-09)
 
-The source picker is **Auto | Region | <site>**. The site keeps its callsign and
-contributor count, such as `KATX +3`. Auto is the default without a preference.
-`radar_source` and the camera transaction accept `auto`, `mosaic` and `site`.
-The same controller check, single-value validation, camera owner/generation fence,
-atomic durable write and `X-Radar-Intent` acknowledgement apply to all three.
-Moving camera reports cannot commit a source choice.
-
-`radar.sourcePref` is the requested policy. `radar.sourceMode` is the displayed
-source (`mosaic` or `site`). Auto stays pressed while either source is drawn.
-Its normal caption starts with `Auto · `, for example `Auto · Region` or
-`Auto · KATX radar`. `refresh.targetMode` names a staged source. The page uses
+The 2026-09-25 picker (**Auto | Region | <site>**) and every manual choice are
+retired; see "Auto-only radar source" above. `radar.sourceMode` is the displayed
+source (`mosaic` or `site`). `refresh.targetMode` names a staged source. The page uses
 `Switching to … · showing …` during that transition and retains the old image.
 Site always uses the Level III mosaic, including in Auto and on Pi 3 boards.
 
@@ -825,7 +905,7 @@ Site always uses the Level III mosaic, including in Auto and on Pi 3 boards.
   Repeated failures do not restart that clock; a successful check resets it.
   The closest radar must report; unknown neighbours matter only when their range
   discs could change the 85% entry / 70% stay verdict. A redundant failed listing
-  cannot veto Site. A real not-reporting listing or dark-site refusal can select
+  cannot veto Site. A real not-reporting listing can select
   Region immediately. Region remains in the adapter chain after Site fails.
 - Hold against a reverse automatic switch for 10 seconds after publication,
   unless settled zoom moved at least 2 levels since that switch. Loss of valid
@@ -851,23 +931,8 @@ Renderer transitions never use “Sharpening” and never blank the existing map
 Region still has a native zoom ceiling of 9; Auto
 can select Site at camera zoom 10 when the guards permit it.
 
-A manual Region or Site choice holds until Auto is tapped or 45 minutes pass
-without a touch. The lease reads the existing `presence` marker used by radar
-attention; view polling does not renew it. Without a touch marker, the source
-preference's timestamp starts the hold. Future lease timestamps are clamped to
-the first observed current time. A stamp-specific exclusive anchor file in the
-marker directory preserves that time across server/engine restarts; repeated
-polls and restarts cannot extend the hold. If a durable anchor cannot be read or
-written, that future marker expires rather than receiving another lease.
-Camera moves alone do not renew it; the page sends
-`radarSource` only for an explicit source change, and camera-only transactions
-preserve the source lease's acceptance time. A poll acknowledges an explicit
-source change only if that request actually carried `radarSource` and its
-intent generation is still current. An older poll cannot consume a newer tap.
-The engine checks expiry without needing a browser. The server persists Auto
-before recording a subsequent touch, so an expired choice cannot revive on the
-next poll or restart. Manual Site retains the zoom-7 floor and
-`site-zoom-floor` fallback.
+The manual Region/Site choice, its 45-minute lease and the manual-Site
+zoom-7 floor (`site-zoom-floor`) were retired on 2026-10-09.
 
 ### Closest-site evidence and refusal (v6.0)
 
@@ -888,16 +953,13 @@ Auto bounds displayed Site retention by `RADAR_SITE_MAX_AGE_SEC`:
 | `nexrad.checkedAt` | Station-local configured-clock rendering of `checkedTs`, or null. It is a check time, never a claimed outage start. |
 | `nexrad.nextCheckTs` | Current existing discovery wakeup epoch, or null when no wakeup is scheduled. Budget/busy-lane rescheduling changes this value. |
 | `nexrad.nextCheckAt` | Station-local configured-clock rendering of `nextCheckTs`, or null. |
-| `refresh.reason` | `not reporting` for an empty-listing refusal; otherwise null/absent. Existing `refresh.intent` identifies the rejected session/generation. Refusal leaves Region's refresh state idle and does not mark its measurements stale. |
 
-`sourceFallback` adds `site-not-reporting`: the durable site preference is kept
-while the existing Region window is shown. A refusal does not acknowledge new
-geometry in `tiles.intent` or change any scan timestamp. It creates no provider
-failure streak, repair retry or 20-second switch deadline. The engine checks
-last evidence before transport on a tap; newly empty listings also refuse in
-that pass. This applies to an empty closest-site choice from an already measured
-Region view. Existing site playback still uses its nearest-reporting timeline;
-an old but nonempty listing or a transport error follows normal acquisition.
+The empty-listing refusal of a manual site tap (`refresh.reason: "not
+reporting"`, `sourceFallback: "site-not-reporting"`) was retired with the
+picker on 2026-10-09. Auto treats the same evidence as the nearest radar being
+off the air and shows Region. Existing site playback still uses its
+nearest-reporting timeline; an old but nonempty listing or a transport error
+follows normal acquisition.
 
 While Region shows, its existing discovery wakeup checks the closest eligible
 site before the unchanged-MRMS early return, including manual Region and Auto
@@ -930,17 +992,9 @@ the primary site’s newest scan. IEM tiles warm only during a Level III outage
 or the paused ceiling. Shadow attention does not gate native. Existing viewed/idle, attention prefetch, and interaction
 reserve admission still apply.
 
-Both themes keep the closest segment tappable when the site is `not reporting`
-or its scan is unavailable. A second line, also in its accessible name, says
-`off air · checked 09:12`, `last scan 27 min ago`, or `scan unavailable` according
-to the evidence. Null knowledge adds no guessed status. An empty-listing tap
-immediately says `KATX is off air · showing Region · Checking again at 09:32`
-(omit the last clause without a schedule). It bypasses the note's 600ms grace
-and cancels switch timing; a matching engine refusal does the same in its poll.
-Older generations cannot refuse a newer choice. Region's existing caption is
-unchanged. Choosing Region can cancel the saved site preference after refusal.
-An empty recent listing cannot establish “off air since HH:MM,” so the UI
-explicitly labels the time as a check.
+The closest-site segment, its off-air second line and the immediate
+`KATX is off air · showing Region` refusal note were retired with the picker
+(2026-10-09).
 
 ### Acquisition, budgets and tile service (N)
 
@@ -1582,14 +1636,9 @@ or `aria-busy` write on the interactive plate.
 
 ### Immediate source choice (v4.3)
 
-`#rad-src` and the requested segment carry `data-state="pending"`; the group
-carries `aria-busy="true"`. The requested segment has a static dotted underline,
-while `aria-pressed` identifies Auto when requested, otherwise the displayed source. The caption
-synchronously names the requested choice and retained displayed source in the
-input frame. Only the corner note has a 600ms grace. A matching inventory starts
-acquisition; four decoded target frames replace pending. Failed attempts retain
-the preference and enter visible retry by the 20-second deadline. Repeated
-payloads retain in-flight work; a newer generation cancels obsolete jobs.
+Retired with the picker (2026-10-09): there is no source to choose. Automatic
+source handoffs still stage and keep the old picture until four target frames
+are decoded.
 No new animation is introduced, including under reduced motion.
 
 The emitter's existing idle tier writes both native LRU bytes and the immutable
@@ -1620,15 +1669,15 @@ The quiet **SMOOTH** button beside zoom reset uses the existing control colours,
 valid page session sends `radarSmooth=on|off` on an explicit tap; exactly one
 value is accepted, independently of camera ownership. Duplicate, empty and
 invalid values and non-controller callers cannot write it. Accepted durable preferences
-(`radar_smooth`, `radar_zoom`, `radar_source`, `radar_center`) are staged in memory and
+(`radar_smooth`, `radar_zoom`, `radar_center`) are staged in memory and
 written by one dedicated writer thread in serve.py, which atomically replaces each
 marker (fsync, then rename) only when its value changes, following the durable symlink.
 No request waits on that write, including the one that made the change; the server
 reads staged values back at once. Smooth waits out its debounce; a newer staging of the
 same preference replaces the older one (newest decision wins), and staged values land
-in staging order. A touch (`presence`, tmpfs) noted while a `radar_source` write is still
-staged is queued behind it on the same writer, so the engine never sees the new touch
-beside the expired choice it would otherwise renew. On shutdown (SIGTERM or exit) every
+in staging order. A touch (`presence`, tmpfs) is written directly, never staged:
+no preference write has to precede it since the manual source choice and its lease
+were retired (2026-10-09). On shutdown (SIGTERM or exit) every
 staged value is written before the process ends.
 The launcher backs it with `$XDG_STATE_HOME/wfpiconsole/radar_smooth` (default
 `~/.local/state/wfpiconsole/radar_smooth`), preserving it across tmpfs recreation.
@@ -1885,8 +1934,9 @@ Design and the later phases: `RADAR-NATIVE-DESIGNS.md`.
 There is no renderer control, poll parameter, response header, or renderer
 preference. Old `radar_render` files (including malformed or unreadable files)
 are ignored and no longer linked by the launcher. The watched preferences are
-`radar_intent` and `radar_smooth`, plus legacy `radar_zoom`, `radar_source`, and
-`radar_center` when there is no ordered intent. Region retains MRMS. Smooth
+`radar_intent` and `radar_smooth`, plus `radar_zoom` and legacy `radar_center`
+when there is no ordered intent. `radar_intent` lives on tmpfs, so after a reboot
+the durable `radar_zoom` is what restores the zoom; that path is not dead code. Region retains MRMS. Smooth
 remains available for Region and automatic IEM fallback and is disabled while
 native frames draw.
 
@@ -2152,19 +2202,11 @@ the page combines aligned v1 site tiles using one 256px scratch for plain or
 Smooth, never four viewport layers. v2 instead uses the single native mosaic
 layer, QC and time rule specified above.
 
-The site picker always names the closest site (`nexrad.id`), falling back to the
-caption's primary only when `nexrad` is null. It retains the number of actual
-other contributors from the displayed frame (`KATX +2`); that count is relative
-to the drawn primary, not the closest site's reporting state. A dark KATX never
-renames the button KLGX. The caption independently names the reporting timeline
-owner while its tiles are late (`KATX loading`); an explicitly non-reporting
-primary can yield to an actual contributor with the not-reporting suffix.
-The visible segments are `Region` and the closest callsign (`KATX`, `KATX +2`).
-The region segment has `aria-label="Region: many radars blended"`; the site
-segment expands to `KATX: Camano Island radar, high resolution, 39 mi NE` or
-`KATX and 2 nearby: Camano Island radar, high resolution, 39 mi NE`.
-Accessible distance describes the closest site; caption distance only describes
-the drawn site when it is `nexrad.id`.
+The caption names the reporting timeline owner while its tiles are late
+(`KATX loading`); an explicitly non-reporting primary can yield to an actual
+contributor with the not-reporting suffix. (The closest-site picker segment
+described here before 2026-10-09 is retired.)
+Caption distance only describes the drawn site when it is `nexrad.id`.
 
 Caption copy (v5.1, retaining v4.3b vocabulary) names the subject, arrival
 cadence, and provider:
@@ -2249,8 +2291,8 @@ site is not relabelled clear.
 The plate fills the 956×490 body at x34,y76 on the 1024×600 tabbed artboard.
 The 25px secondary header and 34px gutters remain. The masthead subtitle is
 restored; alert cases use an inline subtitle and compact masthead/alert band.
-No rail, Range, Updated or Frames rows remain. Source picker/caption live at
-top-left, continuous 372px horizontal legend at top-right, loop/track at
+No rail, Range, Updated or Frames rows remain. The caption lives at
+top-left (the source picker is retired), continuous 372px horizontal legend at top-right, loop/track at
 bottom-left, zoom at bottom-right. The single legend stays 372px for every source. Controls have >=44px
 hit areas. Chrome is confined to y0–72/y418–490, clear of the r150 station disc.
 The single note begins at y418 so it obeys the protected-band invariant.

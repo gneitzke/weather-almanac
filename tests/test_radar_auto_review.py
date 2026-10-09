@@ -12,15 +12,14 @@ from lib import almanac_emit as ae, radar_auto as auto, radar_native_budget as b
 from tests.test_radar_hybrid import hybrid  # noqa: F401
 from tests.test_radar_v3 import multisite  # noqa: F401
 from tests.test_radar_level3 import native  # noqa: F401
-from tests.test_radar_auto import intent
-from tests.test_freshness_health import _load_serve
+from tests.test_radar_auto import intent, real_auto  # noqa: F401
 from tests.test_radar_buffer_page import run_page
 
 
-@pytest.mark.parametrize('mode,zoom,coverage', [('mosaic', 9, 1.), ('auto', 6, 1.), ('auto', 9, .5)])
+@pytest.mark.parametrize('zoom,coverage', [(6, 1.), (9, .5)])
 @pytest.mark.parametrize('tier', ['live', 'warm'])
-def test_region_loop_ignores_native_soft_ceiling(make_emitter, hybrid, multisite, native, tmp_path, monkeypatch, mode, zoom, coverage, tier):
-    intent(tmp_path, zoom, mode)
+def test_region_loop_ignores_native_soft_ceiling(make_emitter, hybrid, multisite, native, tmp_path, monkeypatch, zoom, coverage, tier):
+    intent(tmp_path, zoom)
     monkeypatch.setattr(auto, 'coverage_fraction', lambda *args: coverage)
     counts = []
     for amount in (0, budget.NATIVE_NEWEST_ONLY_BYTES+1):
@@ -200,39 +199,6 @@ def test_region_checkpoint_and_wake_ignore_site_only_policy(make_emitter, monkey
     with pytest.raises(ae._RadarSuperseded): emitter._radar_checkpoint(ctx)
 
 
-def test_camera_only_commit_preserves_expired_source_and_lease(tmp_path, monkeypatch):
-    server = _load_serve(monkeypatch, tmp_path, {})
-    now = 1_800_000_000
-    monkeypatch.setattr(server.time, 'time', lambda: now)
-    (tmp_path/'radar_source').write_text('site')
-    os.utime(tmp_path/'radar_source', (now-3000, now-3000))
-    record = intent(tmp_path, 9, 'site'); record['acceptedAt'] = now-3000
-    (tmp_path/'radar_intent').write_text(json.dumps(record))
-    server._expire_radar_source(); server._flush_preferences()  # preference writer thread: wait for the durable write
-    stamp = (tmp_path/'radar_source').stat().st_mtime_ns
-    params = dict(radarSession=['review-session-12345'], radarGeneration=['1'], radarHeartbeat=['1'], radarClaim=[''], radarClaimEpoch=['0'], radarCommit=['1'], radarPolicy=['manual'])
-    activity = dict(moving=False, zoom=9, center=dict(lat=47, lon=-122))
-    assert server._camera_transaction(activity, params)
-    params.update(radarGeneration=['2'], radarHeartbeat=['2'], radarCommit=['1'], radarPolicy=['manual'])
-    assert server._camera_transaction(activity, params)
-    server._camera_persist_timer.cancel(); server._camera_persist_timer.function(); server._flush_preferences()
-    accepted = server._read_radar_intent()
-    assert accepted['source'] == 'auto' and accepted['sourceAcceptedAt'] == now-3000
-    assert (tmp_path/'radar_source').stat().st_mtime_ns == stamp
-
-
-@pytest.mark.parametrize('future', ['presence', 'mtime'])
-def test_future_lease_clock_is_clamped(tmp_path, monkeypatch, future):
-    now = 1_800_000_000
-    (tmp_path/'radar_source').write_text('site')
-    os.utime(tmp_path/'radar_source', (now-3000, now-3000))
-    if future == 'presence': (tmp_path/'presence').write_text(str(now+86400))
-    else: os.utime(tmp_path/'radar_source', (now+86400, now+86400))
-    assert auto.source_preference(tmp_path, now=now) == 'site'
-    assert auto.source_preference(tmp_path, now=now+auto.MANUAL_HOLD_SEC-1) == 'site'
-    assert auto.source_preference(tmp_path, now=now+auto.MANUAL_HOLD_SEC) == 'auto'
-
-
 @pytest.mark.parametrize('tier', ['watch', 'rest', 'dormant'])
 def test_shadow_tier_cannot_gate_auto_or_native(make_emitter, hybrid, multisite, native, tmp_path, monkeypatch, tier):
     monkeypatch.setattr(ae, 'RADAR_ATTENTION_MODE', 'shadow')
@@ -246,7 +212,7 @@ def test_shadow_tier_cannot_gate_auto_or_native(make_emitter, hybrid, multisite,
 
 def test_auto_schedules_site_breaker_recovery(make_emitter, monkeypatch):
     emitter = make_emitter()
-    emitter._radar_result = emitter._radar_result._replace(source_pref='auto', source_id='iem-mrms-lcref', source_mode='mosaic', zoom_desired=8)
+    emitter._radar_result = emitter._radar_result._replace(source_id='iem-mrms-lcref', source_mode='mosaic', zoom_desired=8)
     seen = []
     monkeypatch.setattr(emitter._radar_health, 'probe_delay', lambda sources: seen.append(sources) or 12)
     assert emitter._radar_probe_delay() == 12
@@ -268,19 +234,19 @@ assert.equal(radarReady().length,1);
 '''.replace('COUNT', str(count)))
 
 
-def test_camera_posts_source_only_for_explicit_change():
+def test_camera_commit_never_posts_a_source():
     html = Path('design/almanac/console_live.html').read_text()
     poll = html[html.index('  function poll(viewStart)'):html.index('  /* Paint the no-data')]
     script = r'''
 const assert=require('node:assert/strict');
 let presenceDirty=false,pollTimer=null,pollController=null,polling=false,pollStart=0,FETCH_MS=4000,failCount=0,pollGen=0,reportRender=false;
 const schedulePoll=()=>{},updateFreshness=()=>{},$=()=>({classList:{contains:()=>true}}),document={hidden:false},clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
-const radarIntent={generation:1,ready:true,owned:true,owner:null,session:'review-session-12345',heartbeat:0,preferredMode:'site'},radarGesture={state:'idle'},radarZoom={auto:false},radarSmooth={pending:null},radarBaseStyle={theme:'paper'};
+const radarIntent={generation:1,ready:true,owned:true,owner:null,session:'review-session-12345',heartbeat:0},radarGesture={state:'idle'},radarZoom={auto:false},radarSmooth={pending:null},radarBaseStyle={theme:'paper'};
 let radarCamera={lat:47,lon:-122,zoom:9},urls=[];
 const fetch=url=>{urls.push(url);const chain={then:()=>chain,catch:()=>chain};return chain};
 POLL
 poll();assert.ok(urls[0].includes('radarCommit=1'));assert.ok(!urls[0].includes('radarSource='));
-polling=false;radarIntent.sourceDirty=true;poll();assert.ok(urls[1].includes('radarSource=site'));
+polling=false;radarIntent.generation=2;poll();assert.ok(urls[1].includes('radarCommit=1'));assert.ok(!urls[1].includes('radarSource='));
 process.exit(0);
 '''.replace('POLL', poll)
     result = subprocess.run(['node'], input=script, capture_output=True, text=True, timeout=10)
@@ -314,14 +280,6 @@ def test_coverage_exit_waits_for_guard_in_real_engine(make_emitter, hybrid, mult
     assert emitter._radar_result.source_mode == 'mosaic'
 
 
-def test_page_source_click_marks_explicit_source_commit():
-    run_page(r'''
-radarView.data.sourcePref='site';radarIntent.preferredMode='site';
-radarPostIntent=()=>{};radarChooseSource('auto');
-assert.equal(radarIntent.sourceDirty,true);assert.equal(radarIntent.preferredMode,'auto');
-''')
-
-
 def test_launcher_migrates_ledger_and_preserves_it_on_restart(tmp_path):
     runtime = tmp_path/'runtime'; runtime.mkdir()
     (runtime/'radar_native_bytes.json').write_text('{"day":"2026-09-25","bytes":123}')
@@ -336,7 +294,7 @@ def test_launcher_migrates_ledger_and_preserves_it_on_restart(tmp_path):
 
 
 def test_region_prefetch_uses_actual_site_target_for_ceiling(make_emitter, hybrid, multisite, native, tmp_path, monkeypatch):
-    (tmp_path/'radar_source').write_text('mosaic')
+    hybrid.pin('mosaic')
     emitter = make_emitter(); emitter._do_radar()
     source, ctx = emitter._radar_idle_context
     assert source == 'iem-mrms-lcref'

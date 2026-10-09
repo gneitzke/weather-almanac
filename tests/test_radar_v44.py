@@ -26,11 +26,11 @@ def test_radar_has_no_hatch_machinery_or_token():
 @pytest.mark.parametrize('count', range(9))
 @pytest.mark.parametrize('paused', [False, True])
 def test_retained_composite_stays_named_even_with_empty_inventory(count, paused):
-    script = function('radarLoopSync') + '''
+    script = function('radarLoopSync') + function('radarFrameWhen') + '''
 const nodes=new Map(),$=id=>{if(!nodes.has(id))nodes.set(id,{dataset:{},style:{},setAttribute(){},removeAttribute(){}});return nodes.get(id);};
 const frames=Array.from({length:COUNT},()=>({ready:true,hasEcho:true,bitmap:{}}));
 const radarView={data:{observedTs:1,frameCount:COUNT},active:true,paused:PAUSED,current:{ts:1,ready:true,bitmap:{}},nextAt:0,loaded:frames,cycle:[]};
-const radarPlayback=()=>frames,radarPruneFrames=()=>{},radarReady=()=>frames,radarReduced=()=>false,radarCouldLoop=()=>false,radarWake=()=>{},radarFrameLabel=()=>'17:12';
+const radarPlayback=()=>frames,radarPruneFrames=()=>{},radarReady=()=>frames,radarReduced=()=>false,radarCouldLoop=()=>false,radarWake=()=>{},radarFrameLabel=()=>'17:12',radarDayLabel=()=>'';
 radarLoopSync();console.log(JSON.stringify($('rad-frame-time').textContent));
 '''.replace('COUNT', str(count)).replace('PAUSED', json.dumps(paused))
     result = subprocess.run(['node', '-e', script], check=True, capture_output=True, text=True)

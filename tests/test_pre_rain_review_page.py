@@ -15,7 +15,7 @@ let active=false;
 const screen={id:'s-radar',classList:{contains:()=>active,toggle:(key,on)=>active=on}};
 const $=id=>id==='s-radar'?screen:{style:{}};
 const document={hidden:false,addEventListener:(name,fn)=>listeners[name]=fn,querySelector:()=>({dataset:{}}),querySelectorAll:selector=>selector==='.screen'?[screen]:[]};
-const radarView={active:false},radarIntent={session:'page-session-123456',generation:0,heartbeat:0,ready:false,owned:false,owner:null},radarGesture={state:'idle'},radarSource={fastUntil:0};
+const radarView={active:false},radarIntent={session:'page-session-123456',generation:0,heartbeat:0,ready:false,owned:false,owner:null},radarGesture={state:'idle'};
 const radarSmooth={pending:null},radarBaseStyle={theme:'paper'};
 const radarGestureCancel=()=>{},radarRelease=()=>{},radarActivate=()=>{},radarIdleSync=()=>{},radarLoopSync=()=>{};
 const updateFreshness=()=>{},isNum=Number.isFinite,clamp=(v,lo,hi)=>Math.max(lo,Math.min(v,hi));

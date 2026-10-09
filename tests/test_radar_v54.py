@@ -95,7 +95,7 @@ def test_n6_primary_listing_controls_mode(make_emitter,hybrid,tmp_path,monkeypat
         if 'ridge::' in req.full_url: return io.BytesIO(png())
         return original(self,req,timeout)
     monkeypatch.setattr(ae.RadarSession,'open',fetch)
-    (tmp_path/'radar_source').write_text('site');(tmp_path/'radar_zoom').write_text('7')
+    hybrid.pin('site');(tmp_path/'radar_zoom').write_text('7')
     e=make_emitter();e._do_radar();r=e._build_payload()['radar']
     assert r['siteId']==primary
     assert r['scanMode']==('precipitation' if primary=='KATX' else 'clear-air')
@@ -141,7 +141,7 @@ def test_short_primary_listing_payload(make_emitter,hybrid,tmp_path,monkeypatch,
         if 'ridge::' in req.full_url: return io.BytesIO(png())
         return original(self,req,timeout)
     monkeypatch.setattr(ae.RadarSession,'open',fetch)
-    (tmp_path/'radar_source').write_text('site')
+    hybrid.pin('site')
     e=make_emitter();e._do_radar();r=e._build_payload()['radar']
     assert r['sourceMode']=='site'
     assert r['scanCadenceSec']==(240 if gaps else None)

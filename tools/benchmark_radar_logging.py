@@ -45,7 +45,6 @@ def simulate(ae, mode, passes=1800):
         app = SimpleNamespace(config=make_config(), obsParser=SimpleNamespace(api_data={}))
         e = ae.AlmanacEmitter(SimpleNamespace(app=app, Obs={}, Met={}, Astro={}, Sager={}),
                               output_path=str(Path(root)/'wx.json'))
-        (Path(root)/'radar_source').write_text('site' if mode == 'Site' else 'mosaic')
         e._radar_cache_ready.set()
         e._running = True
         with patch.object(ae.time, 'time', lambda: clock.now), \
@@ -57,6 +56,8 @@ def simulate(ae, mode, passes=1800):
              patch.object(socket.socket, 'connect', forbidden), \
              patch.object(ae.RadarSession, 'open', unreachable), \
              patch.object(e, '_radar_start_inventory', lambda: None), \
+             patch.object(e, '_radar_auto_source',  # Auto's verdict, pinned per mode
+                          lambda ctx, site_ok: 'site' if mode == 'Site' else 'mosaic'), \
              patch.object(ae.Logger, 'info', log), \
              patch.object(ae.Logger, 'warning', log):
             for _ in range(passes):

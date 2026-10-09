@@ -208,7 +208,8 @@ def test_linux_keepalive_options_and_unsupported_platforms(monkeypatch):
 
 
 def test_retried_pass_succeeds_without_failure_note(make_emitter, origin, monkeypatch, tmp_path):
-    (tmp_path/'radar_source').write_text('mosaic')  # Region transport; Auto would also list sites
+    # Region transport; Auto would also list sites.
+    monkeypatch.setattr(ae.AlmanacEmitter, '_radar_auto_source', lambda self, ctx, site_ok: 'mosaic')
     emitter = make_emitter()
     session = http.RadarSession(first_byte_timeout=.12)
     emitter._radar_session, emitter._radar_provider = session, ae._RADAR_SOURCES['iem-mrms-lcref']['provider']
@@ -246,6 +247,13 @@ def test_full_engine_pass_deadline_includes_all_tile_workers(make_emitter, origi
     monkeypatch.setattr(ae, 'RADAR_PRIMARY_DEADLINE_SEC', budget)
     monkeypatch.setattr(ae, 'RADAR_HTTP_TIMEOUT_SEC', 60)
     monkeypatch.setattr(ae, 'RADAR_RAINVIEWER_MANIFEST_URL', origin.url+'/unavailable-fallback')
+    # The default view is in site range, so Auto lists the nearest site's scans.
+    # Hermetic: that listing (and anything it could lead to) is the local origin,
+    # answering that the site has no recent scans, so the pass stays on Region.
+    monkeypatch.setattr(ae, 'RADAR_SITE_LIST_URL', origin.url+'/listing')
+    monkeypatch.setattr(ae, 'RADAR_SITE_TILE_TEMPLATE', origin.url+'/site/{site}/{stamp}/{z}/{x}/{y}')
+    monkeypatch.setattr(ae, 'RADAR_LEVEL3_BUCKET', origin.url+'/level3/')
+    origin.response = lambda path, raw: b'{"scans":[]}' if path.startswith('/listing') else raw
     origin.hang_path = '/tile/'
     start = time.monotonic()
     try:
@@ -257,6 +265,7 @@ def test_full_engine_pass_deadline_includes_all_tile_workers(make_emitter, origi
             assert elapsed < ae.RADAR_SOURCE_DEADLINE_SEC+.4  # no rescue handshakes at a deadline
         retries = emitter._radar_stale_first_byte_retries
         assert 6 <= sum(path.startswith('/tile/') for _, _, path in origin.requests) <= 24
+        assert any(path.startswith('/listing?') for _, _, path in origin.requests), 'the site listing escaped the origin'
         assert emitter._radar_session is None or not emitter._radar_session._busy
     finally:
         if emitter._radar_session:

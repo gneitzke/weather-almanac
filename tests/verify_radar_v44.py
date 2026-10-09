@@ -85,12 +85,12 @@ def verify(browser, server, theme, output):
     page.route('**/wx.json*', lambda route: route.fulfill(status=200, content_type='application/json', body=json.dumps(switch_payload['data'])))
     switched = page.evaluate('''()=>{
       radarCameraSet({...radarView.data.center,zoom:7});radarSettle();radarView.paused=true;
-      const r=structuredClone(radarView.data);r.sourceId='iem-nexrad-n0b';r.sourceMode='site';r.sourcePref='site';r.siteId='KATX';r.zoomMin=7;r.zoomMax=10;
+      const r=structuredClone(radarView.data);r.sourceId='iem-nexrad-n0b';r.sourceMode='site';r.siteId='KATX';r.zoomMin=7;r.zoomMax=10;
       r.sites=['KOTX','KATX'].map(id=>({...radarSiteTable.find(s=>s.id===id),contributing:true,reporting:true}));
       r.tiles.frames.forEach(f=>{f.siteScans=r.sites.map(s=>({id:s.id,ts:f.ts}));f.levels={'7':false}});
       const tiles=radarTileSet(radarCamera,7),xs=tiles.map(t=>t.x),ys=tiles.map(t=>t.y),g={x0:Math.min(...xs),y0:Math.min(...ys),w:Math.max(...xs)-Math.min(...xs)+1,h:Math.max(...ys)-Math.min(...ys)+1};
       r.tiles.z=7;r.tiles.grid=g;r.tiles.newest.expectedMask=((1n<<BigInt(g.w*g.h))-1n).toString(16);r.tiles.newest.mask=r.tiles.newest.expectedMask;
-      radarSource.desired='site';renderRadar({radar:r});return r;
+      renderRadar({radar:r});return r;
     }''')
     switch_payload['data']={**server.data,'radar':switched}
     page.wait_for_function("radarView.data.sourceMode==='site' && radarView.current.drawnSites?.some(s=>s.id==='KOTX')")

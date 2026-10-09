@@ -14,7 +14,7 @@ def run_remote(body):
     setup = r'''
 const assert=require('node:assert/strict'),vm=require('node:vm');
 const server={owner:'',epoch:0,high:new Map(),generation:0,heartbeat:0,ownerIdle:0,throttled:false,seq:1,smooth:'off',public:false,hold:false,waiting:[],requests:[],
- intent:{seq:1,zoom:8,zoomPolicy:'auto',source:'auto',center:{lat:47,lon:-122}},
+ intent:{seq:1,zoom:8,zoomPolicy:'auto',center:{lat:47,lon:-122}},
  handle(q,panel=false){
    const session=q.get('radarSession'),generation=Number(q.get('radarGeneration')),heartbeat=Number(q.get('radarHeartbeat'));
    const commit=q.get('radarCommit')==='1',claim=q.get('radarClaim'),own=session===this.owner;
@@ -24,20 +24,20 @@ const server={owner:'',epoch:0,high:new Map(),generation:0,heartbeat:0,ownerIdle
      this.high.set(session,{generation,heartbeat});
      this.owner=session;this.generation=generation;this.heartbeat=heartbeat;
      const center=q.get('radarGeoCenter').split(',').map(Number);
-     this.intent={seq:++this.seq,session,generation,epoch:this.epoch,acceptedAt:1000,zoom:Number(q.get('radarGeoZoom')),center:{lat:center[0],lon:center[1]},zoomPolicy:q.get('radarPolicy'),source:q.get('radarSource')||this.intent.source};
+     this.intent={seq:++this.seq,session,generation,epoch:this.epoch,acceptedAt:1000,zoom:Number(q.get('radarGeoZoom')),center:{lat:center[0],lon:center[1]},zoomPolicy:q.get('radarPolicy')};
    }
    // Smooth applies only for the owner's accepted transaction (serve.py B5e).
    if(!this.public&&!this.throttled&&session&&session===this.owner){if(q.has('radarSmooth'))this.smooth=q.get('radarSmooth');}
    const headers=this.public?{}:{'X-Radar-Intent':JSON.stringify({session:this.owner,epoch:this.epoch,generation:this.generation,ownerIdleSec:this.ownerIdle,intent:this.intent}),
      'X-Radar-Smooth':this.smooth,'X-View-Session':'','X-Radar-Panel':panel?'1':'0','X-Radar-Throttled':this.throttled?'1':null};
-   return {ok:true,headers:{get:k=>headers[k]??null},json:()=>Promise.resolve({ts:1000000,radar:{...manifest(),intent:structuredClone(this.intent),sourcePref:this.intent.source}})};
+   return {ok:true,headers:{get:k=>headers[k]??null},json:()=>Promise.resolve({ts:1000000,radar:{...manifest(),intent:structuredClone(this.intent)}})};
  },
  fetch(url,panel){const q=new URL(url,'http://offline.invalid/').searchParams;this.requests.push(q);
    if(this.hold){this.hold=false;return new Promise(resolve=>this.waiting.push(()=>resolve(this.handle(q,panel))));}
    return Promise.resolve(this.handle(q,panel));
  }};
 function manifest(){return {available:true,center:{lat:47,lon:-122},zoomMin:4,zoomMax:10,zoomAutoLevel:8,zoomDesired:8,zoomAuto:true,
- sourceId:'iem-mrms-lcref',sourceMode:'mosaic',sourcePref:'auto',refresh:{state:'idle'},frameCount:0,
+ sourceId:'iem-mrms-lcref',sourceMode:'mosaic',refresh:{state:'idle'},frameCount:0,
  sources:[{mode:'site',available:true,siteId:'KATX'}],nexrad:{id:'KATX',name:'Camano'},tiles:{frames:[]}};}
 function page(panel=false){
  const context=vm.createContext({require,server,manifest,assert,URL,structuredClone,panel});
@@ -85,7 +85,7 @@ b.run('radarZoomChange(-1)');await b.poll();
 const B=b.run('radarIntent.session');assert.equal(server.owner,B);assert.equal(server.intent.zoom,8);
 server.waiting.shift()();await new Promise(setImmediate);
 assert.equal(server.owner,B);assert.equal(server.intent.zoom,8);
-a.run("assert.equal(radarIntent.owned,false);assert.equal(radarIntent.ready,false);assert.equal(radarIntent.sourceDirty,false);assert.equal(radarCamera.zoom,8);assert.doesNotMatch(caption(),/Updating view|Switching/)");
+a.run("assert.equal(radarIntent.owned,false);assert.equal(radarIntent.ready,false);assert.equal(radarCamera.zoom,8);assert.doesNotMatch(caption(),/Updating view|Switching/)");
 // Ordinary polling, including reloads, never steals or invents a commit.
 const reload=page();const mark=server.requests.length;
 for(let i=0;i<4;i++){await a.poll();await b.poll();await reload.poll();}
@@ -98,18 +98,17 @@ assert.ok(server.requests.filter(q=>q.has('radarClaim')).every(q=>q.get('radarCo
 
 
 @pytest.mark.parametrize('action', [
-    "radarChooseSource('site')",
     "radarBegin();radarCameraSet({lat:47.05,lon:-122.05,zoom:8});radarSettle()",
     'radarZoomChange(0)',
 ])
-def test_nonowner_source_pan_and_auto_zoom_claim_only_on_commit(action):
+def test_nonowner_pan_and_auto_zoom_claim_only_on_commit(action):
     run_remote(r'''
 const a=page(),b=page();await a.poll();a.run('radarZoomChange(1)');await a.poll();await b.poll();
 b.run(ACTION);await b.poll();assert.equal(server.owner,b.run('radarIntent.session'));
 await a.poll();a.run('assert.equal(radarIntent.owned,false);assert.equal(radarIntent.ready,false)');
 assert.equal(a.run('JSON.stringify(radarCamera)'),b.run('JSON.stringify(radarCamera)'));
 assert.equal(a.run('radarZoom.auto'),b.run('radarZoom.auto'));
-assert.equal(a.run('radarIntent.preferredMode'),server.intent.source);
+assert.ok(server.requests.every(q=>!q.has('radarSource')));
 a.run('assert.doesNotMatch(caption(),/Updating view|Switching/)');
 '''.replace('ACTION', json.dumps(action)))
 
@@ -129,7 +128,7 @@ server.public=false;server.throttled=false;server.high.set(a.run('radarIntent.se
 a.run("$('rad-smooth').listeners.click()");await a.poll();
 assert.equal(server.smooth,'on');a.run("assert.equal(radarSmooth.pending,null);assert.equal(radarSmooth.value,true)");
 server.public=true;const viewer=page();await viewer.poll();
-viewer.run("assert.equal(radarSmooth.writable,false);radarZoomChange(1);radarChooseSource('site');assert.equal(radarIntent.ready,false);assert.doesNotMatch(caption(),/Updating view|Switching/)");
+viewer.run("assert.equal(radarSmooth.writable,false);radarZoomChange(1);assert.equal(radarIntent.ready,false);assert.doesNotMatch(caption(),/Updating view|Switching/)");
 ''')
 
 

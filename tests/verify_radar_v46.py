@@ -41,7 +41,7 @@ SCENARIO = r'''async()=>{
     for(const level of [z-1,z+1])if(level>=radarView.data.zoomMin&&level<=radarView.data.zoomMax){const p=radarWorldPoint(radarCamera.lat,radarCamera.lon,level);for(let y=Math.floor(p[1]/256)-1;y<=Math.floor(p[1]/256);y++)for(let x=Math.floor(p[0]/256)-1;x<=Math.floor(p[0]/256);x++)all.push({z:level,x,y});}
     for(const t of all){const key=radarTileKey(f,t.z,t.x,t.y);tx.fillStyle='#8aa3c6';tx.fillRect(0,0,256,256);radarTiles.set(key,{...t,key,bitmap:tile.transferToImageBitmap(),hasEcho:true,meta:{opaquePixels:65536,unmatchedPixels:0,ambiguousPixels:0},sites:[]});}
   };
-  const advance=async(first,last)=>{const r=manifest(first,last);await warm({...r.tiles.frames.at(-1),revision:r.tiles.revision,sourceId:r.sourceId});const subject=radarView.current,blend=radarView.blend,deadline=radarView.nextAt;renderRadar({radar:r});check(radarView.current===subject&&radarView.blend===blend&&radarView.nextAt===deadline,'undecoded manifest changed display');check(document.getElementById('rad-asof').textContent===radarFrameLabel(subject),'AS OF lost displayed subject');radarHistoryWork();check(radarView.good.bitmap,'new native scan composited');};
+  const advance=async(first,last)=>{const r=manifest(first,last);await warm({...r.tiles.frames.at(-1),revision:r.tiles.revision,sourceId:r.sourceId});const subject=radarView.current,blend=radarView.blend,deadline=radarView.nextAt;renderRadar({radar:r});check(radarView.current===subject&&radarView.blend===blend&&radarView.nextAt===deadline,'undecoded manifest changed display');check(read().includes(radarFrameLabel(subject)),'loop read lost displayed subject');radarHistoryWork();check(radarView.good.bitmap,'new native scan composited');};
   reset();check(radarView.cycle.length===8,'initial cycle');
   check(step()===0&&step()===1,'initial scan sequence');
   const old=radarView.loaded[0],oldBitmap=old.bitmap,retained=new Map(radarView.loaded.slice(1).map(f=>[f.stamp,f.bitmap])),key=radarFrameKey(radarView.loaded[1]);
@@ -50,7 +50,7 @@ SCENARIO = r'''async()=>{
   check(radarView.current===subject&&radarView.blend===blend&&radarView.nextAt===deadline,'manifest cut/restart');
   check(radarFrameKey(radarView.loaded[0])===key,'frame key changed with newest stamp');
   check([...retained].every(([stamp,b])=>radarView.loaded.find(f=>f.stamp===stamp).bitmap===b),'retained bitmap replaced');
-  check(document.getElementById('rad-asof').textContent===radarFrameLabel(subject),'AS OF displayed measurement');
+  check(read().includes(radarFrameLabel(subject)),'loop read displayed measurement');
   check(!read().includes('Buffering'),'running read rebuffered');
   drawAt(at+60);drawAt(at+120);const sequence=[id(radarView.current)];
   while(id(radarView.current)!==7)sequence.push(step());

@@ -18,7 +18,7 @@ with tempfile.TemporaryDirectory() as d, pytest.MonkeyPatch.context() as m:
  e=ae.AlmanacEmitter(SimpleNamespace(app=app,Obs={},Met={},Astro={},Sager={}),output_path=str(p/'wx.json'))
  h.view()
  for mode in ('site','mosaic','site'):
-  (p/'radar_source').write_text(mode);e._radar_request_times.clear();e._do_radar()
+  h.pin(mode);e._radar_request_times.clear();e._do_radar()
  for _ in range(4):
   e._radar_request_times.clear();e._do_radar(intent_triggered=True)
  assert e._radar_result.source_id=='iem-nexrad-n0b'

@@ -330,19 +330,19 @@ def test_no_fsync_under_the_control_lock(server, tmp_path, monkeypatch):
                 return True
             time.sleep(.01)
         return False
-    # Camera commit (debounced durable zoom/source), the legacy intent and
-    # preference paths, a source expiry and an owner's Smooth change.
+    # Camera commit (debounced durable zoom), the legacy intent path (an old
+    # page's radarSource is ignored) and an owner's Smooth change.
     handle('127.0.0.1', **camera())
     server._camera_persist_timer.function()
     assert landed('radar_zoom', '8')
     (tmp_path/'radar_intent').unlink()
     server._radar_owner = None
     handle('127.0.0.1', radarSeq=5, radarZoom=7, radarSource='site', radarCenter='station')
-    assert landed('radar_zoom', '7') and landed('radar_source', 'site')
+    assert landed('radar_zoom', '7') and not (tmp_path/'radar_source').exists()
     handle('127.0.0.1', **camera(A, 2, radarSmooth='on'))
     server._flush_preferences(force=True)
     assert (tmp_path/'radar_smooth').read_text().strip() == 'on'
-    assert len(synced) >= 4 and 'preference-writer' in synced
+    assert len(synced) >= 3 and 'preference-writer' in synced  # zoom, zoom, smooth
 
 
 def test_response_headers_never_wait_for_a_durable_write(server, tmp_path, monkeypatch):

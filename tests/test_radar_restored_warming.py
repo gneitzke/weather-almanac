@@ -22,7 +22,7 @@ def test_auto_warms_next_source_at_settled_zoom(scene, monkeypatch, source, zoom
         return iter(())
     monkeypatch.setattr(emitter, '_radar_tile_batch', tiles)
     monkeypatch.setattr(emitter, '_radar_headroom_delay', lambda *args: 0)
-    emitter._radar_prefetch(source, dict(ctx, source_pref='auto', zoom=zoom, camera_zoom=zoom))
+    emitter._radar_prefetch(source, dict(ctx, zoom=zoom, camera_zoom=zoom))
     other = SITE if source == MRMS else MRMS
     actual = {z for target, z, center in warmed if target == other}
     floor, ceiling = (7, 10) if other == SITE else (ae.RADAR_MIN_ZOOM, 9)
@@ -42,7 +42,7 @@ def test_auto_warms_next_source_at_settled_zoom(scene, monkeypatch, source, zoom
 def test_region_warming_uses_native_until_paused(
         make_emitter, hybrid, multisite, native, tmp_path, monkeypatch,
         attention, tier, ceiling, variant):
-    (tmp_path/'radar_source').write_text('mosaic')
+    hybrid.pin('mosaic')
     (tmp_path/'radar_viewed').unlink()
     (tmp_path/'radar_viewing').unlink()
     monkeypatch.setattr(ae, 'RADAR_ATTENTION_MODE', attention)
@@ -63,10 +63,10 @@ def test_region_warming_uses_native_until_paused(
     assert emitter._radar_result.source_mode == 'mosaic'
 
 
-@pytest.mark.parametrize('mode', ['mosaic', 'auto'])
 def test_region_failed_listing_replaces_old_evidence_on_original_cadence(
-        make_emitter, hybrid, multisite, native, tmp_path, monkeypatch, mode):
-    intent(tmp_path, 6, mode)
+        make_emitter, hybrid, multisite, native, tmp_path, monkeypatch):
+    hybrid.pin(None)
+    intent(tmp_path, 6)
     emitter = make_emitter(); emitter._do_radar()
     # A Level III cooldown cannot suppress the independent IEM evidence check.
     emitter._radar_cooldowns[ae.RADAR_LEVEL3_TRANSPORT] = hybrid.mono+1000

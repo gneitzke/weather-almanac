@@ -114,12 +114,12 @@ def test_translucent_rgb_fallback_rounds_coverage(monkeypatch):
     assert list(result.getdata()) == [(127,130,149,round(a*180/255)) for a in range(1, 256)]
 
 
-def test_k6_site_zoom_floor(make_emitter, hybrid, tmp_path):
-    (tmp_path/'radar_source').write_text('site')
+def test_k6_wide_zoom_draws_region_without_clear_air(make_emitter, hybrid, tmp_path):
+    hybrid.pin(None)  # Auto: zoom 5 is wider than any one radar reaches
     (tmp_path/'radar_zoom').write_text('5')
     emitter = make_emitter(); emitter._do_radar()
     r = emitter._build_payload()['radar']
-    assert r['sourcePref'] == 'site' and r['sourceMode'] == 'mosaic'
+    assert r['sourceMode'] == 'mosaic'
     assert r['legend']['floorDbz'] == 15
     assert all(b.get('kind') != 'clear-air' for b in r['legend']['bands'])
 
@@ -128,13 +128,13 @@ def test_k6_site_zoom_floor(make_emitter, hybrid, tmp_path):
 
 @pytest.mark.skipif(os.environ.get('RADAR_NET_TEST')!='1',reason='opt in with RADAR_NET_TEST=1')
 @pytest.mark.parametrize('place,lat,lon,mode',[('Seattle',47.61,-122.33,'mosaic'),('Aberdeen',46.975,-123.815,'site')])
-def test_live_tile_set_matches_provider_bytes(make_emitter,tmp_path,place,lat,lon,mode):
+def test_live_tile_set_matches_provider_bytes(make_emitter,tmp_path,monkeypatch,place,lat,lon,mode):
     """Real source PNGs remap byte-for-byte to independently stored XYZ tiles."""
     import io,json,time
     from pathlib import Path
     from tests.fixtures.config import make_config
     config=make_config();config['Station']['Latitude']=str(lat);config['Station']['Longitude']=str(lon)
-    (tmp_path/'radar_source').write_text(mode)
+    monkeypatch.setattr(ae.AlmanacEmitter,'_radar_auto_source',lambda self,ctx,site_ok:mode)
     emitter=make_emitter(config=config)
     started=time.perf_counter();emitter._do_radar()
     expected_source='iem-nexrad-n0b' if mode=='site' else 'iem-mrms-lcref'

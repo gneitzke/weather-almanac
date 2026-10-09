@@ -13,7 +13,7 @@ from tests.test_radar_v3 import multisite  # noqa: F401
 @pytest.mark.parametrize('delay', [0, 25])
 def test_first_publish_slides_warm_hour(make_emitter, hybrid, multisite, tmp_path, monkeypatch, site, spacing, delay):
     count = 3600 // spacing + 1
-    (tmp_path/'radar_source').write_text('site' if site else 'mosaic')
+    hybrid.pin('site' if site else 'mosaic')
     if site:
         multisite.colors['KFAR'] = (12, 145, 16, 255)
         for name in multisite.scans:

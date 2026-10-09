@@ -32,16 +32,10 @@
 #     and reach durable storage debounced. Durable (fsync) writes run only on a
 #     dedicated writer thread: no request, not even the one that made the
 #     change, waits on the SD card.
-import http.server, socketserver, json, math, os, time, threading, re, io, zlib, ipaddress, socket
+import http.server, socketserver, json, math, os, time, threading, re, io, zlib, ipaddress, socket, hashlib
 from urllib.parse import parse_qs
 from decimal import Decimal
 from pathlib import Path
-import sys
-# The kiosk launches this script from its web directory, outside the repo root.
-REPO_ROOT = str(Path(__file__).resolve().parents[3])
-if REPO_ROOT not in sys.path:
-    sys.path.insert(0, REPO_ROOT)
-from lib.radar_auto import source_preference
 
 PORT      = int(os.environ.get("WFP_PORT", "8137"))
 WEB       = os.environ.get("WFP_WEB", ".")
@@ -65,6 +59,39 @@ LOCAL_CONNECTIONS, LAN_CONNECTIONS, LAN_CLIENT_CONNECTIONS = 64, 48, 12
 
 # Aligned with the emitter shared floor and highest source ceiling.
 RADAR_MIN_ZOOM, RADAR_MAX_DESIRED_ZOOM = 4, 10
+# Intent-record fields of the retired manual source choice; the emitter strips
+# the same set (almanac_emit.RADAR_RETIRED_INTENT_FIELDS).
+RETIRED_INTENT_FIELDS = frozenset(('source', 'sourceAcceptedAt'))
+
+# Page build handshake. The page, this server and the emitter the launcher
+# starts beside it are one build: a tab still running an older page mis-reads a
+# newer payload (and a newer page cannot steer an older server). At start the
+# server snapshots index.html and names the snapshot by its hash. It serves the
+# page only from that snapshot, with the name stamped into the page's
+# <meta name="almanac-build">, and sends the name as X-Almanac-Build on every
+# wx.json. A page whose own build differs reloads itself (console_live.html,
+# buildReload). Serving the snapshot, never the file, means a page replaced on
+# disk under a running server cannot reach a browser until the server restarts
+# with it: page and server change together or not at all.
+PAGE_BUILD_TAG = b'<meta name="almanac-build" content="">'
+_page = None  # (build, body) after _load_page(); None serves index.html from disk
+
+
+def _load_page():
+    """Snapshot WEB/index.html as this process's page build. Startup only."""
+    global _page
+    try:
+        with open(os.path.join(WEB, 'index.html'), 'rb') as stream:
+            raw = stream.read()
+    except OSError:
+        _page = None  # no page to pair with: serve whatever appears, no handshake
+        return None
+    build = hashlib.sha256(raw).hexdigest()[:16]
+    body = raw
+    if raw.count(PAGE_BUILD_TAG) == 1:
+        body = raw.replace(PAGE_BUILD_TAG, b'<meta name="almanac-build" content="' + build.encode('ascii') + b'">')
+    _page = (build, body)
+    return build
 
 LOOPBACK = ("127.0.0.1", "::1", "::ffff:127.0.0.1")
 
@@ -311,23 +338,11 @@ def _view_transaction(params):
 
 
 def _note_presence():
-    global _presence_at, _pref_seq
+    global _presence_at
     now = time.time()
     with _presence_lock:
         if 0 <= now - _presence_at < 10:
             return
-        with _pref_lock:
-            if 'radar_source' in _pref_pending:
-                # A source expiry (or choice) is still on its way to disk. The
-                # engine must never see this touch beside the old choice - it
-                # would renew the expired lease - so the touch lands after it,
-                # in order, on the writer thread.
-                _pref_seq += 1
-                _pref_pending['presence'] = (_pref_seq, str(now), time.monotonic())
-                _start_pref_writer()
-                _pref_wake.notify_all()
-                _presence_at = now
-                return
         marker = os.path.join(os.path.dirname(DATA), 'presence')
         tmp = f'{marker}.tmp.{os.getpid()}'
         try:
@@ -384,13 +399,9 @@ def _write_radar_center(values):
     return _write_radar_preference('radar_center', values)
 
 
-def _write_radar_source(values):
-    return _write_radar_preference('radar_source', values)
-
-
 def _preference_value(name, values):
     """The canonical marker text for one valid request value, else None."""
-    if name not in ('radar_zoom', 'radar_source', 'radar_center', 'radar_smooth') or len(values) != 1:
+    if name not in ('radar_zoom', 'radar_center', 'radar_smooth') or len(values) != 1:
         return None
     value = values[0]
     if name == 'radar_center':
@@ -404,9 +415,6 @@ def _preference_value(name, values):
             value = ','.join(format(Decimal(str(n)), 'f') for n in (lat, lon))
     elif name == 'radar_smooth':
         if value not in ('on', 'off'):
-            return None
-    elif name == 'radar_source':
-        if value not in ('auto', 'mosaic', 'site'):
             return None
     elif value != 'auto':
         if not re.fullmatch(r'[0-9]{1,2}', value):
@@ -533,9 +541,6 @@ def _write_radar_preference(name, values):
 
 
 def _persist_preference(name, value):
-    if name == 'presence':
-        _persist_runtime(name, value)
-        return
     marker = _preference_path(name)
     tmp = f"{marker}.tmp.{os.getpid()}"
     try:
@@ -562,23 +567,6 @@ def _persist_preference(name, value):
             pass
 
 
-def _persist_runtime(name, value):
-    """A runtime (tmpfs) marker the writer orders after a durable one: atomic, no fsync."""
-    marker = os.path.join(os.path.dirname(DATA), name)
-    tmp = f'{marker}.tmp.{os.getpid()}'
-    try:
-        with open(tmp, 'w') as f:
-            f.write(value)
-        os.replace(tmp, marker)
-    except OSError:
-        pass
-    finally:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-
-
 def _read_radar_intent():
     try:
         with open(os.path.join(os.path.dirname(DATA), 'radar_intent')) as stream:
@@ -586,44 +574,18 @@ def _read_radar_intent():
         if not isinstance(record, dict): record = {'seq': int(record)}
         if type(record.get('seq')) is not int or not 0 <= record['seq'] <= 999999999999:
             return {'seq': 0}
-        return record
+        # A pre-upgrade record still names the retired manual source choice. It
+        # steers nothing; never echo it to a page or carry it into a new record.
+        return {k: v for k, v in record.items() if k not in RETIRED_INTENT_FIELDS}
     except (OSError, ValueError, TypeError):
         return {'seq': 0}
 
 
-def _expire_radar_source():
-    """Expire before processing a new touch, under the server's writer lock.
-
-    Keep camera ownership/generation intact; advance only the worker sequence.
-    An older debounce callback cannot restore the expired manual preference.
-    """
-    record = _read_radar_intent()
-    intent = record if 'source' in record else None
-    root = Path(DATA).parent
-    requested = intent['source'] if intent else _read_preference('radar_source')
-    if requested not in ('mosaic', 'site'):
-        return
-    if source_preference(root, intent, time.time()) != 'auto':
-        return
-    if intent and intent['source'] != 'auto':
-        record = dict(record, source='auto', seq=min(999999999999, record['seq']+1))
-        marker = root / 'radar_intent'
-        temporary = marker.with_name(marker.name+'.tmp')
-        try:
-            temporary.write_text(json.dumps(record))
-            os.replace(temporary, marker)
-        except OSError:
-            return
-        finally:
-            temporary.unlink(missing_ok=True)
-    _write_radar_source(['auto'])
-
-
 def _write_radar_intent(params):
     """One validated transaction; duplicate generations never mutate preferences."""
-    keys = ('radarSeq','radarZoom','radarSource','radarCenter')
+    keys = ('radarSeq','radarZoom','radarCenter')
     if any(len(params.get(k, [])) != 1 for k in keys): return
-    seq, zoom, source, center = (params[k][0] for k in keys)
+    seq, zoom, center = (params[k][0] for k in keys)
     if not re.fullmatch(r'[0-9]{1,12}', seq, re.ASCII): return
     seq = int(seq)
     if seq <= _read_radar_intent()['seq']: return
@@ -631,13 +593,12 @@ def _write_radar_intent(params):
         if not re.fullmatch(r'[0-9]{1,2}', zoom, re.ASCII): return
         zoom = int(zoom)
         if not RADAR_MIN_ZOOM <= zoom <= RADAR_MAX_DESIRED_ZOOM: return
-    if source not in ('auto','site','mosaic'): return
     if center != 'station':
         if not re.fullmatch(r'-?\d{1,3}(\.\d+)?,-?\d{1,3}(\.\d+)?', center, re.ASCII): return
         lat, lon = map(float, center.split(','))
         if not (-85.05112878 <= lat <= 85.05112878 and -180 <= lon <= 180): return
         center = dict(lat=lat, lon=lon)
-    record = dict(seq=seq, zoom=zoom, source=source, center=center)
+    record = dict(seq=seq, zoom=zoom, center=center)
     marker = os.path.join(os.path.dirname(DATA), 'radar_intent')
     tmp = f'{marker}.tmp.{os.getpid()}'
     try:
@@ -646,7 +607,6 @@ def _write_radar_intent(params):
         os.replace(tmp, marker)
         # Durable preferences are persistence only once a runtime intent exists.
         _write_radar_zoom([str(zoom)])
-        _write_radar_source([source])
     except OSError: pass
     finally:
         try: os.unlink(tmp)
@@ -697,7 +657,7 @@ def _camera_transaction(activity, params):
         return False
     if len(params.get('radarGeneration', [])) != 1:
         return False
-    if any(len(params[k]) != 1 for k in ('radarHeartbeat', 'radarCommit', 'radarPolicy', 'radarSource', 'radarClaim', 'radarClaimEpoch') if k in params):
+    if any(len(params[k]) != 1 for k in ('radarHeartbeat', 'radarCommit', 'radarPolicy', 'radarClaim', 'radarClaimEpoch') if k in params):
         return False
     session = params['radarSession'][0]
     generation = params['radarGeneration'][0]
@@ -727,7 +687,7 @@ def _camera_transaction(activity, params):
     if commit and (claiming or generation > floor):
         if activity.get('moving') or 'zoom' not in activity or 'center' not in activity:
             return False
-        if ('radarSource' in params and params['radarSource'] not in (['auto'], ['site'], ['mosaic'])) or params.get('radarPolicy') not in (['auto'], ['manual']):
+        if params.get('radarPolicy') not in (['auto'], ['manual']):
             return False
         epoch = owner.get('epoch', 0) + int(claiming)
         if not _write_settled_camera(activity, params, epoch):
@@ -749,17 +709,7 @@ def _write_settled_camera(activity, params, epoch=None):
     if activity.get('moving') or 'zoom' not in activity or 'center' not in activity:
         return
     old = _read_radar_intent()
-    sources = params.get('radarSource', [])
-    source = sources[0] if len(sources) == 1 and sources[0] in ('auto', 'site', 'mosaic') else old.get('source')
-    if source is None:
-        source = _read_preference('radar_source')
-    if source not in ('auto', 'site', 'mosaic'):
-        source = 'auto'
-    record = dict(zoom=activity['zoom'], center=activity['center'], source=source, camera=True)
-    if sources:
-        record['sourceAcceptedAt'] = time.time()
-    elif 'sourceAcceptedAt' in old or 'acceptedAt' in old:
-        record['sourceAcceptedAt'] = old.get('sourceAcceptedAt', old.get('acceptedAt'))
+    record = dict(zoom=activity['zoom'], center=activity['center'], camera=True)
     if 'radarSession' in params:
         record.update(session=params['radarSession'][0], generation=int(params['radarGeneration'][0]),
                       zoomPolicy=params['radarPolicy'][0], acceptedAt=time.time(), epoch=epoch)
@@ -782,7 +732,6 @@ def _write_settled_camera(activity, params, epoch=None):
         with _count_lock:  # staged preferences land on the writer thread
             if _read_radar_intent() == record:
                 _write_radar_zoom(['auto' if record.get('zoomPolicy') == 'auto' else str(record['zoom'])])
-                _write_radar_source([record['source']])
     _camera_persist_timer = threading.Timer(.25, persist)
     _camera_persist_timer.daemon = True
     _camera_persist_timer.start()
@@ -979,7 +928,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             same_site = not _cross_site(getattr(self, 'headers', None) or {})
             with _count_lock:  # staged preferences land on the writer thread
                 _polls += 1
-                # A poll may expire a source or update viewing without a
+                # A poll may note presence or update viewing without a
                 # camera commit. Gate all its side effects, never the read.
                 admitted = controller and same_site and _allow_control_write(address)
                 self._radar_throttled = controller and same_site and not admitted
@@ -987,7 +936,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 if panel and same_site and params.get('r') == ['1']:
                     _renders += 1
                 if admitted:
-                    _expire_radar_source()
                     camera_report = viewed_radar and params.get('radarTheme') in (['paper'], ['night'])
                     ordered = 'radarSession' in params
                     accepted = _camera_transaction(_radar_activity(params), params) if ordered and camera_report else panel and not ordered and _radar_owner is None and not _read_radar_intent().get('session')
@@ -1011,7 +959,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     elif not ordered and accepted and set(_read_radar_intent()) == {'seq'}:
                         _write_radar_zoom(params.get('radarZoom', []))
                         _write_radar_center(params.get('radarCenter', []))
-                        _write_radar_source(params.get('radarSource', []))
                 if admitted and params.get('touch') == ['1']:
                     _note_presence()
                 if view_accepted and viewed_radar:
@@ -1038,8 +985,26 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         except (BrokenPipeError,ConnectionResetError):
             pass  # ordinary tab closure/cancel, not an unbounded server traceback
 
+    def _send_page(self):
+        build, body = _page
+        tag = '"' + build + '"'
+        fresh = tag in {t.strip() for t in self.headers.get('If-None-Match', '').split(',')}
+        self.send_response(304 if fresh else 200)
+        self.send_header('ETag', tag)
+        # Revalidate every load: a reload after a deploy must reach the new build.
+        self.send_header('Cache-Control', 'no-cache')
+        if fresh:
+            self.end_headers()
+            return None
+        self.send_header('Content-Type', 'text/html; charset=utf-8')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        return io.BytesIO(body)
+
     def send_head(self):
         path = self.path.split('?')[0]
+        if path in ('/', '/index.html') and _page is not None:
+            return self._send_page()
         local = self.translate_path(path)
         tile=re.fullmatch(r'/radar/t/([a-f0-9]{12})/(iem-mrms-lcref|iem-nexrad-n0b|rainviewer)/(-|[A-Z0-9]{4}|M[a-f0-9]{24})/[0-9]{12}/([0-9]{1,2})/([0-9]{1,4})/([0-9]{1,4})\.png',path,re.ASCII)
         geo=re.fullmatch(r'/radar/geo/([a-f0-9]{12})/(paper|night)/([0-9]{1,2})/([0-9]{1,4})/([0-9]{1,4})\.png',path,re.ASCII)
@@ -1061,6 +1026,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         return super().send_head()
 
     def end_headers(self):
+        if self.path.split('?')[0] == '/wx.json' and _page is not None:
+            self.send_header('X-Almanac-Build', _page[0])  # every viewer runs the page
         if self.path.split('?')[0] == '/wx.json' and _is_controller(self.client_address[0]):
             with _count_lock:
                 record = _read_radar_intent()
@@ -1195,6 +1162,29 @@ class Server(socketserver.ThreadingTCPServer):
             self._release(ticket)
 
 
+def _remove_retired_markers():
+    """Startup: delete state from the retired manual radar source choice.
+
+    Auto is the only source policy; nothing reads `radar_source` or the
+    `.radar-lease-*` hold anchors any more, so none of it may linger to mislead
+    a reader of the data directory. The launcher linked `radar_source` to
+    durable storage: remove the link's target as well as the link."""
+    root = os.path.dirname(DATA) or '.'
+    marker = os.path.join(root, 'radar_source')
+    retired = [marker, os.path.join(root, '.radar-lease.lock')]
+    if os.path.islink(marker) and os.path.basename(os.path.realpath(marker)) == 'radar_source':
+        retired.insert(0, os.path.realpath(marker))
+    try:
+        retired += [os.path.join(root, name) for name in os.listdir(root) if name.startswith('.radar-lease-')]
+    except OSError:
+        pass
+    for path in retired:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass  # absent, or not ours to remove: either way nothing reads it
+
+
 def _terminate(signum, frame):
     raise SystemExit(0)  # unwinds serve_forever so staged preferences are written
 
@@ -1202,6 +1192,9 @@ def _terminate(signum, frame):
 if __name__ == "__main__":
     import signal
     signal.signal(signal.SIGTERM, _terminate)
+    _remove_retired_markers()
+    if _load_page() is None:
+        print('index.html missing at start: page build handshake off', flush=True)
     try:
         with Server((BIND, PORT), Handler) as httpd:
             httpd.serve_forever()

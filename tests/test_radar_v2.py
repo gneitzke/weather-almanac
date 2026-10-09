@@ -16,7 +16,6 @@ from lib import almanac_emit as ae
 from lib import radar_http as transport
 from lib import radar_basemap as bm
 from tests.test_radar_hybrid import hybrid, png  # noqa: F401
-from tests.test_freshness_health import _load_serve, _payload
 
 
 def test_session_reuses_one_connection_and_ipv4_dns(monkeypatch):
@@ -133,7 +132,7 @@ def test_site_actual_scans_and_restart(make_emitter,hybrid,tmp_path,monkeypatch,
             return io.BytesIO(png())
         return original(self,req,timeout)
     monkeypatch.setattr(ae.RadarSession,'open',fetch)
-    (tmp_path/'radar_source').write_text(mode);(tmp_path/'radar_zoom').write_text('7');hybrid.view()
+    hybrid.pin(mode);(tmp_path/'radar_zoom').write_text('7');hybrid.view()
     for _ in range(2):
         emitter=make_emitter();emitter._do_radar();r=emitter._build_payload()['radar']
         assert r['sourceId']==expected and r['sourceMode']==mode
@@ -146,7 +145,7 @@ def test_site_actual_scans_and_restart(make_emitter,hybrid,tmp_path,monkeypatch,
 
 
 def test_site_failure_reports_disabled_and_falls_back(make_emitter,hybrid,tmp_path,monkeypatch):
-    (tmp_path/'radar_source').write_text('site')
+    hybrid.pin('site')
     original=ae.RadarSession.open
     def fetch(self,req,timeout):
         if 'operation=list' in req.full_url: return io.BytesIO(b'{"scans":[]}')
@@ -157,19 +156,6 @@ def test_site_failure_reports_disabled_and_falls_back(make_emitter,hybrid,tmp_pa
     r=emitter._build_payload()['radar']
     assert r['sourceMode']=='mosaic' and r['sourceId']=='iem-mrms-lcref'
     assert r['sources'][1]['reason']=='not reporting' and not r['sources'][1]['available']
-
-
-@pytest.mark.parametrize('address,query,value', [('127.0.0.1','radarSource=site','site'),
-    ('::1','radarSource=mosaic','mosaic'),('198.51.100.1','radarSource=site',None),
-    ('127.0.0.1','radarSource=site&radarSource=mosaic',None),('127.0.0.1','radarSource=KATX',None)])
-def test_source_marker_loopback_validation(monkeypatch,tmp_path,address,query,value):
-    module=_load_serve(monkeypatch,tmp_path,_payload())
-    monkeypatch.setattr(module.http.server.SimpleHTTPRequestHandler,'do_GET',lambda h:None)
-    handler=object.__new__(module.Handler);handler.client_address=(address,1);handler.path='/wx.json?'+query
-    handler.do_GET();module._flush_preferences();pref=tmp_path/'radar_source'  # preference writer thread: wait for the durable write
-    assert (pref.read_text().strip() if pref.exists() else None)==value
-
-
 
 
 @pytest.mark.parametrize('source', ['iem-mrms-lcref', 'iem-nexrad-n0b', 'rainviewer'])

@@ -18,15 +18,17 @@ renderRadar({radar:{available:false,reason:'no data yet',starting:null,
  attention:{tier:'rest',waiting:true,tiles:false,waking:false}},ts:100900});
 assert.equal(document.querySelector('.tab[data-screen="s-radar"]').hidden,false);
 assert.match($('rad-src-cap').textContent,/Radar resting/);
+assert.equal($('rad-status').textContent,'Resting');
 renderRadar({radar:{available:false,reason:'no data yet',starting:null,
  attention:{tier:'live',waiting:true,tiles:true,waking:true}},ts:100902});
 assert.match($('rad-src-cap').textContent,/Waking radar .* first scan/);
+assert.equal($('rad-status').textContent,'Waking');
 ''')
 
 
 def test_waking_note_without_frame_and_during_partial_fresh_publication():
     run_page('radarNoteRender=function'+page_function('radarNoteRender').strip().removeprefix('function radarNoteRender')+r''';
-radarIntent.postedAt=0;radarPendingRetry=()=>null;radarSource.refused=false;
+radarIntent.postedAt=0;radarPendingRetry=()=>null;
 radarView.data.attention={waking:true};radarView.data.stale=false;
 radarView.current=null;radarNoteRender();
 assert.match($('rad-note').textContent,/Waking radar .* fetching the first scan/);

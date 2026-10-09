@@ -26,7 +26,15 @@ def png(color=(0, 204, 0, 255), size=(256, 256)):
 @pytest.fixture
 def hybrid(tmp_path, monkeypatch):
     # This transport fixture exercises Region/IEM; Auto and native have their own fixtures.
-    (tmp_path / 'radar_source').write_text('mosaic')
+    # Auto is the only source policy; a test pins its verdict with state.pin(mode)
+    # ('mosaic' here, 'site' in multisite) or restores the real one with pin(None).
+    auto_source = ae.AlmanacEmitter._radar_auto_source
+    def pin(mode):
+        def pinned(self, ctx, site_ok):
+            zoom = ctx['desired'] if ctx['desired'] is not None else ctx['auto_zoom']
+            return 'site' if mode == 'site' and site_ok and zoom >= ae.RADAR_SITE_MIN_ZOOM else 'mosaic'
+        monkeypatch.setattr(ae.AlmanacEmitter, '_radar_auto_source', pinned if mode else auto_source)
+    pin('mosaic')
     # Keep real policy in the general transport fixture. IEM topology tests
     # explicitly select fallback; the native fixture restores real policy.
     primary_only = ae.AlmanacEmitter._radar_primary_only
@@ -34,7 +42,6 @@ def hybrid(tmp_path, monkeypatch):
     latest = int(datetime(2026, 9, 13, 0, 2, tzinfo=timezone.utc).timestamp())
     state = SimpleNamespace(latest=latest, rv=latest - 120, now=latest + 360,
         mono=0., calls=[], failure=None, tile=png(), metadata=None, conditional=False)
-    os.utime(tmp_path / 'radar_source', (state.now, state.now))
     monkeypatch.setattr(ae, 'RADAR_DIR', str(tmp_path / 'radar'))
     monkeypatch.setattr(ae.time, 'time', lambda: state.now + state.mono)
     monkeypatch.setattr(ae.time, 'monotonic', lambda: state.mono)
@@ -70,6 +77,7 @@ def hybrid(tmp_path, monkeypatch):
         return response
 
     monkeypatch.setattr(ae.RadarSession, 'open', lambda self, *a, **k: fetch(*a, **k))
+    state.pin = pin
     state.primary_only = primary_only
     state.level3_down = level3_down
     state.view = lambda: (tmp_path / 'radar_viewed').write_text(str(ae.time.time()))

@@ -15,8 +15,8 @@ from tests.test_radar_hybrid import hybrid  # noqa: F401
 from tests.test_freshness_health import serve_at, _get  # noqa: F401
 
 
-def transaction(module, session, gen, source='site', zoom=8, claim=None, commit=True, policy='manual'):
-    params = dict(radarSession=[session], radarGeneration=[str(gen)], radarSource=[source],
+def transaction(module, session, gen, zoom=8, claim=None, commit=True, policy='manual'):
+    params = dict(radarSession=[session], radarGeneration=[str(gen)],
                   radarHeartbeat=[str(gen)], radarPolicy=[policy], radarCommit=['1'] if commit else ['0'])
     if claim is not None:
         params['radarClaim'] = [claim]
@@ -30,15 +30,15 @@ def test_ordered_requests_user_claim_and_auto(serve_at, tmp_path):
     module, _ = serve_at({})
     a, b = 'session-a-12345678', 'session-b-12345678'
     assert transaction(module,a,1,claim='')
-    assert transaction(module,a,2,source='site',zoom=8,policy='auto')
+    assert transaction(module,a,2,zoom=8,policy='auto')
     before = module._read_radar_intent()
-    assert not transaction(module,a,1,source='mosaic',zoom=7)
+    assert not transaction(module,a,1,zoom=7)
     assert not transaction(module,a,1,commit=False)
     assert module._read_radar_intent() == before
     assert not transaction(module,b,0,claim='')
     assert not transaction(module,b,0,claim=a)
     assert module._read_radar_intent() == before  # reload reconciliation is read-only
-    assert transaction(module,b,1,source='site',zoom=8,policy='auto',claim=a)
+    assert transaction(module,b,1,zoom=8,policy='auto',claim=a)
     assert not transaction(module,a,3)
     module._camera_persist_timer.join(2); module._flush_preferences()  # preference writer thread: wait for the durable write
     assert (tmp_path/'radar_zoom').read_text().strip() == 'auto'
@@ -204,7 +204,7 @@ def test_multisite_cold_switch_with_partly_used_budget(make_emitter, hybrid, mon
         hybrid.calls.append(('iem',req.get_method(),req.full_url,hybrid.mono,timeout))
         response=io.BytesIO(raw);response.status=200;response.headers={};return response
     monkeypatch.setattr(ae.RadarSession,'open',open_)
-    hybrid.view();(tmp_path/'radar_source').write_text('site')
+    hybrid.view();hybrid.pin('site')
     e=make_emitter();e._radar_request_times=[hybrid.mono]*30;e._do_radar()
     assert e._radar_result.source_mode=='site'
     assert sum(f['complete'] for f in e._radar_result.frames)>=4

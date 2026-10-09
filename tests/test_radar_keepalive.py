@@ -253,7 +253,8 @@ def test_six_workers_complete_frame_with_closing_connections(make_emitter, origi
     origin.alternate = True
     origin.delay = .02
     origin.hold = 6      # tile requests are released only once six are in flight
-    (tmp_path/'radar_source').write_text('mosaic')  # Region transport; Auto would also list sites
+    # Region transport; Auto would also list sites.
+    monkeypatch.setattr(ae.AlmanacEmitter, '_radar_auto_source', lambda self, ctx, site_ok: 'mosaic')
     monkeypatch.setattr(ae, 'RADAR_DIR', str(tmp_path/'radar'))
     monkeypatch.setattr(ae, 'RADAR_IEM_METADATA_URL', origin.url+'/metadata')
     monkeypatch.setattr(ae, 'RADAR_IEM_ARCHIVE_TEMPLATE', origin.url+'/archive/%Y%m%d%H%M')
@@ -282,7 +283,7 @@ def test_primary_transport_failure_falls_back_in_new_geometry_then_recovers(make
     emitter = make_emitter(); emitter._do_radar()
     previous = emitter._radar_result
     clock = FakeClock(); monkeypatch.setattr(ae, 'Clock', clock); emitter._running = True
-    (tmp_path/'radar_intent').write_text(json.dumps(dict(seq=1, zoom=7, source='mosaic', center='station')))
+    (tmp_path/'radar_intent').write_text(json.dumps(dict(seq=1, zoom=7, center='station')))
     def fail(req, timeout):
         if (phase == 'metadata' and req.full_url == ae.RADAR_IEM_METADATA_URL or
                 phase == 'tile' and 'mrms::' in req.full_url):

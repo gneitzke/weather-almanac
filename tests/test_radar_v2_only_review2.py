@@ -197,7 +197,8 @@ def weather_goes_on(hybrid, multisite, clock, minutes):
 
 def test_auto_watch_reevaluates_site_after_chain_forced_region(
         make_emitter, hybrid, multisite, native, tmp_path, monkeypatch, scheduled):
-    intent(tmp_path, 8, 'auto')
+    hybrid.pin(None)
+    intent(tmp_path, 8)
     emitter = make_emitter()
     run(emitter, scheduled)
     assert emitter._radar_result.source_mode == 'site'
@@ -277,8 +278,6 @@ def test_an_abandoned_stall_streak_cannot_fire_hours_later(make_emitter, hybrid,
     hybrid.mono = X + 90 - (hybrid.latest + 360)
     tier(e, tmp_path, 'watch')
     hybrid.latest = X - 120
-    import os
-    os.utime(tmp_path / 'radar_source', (ae.time.time(), ae.time.time()))
     e._do_radar(discovery=True, intent_triggered=False)
     r = e._build_payload()['radar']
     assert e._radar_pass.get('outcome') == 'unpublished'     # an ordinary lag, not a stall

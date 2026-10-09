@@ -34,7 +34,7 @@ def test_warm_pass_does_no_cache_io(make_emitter,hybrid,multisite,tmp_path,monke
     if viewed: hybrid.view()
     e=make_emitter()
     for mode in ('mosaic','site'):
-        (tmp_path/'radar_source').write_text(mode)
+        hybrid.pin(mode)
         e._radar_request_times.clear();e._do_radar()
     assert e._radar_result.source_id=='iem-nexrad-n0b'
     # Make all optional rounds warm before measuring the unchanged pass.

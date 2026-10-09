@@ -67,10 +67,10 @@ def check(page,theme):
     for gaps,mode,minutes,slow in CADENCES:
         inf=ae._radar_scan_cadence(stamps(gaps))
         copy=page.evaluate('''r=>{
-          radarSource.desired=null;radarSwitch=null;radarView.current=null;
+          radarSwitch=null;radarView.current=null;
           Object.assign(radarView.data,{sourceId:'iem-nexrad-n0b',sourceMode:'site',siteId:'KATX',
             sites:[{id:'KATX',contributing:true}],nexrad:{id:'KATX',name:'Camano Island'},
-            sourceFallback:null,legend:{...radarView.data.legend,remapped:true}},r);
+            legend:{...radarView.data.legend,remapped:true}},r);
           const cap=document.getElementById('rad-src-cap');cap.style.maxWidth='2000px';cap.style.width='2000px';
           radarSourceRender();return cap.textContent;
         }''',dict(scanCadenceSec=inf['scan_cadence_sec'],scanMode=mode,scanModeSource=inf['scan_mode_source'],scanningSlowly=slow,latestOnly=not gaps))

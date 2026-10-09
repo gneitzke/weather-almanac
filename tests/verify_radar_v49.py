@@ -91,7 +91,7 @@ def verify(browser, server, origin, monkeypatch, theme, output):
             page.wait_for_function('ts=>radarView.good&&radarView.good.ts===ts&&radarView.good.bitmap', arg=stamp)
             elapsed = time.monotonic()-started
             h = emitter._radar_health.snapshot()
-            read = page.locator('#rad-asof').inner_text()
+            read = page.locator('#rad-frame-time').inner_text()
             assert payload['observedTs'] == stamp and payload['ageSec'] <= 120
             assert not samples or max(samples) <= 120
             assert payload['completeFrameCount'] >= 1 and payload['refresh']['state'] == 'idle'
@@ -107,7 +107,7 @@ def verify(browser, server, origin, monkeypatch, theme, output):
             print(theme, rows[-1], flush=True)
         # Failed-but-fresh must be silent; only age > two cadences gets failure copy.
         copy = page.evaluate('''()=>{
-          const r=radarView.data;radarIntent.postedAt=0;radarSource.refused=false;radarView.zoomNote='';
+          const r=radarView.data;radarIntent.postedAt=0;radarView.zoomNote='';
           radarView.refresh={state:'failed'};
           const texts=[];for(const age of [120,240,241]){
             Date.now=()=>1000*(r.observedTs+age);radarNoteRender();texts.push(document.getElementById('rad-note').textContent);

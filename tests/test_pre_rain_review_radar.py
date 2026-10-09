@@ -84,7 +84,7 @@ renderRadar({radar:manifest(),ts:100900});
 radarView.refresh={state:'history',nextRetry:100930,retryReason:'budget'};
 radarView.payloadTs=100900;
 if(STATE==='retarget'){radarCamera.lon+=1;radarRetarget();radarUpdateReady();}
-if(STATE==='source'){radarView.pendingSource={frames:[],data:manifest('b')};radarSource.desired='site';}
+if(STATE==='source'){radarView.pendingSource={frames:[],data:manifest('b')};}
 if(STATE==='partial'){radarView.loaded[0].ready=false;}
 if(STATE==='short'){radarView.loaded=radarView.loaded.slice(-4);radarUpdateReady();}
 if(STATE==='failed'){radarView.refresh.state='failed';}

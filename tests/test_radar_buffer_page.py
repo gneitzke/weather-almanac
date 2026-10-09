@@ -38,7 +38,7 @@ radarWake=()=>{};radarGeoRequest=()=>{};radarQueueTiles=()=>{};
 radarOverlayBuild=radarOverlayPaint=radarBasePaint=radarZoomRender=radarLegendRender=radarSourceRender=radarNoteRender=()=>{};
 radarView.active=true;radarCamera={lat:47,lon:-122,zoom:8};radarCameraDirty=radarBaseDirty=radarEchoDirty=false;radarIdlePrefetchAt=Infinity;
 const frame=i=>({ts:100000+i*120,stamp:String(i),at:String(i),levels:{8:true},siteScans:[],complete:true});
-function manifest(source='a',last=7){return {available:true,sourceId:source,sourceMode:source==='a'?'mosaic':'site',sourcePref:source==='a'?'mosaic':'site',siteId:source==='a'?null:'KATX',center:{lat:47,lon:-122},zoomMin:4,zoomMax:9,staleSec:600,ageSec:0,stale:false,observedTs:frame(last).ts,frameCount:8,refresh:{state:'idle'},tiles:{revision:'123456789abc',z:8,grid:{x0:1,y0:2,w:4,h:3},camera:{...radarCamera},frames:Array.from({length:8},(_,i)=>frame(last-7+i))}}}
+function manifest(source='a',last=7){return {available:true,sourceId:source,sourceMode:source==='a'?'mosaic':'site',siteId:source==='a'?null:'KATX',center:{lat:47,lon:-122},zoomMin:4,zoomMax:9,staleSec:600,ageSec:0,stale:false,observedTs:frame(last).ts,frameCount:8,refresh:{state:'idle'},tiles:{revision:'123456789abc',z:8,grid:{x0:1,y0:2,w:4,h:3},camera:{...radarCamera},frames:Array.from({length:8},(_,i)=>frame(last-7+i))}}}
 function decode(f){f.bitmap=bitmap();f.camera={...radarCamera};f.hasEcho=true;f.ready=true;return f}
 function seed(){radarView.data=manifest();radarView.loaded=radarView.data.tiles.frames.map(f=>decode({...f,sourceId:'a',revision:'123456789abc'}));radarView.good=radarView.current=radarView.loaded.at(-1);radarView.readyFrames=radarView.loaded.slice();radarView.cycle=radarView.loaded.slice();radarView.started=true;radarView.nextAt=clock+1100;radarView.windowKey=radarWindowKey(radarView.data);}
 seed();
@@ -48,15 +48,13 @@ BODY
     assert result.returncode == 0, result.stderr
 
 
-@pytest.mark.parametrize('action', ['release', 'choose', 'replacement'])
+@pytest.mark.parametrize('action', ['release', 'replacement'])
 def test_abandoned_source_closes_staged_plates_and_compositor(action):
     run_page(r'''
 renderRadar({radar:manifest('b'),ts:100900});
 const pending=radarView.pendingSource,held=pending.frames.slice(-3).map(f=>decode(f).bitmap);
 radarCompositeJob={f:pending.frames[0]};
-radarSource.desired='site';
 if(ACTION==='release')radarRelease();
-else if(ACTION==='choose')radarChooseSource('mosaic');
 else renderRadar({radar:manifest('c'),ts:100902});
 assert.ok(held.every(b=>b.closes===1),'staged bitmaps escaped explicit ownership');
 assert.ok(!radarCompositeJob,'abandoned compositor survived');

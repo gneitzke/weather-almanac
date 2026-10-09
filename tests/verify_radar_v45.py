@@ -44,7 +44,7 @@ def acquisition_pixels(page, theme, output):
         if(a&&!allowed.has(Array.from(after.slice(i,i+4)).join(',')))unexpected++;
         if(a&&px>=Math.round(478+hole.x*256-p[0])&&px<Math.round(478+(hole.x+1)*256-p[0])&&y>=Math.round(245+hole.y*256-p[1])&&y<Math.round(245+(hole.y+1)*256-p[1]))holePixels++;
       }
-      radarView.paused=false;radarView.refresh={state:'newest'};radarIntent.postedAt=Date.now()-1000;radarSource.refused=false;
+      radarView.paused=false;radarView.refresh={state:'newest'};radarIntent.postedAt=Date.now()-1000;
       radarUpdateReady();radarView.active=true;radarLoopSync();radarView.active=false;radarState();radarSourceRender();radarNoteRender();radarOverlayBuild();radarZoomRender();
       const still={unchanged:before.every((v,i)=>v===after[i]),marked:marked(),holePixels,unexpected,read:document.getElementById('rad-frame-time').textContent,note:document.getElementById('rad-note').textContent,aria:document.getElementById('rad-plate').getAttribute('aria-label')};
       c.width=c.height=0;return {cases,still};

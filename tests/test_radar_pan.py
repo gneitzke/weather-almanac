@@ -151,7 +151,7 @@ def test_site_pan_beyond_all_range_circles_falls_back(make_emitter, hybrid, tmp_
         assert 'operation=list' not in req.full_url and 'ridge::' not in req.full_url
         return original(self, req, timeout)
     monkeypatch.setattr(ae.RadarSession, 'open', fetch)
-    (tmp_path / 'radar_source').write_text('site')
+    hybrid.pin('site')
     (tmp_path / 'radar_center').write_text('47.61,-130')
     emitter = make_emitter(); emitter._do_radar(); r = emitter._build_payload()['radar']
     assert r['available'] and r['sourceMode'] == 'mosaic'

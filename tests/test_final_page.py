@@ -19,7 +19,6 @@ assert.equal(radarView.holdingWindow,false);
 
 def test_pan_during_source_stage_preserves_target_manifest():
     run_page(r'''
-radarSource.desired='site';
 renderRadar({radar:manifest('b'),ts:100900});
 const pending=radarView.pendingSource,rasters=pending.frames.slice(-3).map(f=>decode(f).bitmap);
 radarCamera={...radarCamera,lon:radarCamera.lon+.01};
@@ -47,7 +46,7 @@ assert.ok(!radarView.blend||radarView.blend.to!==target,'loop never advanced bey
 
 def test_source_camera_ack_keeps_newly_decoded_target_plates():
     run_page(r'''
-radarSource.desired='site';renderRadar({radar:manifest('b'),ts:100900});
+renderRadar({radar:manifest('b'),ts:100900});
 radarCamera={...radarCamera,lon:radarCamera.lon+.01};radarRetarget();
 const held=radarView.pendingSource.frames.slice(-3).map(decode),rasters=held.map(f=>f.bitmap);
 renderRadar({radar:manifest('b'),ts:100901});

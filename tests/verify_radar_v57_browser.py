@@ -5,8 +5,16 @@ import json
 import time
 from pathlib import Path
 from playwright.sync_api import sync_playwright
-from tests.verify_radar_headless import radar_server, AUDIT
-from tests.verify_radar_picker import site_payload
+from tests.verify_radar_headless import radar_server, AUDIT, ae
+
+
+def site_payload(original):
+    """The fixture's Region payload re-described as the KATX site view."""
+    data=copy.deepcopy(original);r=data['radar'];r.update(sourceId='iem-nexrad-n0b',sourceMode='site',siteId='KATX',
+        legend=dict(ae._RADAR_DISPLAY_RAMP,remapped=True),cadenceSec=300,sites=[dict(id='KATX',lat=48.1947,lon=-122.4957,contributing=True,reporting=True)],zoomMin=7,zoomMax=10)
+    r['tiles'].update(source=r['sourceId'],site='KATX')
+    for f in r['tiles']['frames']:f['siteScans']=[dict(id='KATX',ts=f['ts'])]
+    return data
 
 
 def verify(browser, server, theme, output):
@@ -42,15 +50,12 @@ def verify(browser, server, theme, output):
     page.wait_for_function('!polling')
     assert json.loads((server.root/'radar_activity').read_text())['moving']
     page.evaluate('radarGestureCancel()')
-    # Pending caption is observed in the first RAF, before any target payload.
-    evidence['caption']=page.evaluate('''async()=>{radarChooseSource('site');return await new Promise(resolve=>requestAnimationFrame(()=>resolve(document.getElementById('rad-src-cap').textContent)));}''')
-    assert evidence['caption'].startswith('Switching to Camano Island radar')
+    # An automatic handoff (Auto chose the site) stages the target: its caption is
+    # in the first RAF and the stuck jobs of the old view are cancelled.
+    evidence['caption']=page.evaluate('''async d=>{renderRadar(d);return await new Promise(resolve=>requestAnimationFrame(()=>resolve(document.getElementById('rad-src-cap').textContent)));}''',site_payload(server.data))
+    assert evidence['caption'].startswith('Switching to Camano Island radar'),evidence['caption']
     evidence['cancelledOldJobs']=page.evaluate('''()=>{window.fetch=v57Fetch;return v57OldJobs.length===4&&v57OldJobs.every(j=>j.controller.signal.aborted);}''')
     assert evidence['cancelledOldJobs'],page.evaluate('v57OldJobs.map(j=>({aborted:j.controller.signal.aborted,key:j.key}))')
-    old=copy.deepcopy(server.data);old['radar']['refresh']=dict(state='failed',intent=dict(session='old-session',generation=0))
-    page.evaluate('d=>renderRadar(d)',old)
-    assert page.evaluate('radarSource.desired')=='site'
-    assert page.evaluate('radarIntent.preferredMode')=='site'
     # Header, body and image decode each exhaust an absolute job deadline. The
     # promise barriers are deterministic; move only each job's clock endpoint.
     evidence['deadlines']=page.evaluate('''async()=>{
@@ -70,9 +75,9 @@ def verify(browser, server, theme, output):
     old_session=page.evaluate('radarIntent.session')
     page.evaluate('sessionStorage.setItem("radarCamera",JSON.stringify({lat:48,lon:-123,zoom:5,auto:false}))')
     page.reload();page.locator('.tab[data-screen="s-radar"]').click()
-    page.wait_for_function('radarIntent.owned&&!radarIntent.ready&&radarSource.desired==="site"')
+    page.wait_for_function('radarIntent.owned&&!radarIntent.ready')
     assert page.evaluate('radarIntent.session')!=old_session
-    assert page.evaluate('radarCamera.zoom===8&&radarZoom.auto&&radarIntent.preferredMode==="site"')
+    assert page.evaluate('radarCamera.zoom===8&&radarZoom.auto')
     evidence['reloadPendingAuto']=True
     target=site_payload(server.data)
     target['radar']['intent']=page.evaluate('({session:radarIntent.session,generation:radarIntent.generation})')
@@ -80,7 +85,7 @@ def verify(browser, server, theme, output):
     target['radar']['tiles']['intent']=target['radar']['intent']
     (server.root/'wx.json').write_text(json.dumps(target))
     page.evaluate('d=>renderRadar(d)',target)
-    page.wait_for_function('radarView.data.sourceMode==="site" && radarReady().length>=4 && !radarSource.desired',timeout=20000)
+    page.wait_for_function('radarView.data.sourceMode==="site" && radarReady().length>=4 && !radarView.pendingSource',timeout=20000)
     first=page.evaluate('radarView.current.stamp')
     page.wait_for_function('s=>radarView.current.stamp!==s',arg=first,timeout=3000)
     evidence['switch']=dict(fourDecoded=True,advancing=True)
@@ -89,8 +94,8 @@ def verify(browser, server, theme, output):
     assert evidence['compositeEscape']
     # Contract expiry is independent of successful server polls. Invoke the
     # deadline callback with a fake timer instead of sleeping twenty seconds.
-    evidence['retry']=page.evaluate('''()=>{var callback,real=setTimeout;window.setTimeout=(fn,ms)=>{if(ms===RAD_SWITCH_MS){callback=fn;return 0;}return real(fn,ms);};try{radarChooseSource('mosaic');callback();}finally{window.setTimeout=real;}return {overdue:radarSwitch.overdue,caption:document.getElementById('rad-src-cap').textContent,bitmap:!!radarView.current.bitmap};}''')
-    assert evidence['retry']['overdue'] and evidence['retry']['bitmap'] and evidence['retry']['caption'].startswith('Switching to Region')
+    evidence['retry']=page.evaluate('''()=>{var callback,real=setTimeout;window.setTimeout=(fn,ms)=>{if(ms===RAD_SWITCH_MS){callback=fn;return 0;}return real(fn,ms);};try{radarSwitchStart();callback();}finally{window.setTimeout=real;}return {overdue:radarSwitch.overdue,caption:document.getElementById('rad-src-cap').textContent,bitmap:!!radarView.current.bitmap};}''')
+    assert evidence['retry']['overdue'] and evidence['retry']['bitmap'] and evidence['retry']['caption'].startswith('Updating view')
     # Basemap stays at the camera's level even when echo source caps lower.
     assert page.evaluate('''()=>{radarView.data.zoomMax=7;radarCamera.zoom=10;return radarLevel()===7&&radarBasemapLevel()===10;}''')
     assert not errors,errors

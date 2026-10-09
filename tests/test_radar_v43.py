@@ -58,7 +58,7 @@ def test_completed_round_repairs_deleted_disk_tile(scene, multisite):
 
 
 def test_complete_mosaic_return_retries_site_warming(make_emitter, hybrid, multisite, tmp_path):
-    (tmp_path/'radar_source').write_text('mosaic')
+    hybrid.pin('mosaic')
     hybrid.view()
     e = make_emitter()
     e._radar_cooldowns[SITE] = hybrid.mono + 60
@@ -77,11 +77,11 @@ def test_complete_mosaic_return_retries_site_warming(make_emitter, hybrid, multi
 
 
 def test_older_site_volume_stages_complete_frames_before_publication(make_emitter, hybrid, multisite, tmp_path, monkeypatch):
-    (tmp_path/'radar_source').write_text('mosaic')
+    hybrid.pin('mosaic')
     e = make_emitter();e._do_radar()
     mosaic_ts = e._radar_result.ts_frame
     multisite.scans['KNEA'] = [mosaic_ts-60]
-    (tmp_path/'radar_source').write_text('site')
+    hybrid.pin('site')
     seen = []
     def publish():
         r = e._radar_result
@@ -94,7 +94,7 @@ def test_older_site_volume_stages_complete_frames_before_publication(make_emitte
     assert seen[0][1] >= min(4,seen[0][2])
 
 
-def test_idle_warm_watcher_yields_to_new_source_and_single_flight(scene, tmp_path, monkeypatch):
+def test_idle_warm_watcher_yields_to_new_intent_and_single_flight(scene, tmp_path, monkeypatch):
     e, ctx = scene
     e._running = True;e._radar_was_viewed = True
     e._radar_zoom_stamp = e._radar_preference_stamp()
@@ -106,7 +106,7 @@ def test_idle_warm_watcher_yields_to_new_source_and_single_flight(scene, tmp_pat
     e._inflight.clear();e._check_radar_zoom();e._check_radar_zoom()
     assert len(tasks) == 1 and tasks[0] == ('radar', e._radar_resume_warm)
     tasks.clear();e._radar_warm_pending = True
-    (tmp_path/'radar_source').write_text('site')
+    (tmp_path/'radar_zoom').write_text('9')
     requested = []
     monkeypatch.setattr(e, '_do_radar', lambda **args: requested.append(args))
     e._check_radar_zoom();assert len(tasks) == 1

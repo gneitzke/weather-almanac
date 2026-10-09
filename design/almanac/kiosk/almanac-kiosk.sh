@@ -134,10 +134,8 @@ if [ ! -e "$RADAR_STATE/radar_zoom" ] && [ -f "$DATA_DIR/radar_zoom" ]; then
   cp "$DATA_DIR/radar_zoom" "$RADAR_STATE/radar_zoom"
 fi
 ln -sfn "$RADAR_STATE/radar_zoom" "$DATA_DIR/radar_zoom"
-if [ ! -e "$RADAR_STATE/radar_source" ] && [ -f "$DATA_DIR/radar_source" ]; then
-  cp "$DATA_DIR/radar_source" "$RADAR_STATE/radar_source"
-fi
-ln -sfn "$RADAR_STATE/radar_source" "$DATA_DIR/radar_source"
+# Auto is the only radar source policy: the manual choice is retired, not linked.
+rm -f "$DATA_DIR/radar_source" "$RADAR_STATE/radar_source"
 if [ ! -e "$RADAR_STATE/radar_smooth" ] && [ -f "$DATA_DIR/radar_smooth" ]; then
   cp "$DATA_DIR/radar_smooth" "$RADAR_STATE/radar_smooth"
 fi

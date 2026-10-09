@@ -21,7 +21,7 @@ def test_settled_report_is_intent_and_durable_is_only_default(serve_at, make_emi
     e = make_emitter()
     e._do_radar()
     assert e._radar_result.zoom == 8
-    (tmp_path/'radar_intent').write_text(json.dumps(dict(seq=1, zoom=8, source='mosaic', center='station')))
+    (tmp_path/'radar_intent').write_text(json.dumps(dict(seq=1, zoom=8, center='station')))
     module, url = serve_at({})
     q = '/wx.json?view=radar&radarTheme=paper&radarGeoZoom=7&radarGeoCenter=47.61,-122.33'
     _get(url+q+'&radarMoving=1')
@@ -148,7 +148,7 @@ def test_failed_pass_hysteresis_and_local_exclusion(make_emitter):
     assert e._radar_failed_pass('iem', OSError('host'), {})
 
 
-def test_alternating_passes_retain_source_three_failures_stage_four_then_dwell(make_emitter, hybrid, tmp_path, monkeypatch):
+def test_alternating_passes_retain_source_three_failures_then_dwell(make_emitter, hybrid, tmp_path, monkeypatch):
     (tmp_path/'radar_viewed').write_text(str(hybrid.now))
     e = make_emitter()
     e._do_radar()
@@ -174,7 +174,9 @@ def test_alternating_passes_retain_source_three_failures_stage_four_then_dwell(m
     e._radar_request_times.clear()
     e._do_radar(intent_triggered=False)
     assert e._radar_result.source_id == 'rainviewer'
-    assert all(s is old or s.source_id == 'rainviewer' and sum(f['complete'] for f in s.frames) >= 4 for s in published)
+    # Auto publishes a switch once its newest frame is complete; the page keeps
+    # the old loop on screen until four of the new one are decoded.
+    assert all(s is old or s.source_id == 'rainviewer' and s.frames[-1]['complete'] for s in published)
     assert any('SWITCH iem-mrms-lcref -> rainviewer; reason=' in m and '3 consecutive' in m for m in messages)
     monkeypatch.setattr(e, '_radar_iem_frames', primary)
     e._do_radar(intent_triggered=False)

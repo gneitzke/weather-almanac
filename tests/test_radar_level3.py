@@ -244,7 +244,7 @@ def test_v2_draws_site_scans_from_level3_once_per_scan(make_emitter, hybrid, mul
 
 
 def test_v2_leaves_region_unchanged(make_emitter, hybrid, multisite, native, tmp_path):
-    (tmp_path / 'radar_source').write_text('mosaic')
+    hybrid.pin('mosaic')
     hybrid.view()
     emitter = make_emitter(); emitter._do_radar()
     r = emitter._build_payload()['radar']

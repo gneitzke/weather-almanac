@@ -85,23 +85,22 @@ small tiles for every zoom and both themes, and the page draws them in a few
 milliseconds. Radar arrives as tiles too, so a pan reveals more of the map and
 a zoom step never waits on a server or blanks what you were looking at.
 
-The map is centred on the station and works anywhere on Earth. Three buttons
-choose the picture:
+The map is centred on the station and works anywhere on Earth. There is no
+source to choose: the zoom picks the picture, and by default it is the
+high-resolution one.
 
-- **Region** shows NOAA's MRMS composite, a new image every two minutes, across
-  the US. Everywhere else, or when that feed is down, it falls back to a global
-  ten-minute mosaic, and the caption says which one is on screen.
-- **The nearest radar** (its callsign on the button, e.g. "KATX +3") shows that
-  radar's own scans at their real times, merged with every neighbour whose range
-  reaches the view. The caption names the radar, its distance and how often it
-  scans, and reads its operating mode from that cadence: about every four
-  minutes is precipitation mode, about every ten is clear-air. The button warns
-  you before you tap when the radar is off the air or its last scan is stale.
-- **Auto**, the default, follows the zoom. At zoom 8 and closer it shows the
-  nearest radar; at 6 and wider, Region. At 7 it keeps whatever is showing, so
-  pinching back and forth never flips it. It moves to the radar only when
-  reporting radars cover the view. Tapping Region or the radar holds that choice
-  until you tap Auto or leave the screen untouched for 45 minutes.
+- **The nearest radar** shows that radar's own scans at their real times, merged
+  with every neighbour whose range reaches the view. This is what the panel
+  shows at its normal zoom (8) and closer, whenever reporting radars cover the
+  view. The caption names the radar, its distance and how often it scans, and
+  reads its operating mode from that cadence: about every four minutes is
+  precipitation mode, about every ten is clear-air.
+- **Region** takes over when you zoom out to 6 or wider, beyond what the radars
+  cover, or when the nearest radar is off the air. It shows NOAA's MRMS
+  composite, a new image every two minutes, across the US. Everywhere else, or
+  when that feed is down, it falls back to a global ten-minute mosaic, and the
+  caption says which one is on screen. At zoom 7 the map keeps whatever is
+  showing, so pinching back and forth never flips it.
 
 A switch never blanks the map: the old picture stays until the new one has
 frames. The station glyph marks home while you are away, and the view drifts
@@ -125,8 +124,10 @@ the same pixels. Nothing below 15 dBZ is drawn, so insects and clear-air clutter
 never film the map. There is no guessing at rain versus snow.
 
 **The loop.** Recent frames play five a second with a short crossfade and a hold
-on the newest. The newest scan time is printed beside the clock and is never
-dressed up as "live". Opening the tab brings the loop up from cache in
+on the newest. Each frame's scan time is printed under the play control (with
+its date when it is from an earlier day) and is never dressed up as "live". The
+corner above the map stays empty while the radar is current; it speaks only
+when something is wrong: "Stale · 32 min old", "Couldn't refresh", "Starting". Opening the tab brings the loop up from cache in
 milliseconds. A **+/−** control sets the zoom and remembers it across reboots,
 and a zoom step keeps the loop playing until the new frames are in. **SMOOTH**
 (off by default) softens echo edges for Region; it is disabled while the radar's
@@ -140,9 +141,9 @@ the radar view switches to IEM's pre-gridded tiles until midnight UTC. IEM tiles
 also fill in, automatically and labelled, whenever Level III can't be reached.
 `/health` shows the day's count.
 
-![The Radar tab in Region mode: the NOAA MRMS mosaic over Puget Sound on a showery morning, with the Auto, Region and KATX buttons](design/almanac/screenshots/radar.png)
+![The Radar tab zoomed out to Region: the NOAA MRMS mosaic over Puget Sound on a showery morning](design/almanac/screenshots/radar.png)
 
-![The Radar tab on Auto at zoom 9: v2 draws the radar's own 250-metre cells, KATX and three neighbours merged pixel by pixel](design/almanac/screenshots/radar-site.png)
+![The Radar tab at zoom 9: v2 draws the radar's own 250-metre cells, KATX and three neighbours merged pixel by pixel](design/almanac/screenshots/radar-site.png)
 
 ![Forty minutes of radar looping: showers moving across the Cascade foothills](design/almanac/screenshots/radar.gif)
 

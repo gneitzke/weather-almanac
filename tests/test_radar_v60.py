@@ -1,6 +1,4 @@
 """Last-listing evidence reaches Region independently of retained tile snapshots."""
-import json
-
 import pytest
 
 from lib import almanac_emit as ae
@@ -11,7 +9,7 @@ from tests.test_radar_v50 import scheduled  # noqa: F401
 
 @pytest.mark.parametrize('status', ['empty', 'old', 'fresh', 'failed'])
 def test_region_publishes_last_listing_on_discovery(make_emitter, hybrid, multisite, tmp_path, monkeypatch, status):
-    (tmp_path/'radar_source').write_text('mosaic')
+    hybrid.pin('mosaic')
     e = make_emitter()
     e._do_radar()
     before = e._radar_result
@@ -46,42 +44,6 @@ def test_region_publishes_last_listing_on_discovery(make_emitter, hybrid, multis
         assert aged['ageSec'] == n['ageSec']+60
 
 
-def test_dark_tap_refused_without_transport_then_region_refreshes_and_site_recovers(make_emitter, hybrid, multisite, tmp_path):
-    (tmp_path/'radar_source').write_text('mosaic')
-    e = make_emitter()
-    e._do_radar()
-    multisite.scans['KNEA'] = []
-    e._do_radar(intent_triggered=False, discovery=True)
-    old = e._radar_result
-    hybrid.calls.clear(); multisite.calls.clear()
-    intent = dict(seq=1, zoom=8, source='site', center='station')
-    (tmp_path/'radar_intent').write_text(json.dumps(intent))
-    e._do_radar()
-    r = e._build_payload()['radar']
-    assert not hybrid.calls and not multisite.calls
-    assert r['refresh']['reason'] == 'not reporting' and r['refresh']['intent'] == intent
-    assert r['sourceMode'] == 'mosaic' and r['sourcePref'] == 'site'
-    assert r['sourceFallback'] == 'site-not-reporting'
-    assert e._radar_result.frames == old.frames
-    assert not e._radar_transport_failures and not e._radar_pending and not e._retries
-    assert r['intent'] != intent  # refusing a choice cannot acknowledge new pixels
-    # A due discovery continues acquiring Region even with the site preference.
-    hybrid.latest += 120; hybrid.now += 120
-    e._do_radar(intent_triggered=False, discovery=True)
-    r = e._build_payload()['radar']
-    assert r['observedTs'] == hybrid.latest and r['sourceMode'] == 'mosaic'
-    assert r['refresh']['reason'] == 'not reporting'
-    assert multisite.calls == [('list', 'KNEA')]
-    # Recovery uses the cadence listing once, including site acquisition/warming.
-    multisite.scans['KNEA'] = [hybrid.latest-300, hybrid.latest]
-    hybrid.calls.clear(); multisite.calls.clear()
-    e._do_radar(intent_triggered=False, discovery=True)
-    r = e._build_payload()['radar']
-    assert r['sourceMode'] == 'site' and r['sourceFallback'] is None
-    assert r['nexrad']['reporting'] and r['refresh']['reason'] is None
-    assert multisite.calls.count(('list', 'KNEA')) == 1
-
-
 def test_region_site_checks_obey_cadence_and_reserve(scheduled):
     e, clock, h = scheduled
     def listings():
@@ -105,7 +67,7 @@ def test_region_site_checks_obey_cadence_and_reserve(scheduled):
 
 
 def test_cached_history_expiry_cannot_invent_an_empty_listing(make_emitter, hybrid, multisite, tmp_path):
-    (tmp_path/'radar_source').write_text('mosaic')
+    hybrid.pin('mosaic')
     e = make_emitter()
     e._do_radar()
     multisite.scans['KNEA'] = [hybrid.now-4440]  # real scan within the 75-minute listing

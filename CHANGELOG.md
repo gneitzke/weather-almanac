@@ -4,6 +4,33 @@ Changes in Weather Almanac, newest first. The upstream WeatherFlow
 PiConsole keeps its own release notes; entries under **Core** below are fixes
 to shared upstream code that the classic console benefits from too.
 
+## 2026-10-09
+
+### Radar
+- **No source buttons.** The Auto, Region and site buttons are gone, and so is
+  every trace of a manual choice: the `radar_source` file, its 45-minute hold,
+  the site-refusal path and the `radarSource` poll parameter (an old page that
+  still sends it is answered as if it had not). The zoom decides: at the
+  panel's normal zoom (8) the nearest radar's own high-resolution cells draw
+  whenever reporting radars cover the view; zoomed out to 6 or wider, beyond
+  their coverage, or with the radar off the air, Region takes over. The caption
+  says which, without a mode name: "Region · new image every 2 min" or
+  "Camano Island radar, high resolution + 3 nearby". The server deletes the old
+  `radar_source` file and its lease anchors at startup.
+- **The corner status speaks only when something is wrong.** "As of 11:50 PM ·
+  3 min old" no longer sits at the top right; the loop's own caption at the
+  bottom left already gives the frame time, and now adds the date for a frame
+  from an earlier day ("Thu 8 Oct, 11:50 PM · newest"). The top right is empty
+  while the radar is current and says "Stale · 32 min old" (in the accent
+  colour), "Couldn't refresh", "Waking", "Starting" or "Resting" otherwise.
+  Screen readers hear each new problem once, not every minute a stale count
+  ticks over. A clear loop keeps its time beside "No echoes above 15 dBZ".
+- **An open tab follows a deploy.** The server stamps the page it serves with a
+  build name and sends that name with every update; a tab running an older page
+  reloads itself once (never mid-gesture, keeping its screen and camera). Tabs
+  opened before this release cannot hear that signal: refresh a LAN browser
+  once after updating. The panel's own browser restarts with the update.
+
 ## 2026-09-26
 
 ### Console

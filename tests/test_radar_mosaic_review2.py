@@ -119,7 +119,8 @@ def test_unfiltered_drawn_pixels_keep_caption_metadata(make_emitter, hybrid, mul
 def test_prefetch_pending_classification_continues_region_targets(make_emitter, hybrid, multisite, classified, monkeypatch):
     emitter = make_emitter(); emitter._do_radar()
     source, ctx = emitter._radar_idle_context
-    ctx = dict(ctx, zoom=8, camera_zoom=8, viewed=True, source_pref='site', deadline=100, refresh={'state': 'idle'})
+    # Auto's Site warms Region at settled zoom 7 and wider (a manual Site did at any zoom).
+    ctx = dict(ctx, zoom=8, camera_zoom=7, viewed=True, deadline=100, refresh={'state': 'idle'})
     monkeypatch.setattr(emitter, '_radar_is_viewed', lambda: True)
     events = []
     emitter._radar_prefetched.clear()

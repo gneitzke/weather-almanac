@@ -1,7 +1,6 @@
 """Radar engine v3: spherical coverage, multi-site scans and intent generations."""
 import io
 import json
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -73,8 +72,7 @@ def multisite(hybrid, monkeypatch, tmp_path):
             return io.BytesIO(png(state.colors[site]))
         return original(self, req, timeout)
     monkeypatch.setattr(ae.RadarSession, 'open', fetch)
-    (tmp_path/'radar_source').write_text('site')
-    os.utime(tmp_path/'radar_source', (hybrid.now, hybrid.now))
+    hybrid.pin('site')
     return state
 
 
@@ -164,7 +162,7 @@ def test_site_budget_aborts_without_negative_cache(make_emitter, hybrid, multisi
 
 
 
-@pytest.mark.parametrize('preference,value', [('radar_zoom','9'), ('radar_source','site'), ('radar_center','47.8,-122.3'), ('radar_intent','41')])
+@pytest.mark.parametrize('preference,value', [('radar_zoom','9'), ('radar_center','47.8,-122.3'), ('radar_intent','41')])
 def test_supersede_tile_boundary_immediate_new_pass(make_emitter, hybrid, monkeypatch, tmp_path, preference, value):
     emitter = make_emitter(); emitter._do_radar(); old = emitter._radar_result
     hybrid.latest += 120; hybrid.now += 120
@@ -204,14 +202,11 @@ def test_supersede_tile_boundary_immediate_new_pass(make_emitter, hybrid, monkey
     clock.advance(ae.EMIT_INTERVAL)
     assert not emitter._radar_restart and intents
     # Provider fallback may drop IEM, but normal same-provider passes keep it.
-    if preference != 'radar_source': assert not closed
-    expect = {'radar_zoom': ('zoom',9), 'radar_source': ('source','site'),
+    assert not closed
+    expect = {'radar_zoom': ('zoom',9),
               'radar_center': ('center',dict(lat=47.8, lon=-122.3)), 'radar_intent': ('seq',41)}[preference]
     assert all(intent[expect[0]]==expect[1] for intent in intents)
     assert emitter._radar_refresh['state']=='idle'
-    if preference == 'radar_source':
-        assert emitter._radar_refresh['reason']=='not reporting'
-        assert emitter._radar_result.source_fallback=='site-not-reporting'
     emitter.stop()
 
 
@@ -240,20 +235,6 @@ def test_supersede_between_history_frames_keeps_published_newest(make_emitter, h
 
 
 
-def test_site_preference_auto_swap_and_return(make_emitter, hybrid, multisite, tmp_path):
-    pref=tmp_path/'radar_source'; before=pref.read_bytes()
-    (tmp_path/'radar_zoom').write_text('5'); (tmp_path/'radar_intent').write_text('41')
-    emitter=make_emitter();emitter._do_radar();r=emitter._build_payload()['radar']
-    assert r['sourceMode']=='mosaic' and r['sourceFallback']=='site-zoom-floor'
-    assert r['sourcePref']=='site' and r['sitePreferred'] and r['siteResumeZoom']==7
-    assert r['tiles']['z']==5 and r['zoomMin']==4 and not r['zoomCapped']
-    assert r['intent']['source']=='site' and 'forSeq' not in r['refresh']
-    assert pref.read_bytes()==before
-    hybrid.mono+=60; (tmp_path/'radar_zoom').write_text('7'); emitter._do_radar()
-    r=emitter._build_payload()['radar']
-    assert r['sourceMode']=='site' and r['sourceFallback'] is None and pref.read_bytes()==before
-
-
 @pytest.mark.parametrize('count,cap',[(1,31),(2,8)])
 def test_site_history_cap(make_emitter,hybrid,multisite,monkeypatch,count,cap):
     monkeypatch.setattr(ae,'RADAR_REQUESTS_PER_MIN',10000)
@@ -279,7 +260,7 @@ def test_runtime_sequence_validation(monkeypatch,tmp_path):
     serve_at=_load_serve(monkeypatch,tmp_path,{})
     marker=tmp_path/'radar_intent'
     def write_seq(value):
-        serve_at._write_radar_intent(dict(radarSeq=[value],radarZoom=['7'],radarSource=['site'],radarCenter=['station']))
+        serve_at._write_radar_intent(dict(radarSeq=[value],radarZoom=['7'],radarCenter=['station']))
     for value in ('1','41','999999999999'):
         write_seq(value)
         assert json.loads(marker.read_text())['seq']==int(value)
@@ -307,17 +288,18 @@ def test_loopback_sequence_intent_and_duplicate(monkeypatch,tmp_path,address):
     handler.do_GET();module._flush_preferences();marker=tmp_path/'radar_intent'  # preference writer thread: wait for the durable write
     assert marker.exists()==(address in module.LOOPBACK)
     if marker.exists():
-        assert json.loads(marker.read_text())==dict(seq=41,zoom=7,source='site',center='station')
+        # An old page's radarSource rides along and is ignored.
+        assert json.loads(marker.read_text())==dict(seq=41,zoom=7,center='station')
         assert (tmp_path/'radar_zoom').read_text().strip()=='7'
-        assert (tmp_path/'radar_source').read_text().strip()=='site'
+        assert not (tmp_path/'radar_source').exists()
         handler.path='/wx.json?radarSeq=42&radarSeq=43';handler.do_GET()
-        assert json.loads(marker.read_text())==dict(seq=41,zoom=7,source='site',center='station')
+        assert json.loads(marker.read_text())==dict(seq=41,zoom=7,center='station')
 
 
 def test_all_dark_sites_keep_contract_on_mosaic(make_emitter,hybrid,multisite):
     multisite.scans={s:[] for s in multisite.scans}
     emitter=make_emitter();emitter._do_radar();r=emitter._build_payload()['radar']
-    assert r['sourceMode']=='mosaic' and r['sourcePref']=='site'
+    assert r['sourceMode']=='mosaic'
     assert all(not s['contributing'] and not s['primary'] and s['reason']=='not reporting' for s in r['sites'])
 
 
@@ -387,12 +369,12 @@ def test_atomic_intent_worker_while_durable_writer_paused(make_emitter,hybrid,tm
     def pause(values):
         entered.set();assert release.wait(10);original(values)
     monkeypatch.setattr(module,'_write_radar_zoom',pause)
-    params=dict(radarSeq=['42'],radarZoom=['9'],radarSource=['mosaic'],radarCenter=['47.8,-122.3'])
+    params=dict(radarSeq=['42'],radarZoom=['9'],radarCenter=['47.8,-122.3'])
     worker=threading.Thread(target=module._write_radar_intent,args=(params,));worker.start()
     try:
         assert entered.wait(10)
         emitter=make_emitter();emitter._do_radar()
-        assert emitter._radar_read_intent()==dict(seq=42,zoom=9,source='mosaic',center=dict(lat=47.8,lon=-122.3))
+        assert emitter._radar_read_intent()==dict(seq=42,zoom=9,center=dict(lat=47.8,lon=-122.3))
         assert emitter._radar_result.zoom==9 and emitter._radar_result.center==dict(lat=47.61,lon=-122.33)
     finally:release.set();worker.join(10)
     assert not worker.is_alive()
@@ -413,7 +395,7 @@ def test_real_worker_supersede_at_network_barrier(make_emitter,hybrid,tmp_path):
     worker=threading.Thread(target=emitter._do_radar);worker.start()
     try:
         assert entered.wait(10)
-        (tmp_path/'radar_intent').write_text(json.dumps(dict(seq=42,zoom=9,source='mosaic',center='station')))
+        (tmp_path/'radar_intent').write_text(json.dumps(dict(seq=42,zoom=9,center='station')))
         assert 'geometryOnly' not in emitter._build_payload()['radar']
         pending = emitter._radar_result
         assert pending.frames[:-1] == old.frames[1:]

@@ -1,5 +1,5 @@
-"""Astra's adversarial review of the October radar fixes: emitter, server and
-lease items. Page logic is in test_radar_review_oct_adv_page.py. Local
+"""Astra's adversarial review of the October radar fixes: emitter and server
+items. Page logic is in test_radar_review_oct_adv_page.py. Local
 fixtures and loopback sockets only."""
 import json
 import math
@@ -17,7 +17,6 @@ import numpy as np
 import pytest
 
 from lib import almanac_emit as ae
-from lib import radar_auto
 from lib import radar_level3 as l3
 from lib import radar_mosaic as mosaic
 from lib.radar_level3 import Scan
@@ -332,7 +331,7 @@ def test_the_initiating_request_never_waits_on_fsync(server, tmp_path, monkeypat
     done = threading.Event()
     def legacy_poll():
         # Loopback legacy preference path: the request that stages the values.
-        _handler(server, '127.0.0.1', radarSeq=5, radarZoom=7, radarSource='site', radarCenter='station')
+        _handler(server, '127.0.0.1', radarSeq=5, radarZoom=7, radarCenter='station')
         done.set()
     threading.Thread(target=legacy_poll, daemon=True).start()
     try:
@@ -345,36 +344,29 @@ def test_the_initiating_request_never_waits_on_fsync(server, tmp_path, monkeypat
         release.set()
     server._flush_preferences()
     assert (tmp_path/'radar_zoom').read_text() == '6\n'
-    assert (tmp_path/'radar_source').read_text() == 'site\n'
     assert not server._pref_pending
 
 
-def test_a_touch_never_lands_before_a_staged_source_expiry(server, tmp_path, monkeypatch):
-    # Expiry runs before a touch is recorded. With the source write now on the
-    # writer thread, the touch must queue behind it: the engine reading the old
-    # 'site' marker beside a fresh touch would renew the expired lease.
-    entered, release, order = threading.Event(), threading.Event(), []
+def test_a_touch_is_written_at_once_while_a_preference_write_stalls(server, tmp_path, monkeypatch):
+    # The touch (presence, tmpfs) is no longer ordered behind any durable
+    # preference: with the manual source gone there is nothing it could renew.
+    entered, release = threading.Event(), threading.Event()
     persist = server._persist_preference
     def slow(name, value):
-        if name == 'radar_source':
-            entered.set()
-            assert release.wait(10)
+        entered.set()
+        assert release.wait(10)
         persist(name, value)
-        order.append(name)
     monkeypatch.setattr(server, '_persist_preference', slow)
-    server._write_radar_source(['auto'])
-    assert entered.wait(5)
-    server._note_presence()
-    assert not (tmp_path/'presence').exists(), 'the touch landed before the expiry'
-    release.set()
+    server._write_radar_zoom(['7'])
+    try:
+        assert entered.wait(5)
+        server._note_presence()
+        assert float((tmp_path/'presence').read_text()) > 0
+        assert 'presence' not in server._pref_pending
+    finally:
+        release.set()
     server._flush_preferences()
-    assert order == ['radar_source', 'presence']
-    assert (tmp_path/'radar_source').read_text() == 'auto\n' and float((tmp_path/'presence').read_text()) > 0
-    # With nothing staged, a touch is written at once as before.
-    (tmp_path/'presence').unlink()
-    server._presence_at = 0.
-    server._note_presence()
-    assert (tmp_path/'presence').exists()
+    assert (tmp_path/'radar_zoom').read_text() == '7\n'
 
 
 def test_shutdown_writes_a_debounced_preference(server, tmp_path):
@@ -407,62 +399,3 @@ runpy.run_path(sys.argv[1], run_name='__main__')
                             env=env, capture_output=True, text=True, timeout=30, cwd=str(tmp_path))
     assert result.returncode == 0, result.stderr
     assert (tmp_path/'radar_smooth').read_text() == 'on\n'
-
-
-# ----------------------------------------- should-fix: lease clean-up across processes
-
-
-def test_a_stale_reader_cannot_delete_the_newer_lease(tmp_path):
-    now = 1000.
-    radar_auto._lease_clocks.clear()
-    (tmp_path/'presence').write_text('5000.0')                 # a future touch (clock went back)
-    assert radar_auto._lease_timestamp(tmp_path, 'presence', 5000., now) == now        # engine anchors it
-    # The server records a newer touch and anchors it. The engine, in another
-    # process, still holds the older stamp it read a moment before.
-    (tmp_path/'presence').write_text('6000.0')
-    radar_auto._lease_clocks.clear()
-    assert radar_auto._lease_timestamp(tmp_path, 'presence', 6000., now+10) == now+10   # server
-    radar_auto._lease_clocks.clear()
-    radar_auto._lease_timestamp(tmp_path, 'presence', 5000., now+20)                   # stale engine
-    newer = tmp_path/radar_auto._lease_name('presence', 6000.)
-    assert newer.exists(), 'a stale reader deleted the current lease'
-    # A restart reads the surviving anchor: the hold is not extended.
-    radar_auto._lease_clocks.clear()
-    assert radar_auto._lease_timestamp(tmp_path, 'presence', 6000., now+500) == now+10
-    # Superseded leases do go once a reader with the lock sees the change.
-    (tmp_path/'presence').write_text('7000.0')
-    radar_auto._lease_clocks.clear()
-    radar_auto._lease_timestamp(tmp_path, 'presence', 7000., now+600)
-    names = sorted(p.name for p in tmp_path.glob('.radar-lease-presence-*'))
-    assert names == [radar_auto._lease_name('presence', 7000.)]
-
-
-def test_source_leases_keep_every_stamp_derivable_from_disk(tmp_path):
-    radar_auto._lease_clocks.clear()
-    (tmp_path/'radar_source').write_text('site')
-    os.utime(tmp_path/'radar_source', (9000., 9000.))
-    (tmp_path/'radar_intent').write_text(json.dumps(dict(seq=1, source='mosaic', sourceAcceptedAt=9500.)))
-    radar_auto._lease_timestamp(tmp_path, 'source', 9000., 100.)
-    radar_auto._lease_clocks.clear()
-    radar_auto._lease_timestamp(tmp_path, 'source', 9500., 110.)
-    radar_auto._lease_clocks.clear()
-    radar_auto._lease_timestamp(tmp_path, 'source', 8000., 120.)     # a stale stamp
-    names = {p.name for p in tmp_path.glob('.radar-lease-source-*')}
-    assert {radar_auto._lease_name('source', 9000.), radar_auto._lease_name('source', 9500.)} <= names
-
-
-def test_lease_changes_wait_for_another_process_holding_the_lock(tmp_path):
-    holder = subprocess.Popen([sys.executable, '-c', r'''
-import fcntl, sys, time
-with open(sys.argv[1], 'a') as f:
-    fcntl.flock(f, fcntl.LOCK_EX); print('held', flush=True); time.sleep(.6)
-''', str(tmp_path/'.radar-lease.lock')], stdout=subprocess.PIPE, text=True)
-    try:
-        assert holder.stdout.readline().strip() == 'held'
-        radar_auto._lease_clocks.clear()
-        (tmp_path/'presence').write_text('5000.0')
-        start = time.monotonic()
-        radar_auto._lease_timestamp(tmp_path, 'presence', 5000., 1000.)
-        assert time.monotonic() - start >= .3
-    finally:
-        holder.wait(5)

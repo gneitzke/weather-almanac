@@ -73,7 +73,7 @@ def test_corner_note_keeps_page_acquisition_after_wrap(state, expected):
     from tests.test_radar_v46 import function
     functions = '\n'.join(function(n) for n in ('isNum', 'radarPendingRetry', 'radarFallbackText', 'radarNoteRender'))
     script = '''
-const node={dataset:{}},$=()=>node,radarIntent={postedAt:0},radarSwitch=null,radarSource={};
+const node={dataset:{}},$=()=>node,radarIntent={postedAt:0},radarSwitch=null;
 const radarFrameLabel=()=>'12:00';
 const radarView={data:{frameCount:8},current:{bitmap:{}},holdingWindow:false,
  loaded:Array.from({length:8},(_,i)=>({bitmap:i<4?{}:null})),refresh:{state:STATE}};

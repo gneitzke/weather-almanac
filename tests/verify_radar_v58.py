@@ -51,8 +51,11 @@ def verify(browser, server, origin, patch, theme, output):
                     for site in sites:
                         path=ae._radar_tile_path(source,site,newest-i*120,z,x,y)
                         path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(raw)
-    for name,value in dict(radar_zoom='8',radar_source='mosaic',radar_viewed=str(time.time())).items():
+    for name,value in dict(radar_zoom='8',radar_viewed=str(time.time())).items():
         (server.root/name).write_text(value)
+    # Auto is the only source policy; pin its verdict so the scenario drives the source.
+    verdict=dict(mode='mosaic')
+    patch.setattr(ae.AlmanacEmitter,'_radar_auto_source',lambda self,ctx,site_ok:verdict['mode'] if site_ok else 'mosaic')
     app=SimpleNamespace(config=make_config(Station={'Latitude':'47.61','Longitude':'-122.8'}),obsParser=SimpleNamespace(api_data={}))
     e=ae.AlmanacEmitter(SimpleNamespace(app=app,Obs={},Met={},Astro={},Sager={}),output_path=str(server.root/'wx.json'))
     publications=[];profiles=[];rows=[]
@@ -111,7 +114,7 @@ def verify(browser, server, origin, patch, theme, output):
                 e._radar_newest[('iem-mrms-lcref',None)]=(time.monotonic()-121,known)
             start_request=len(origin.requests);first=advanced=None;eight=None;engine_newest=None
             tap=time.monotonic()
-            page.evaluate("mode=>{window.v58Tap=performance.now();radarChooseSource(mode)}",mode)
+            page.evaluate("()=>{window.v58Tap=performance.now()}");verdict['mode']=mode;e._radar_restart=True
             target='iem-nexrad-n0b' if mode=='site' else 'iem-mrms-lcref'
             samples=[]
             end=time.monotonic()+15

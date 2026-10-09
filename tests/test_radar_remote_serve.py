@@ -43,7 +43,7 @@ def request(server, address='192.168.1.20', **params):
 
 def camera(session=A, generation=1, claim='', epoch=0, **extra):
     return dict(radarSession=session, radarGeneration=generation, radarHeartbeat=generation,
-                radarClaim=claim, radarClaimEpoch=epoch, radarCommit=1, radarPolicy='manual', radarSource='auto',
+                radarClaim=claim, radarClaimEpoch=epoch, radarCommit=1, radarPolicy='manual',
                 view='radar', radarTheme='paper', radarGeoZoom=8,
                 radarGeoCenter='47,-122', radarMoving=0, **extra)
 
@@ -88,7 +88,7 @@ def test_last_user_commit_wins_and_old_owner_cannot_write(server):
     # Reload/poll claims, even with the right owner, are inert.
     request(server, **dict(camera(B, 0, A, epoch=1), radarCommit=0))
     assert server._read_radar_intent() == before
-    request(server, **dict(camera(B, 1, A, epoch=1), radarGeoZoom=6, radarSource='mosaic'))
+    request(server, **dict(camera(B, 1, A, epoch=1), radarGeoZoom=6))
     accepted = server._read_radar_intent()
     assert accepted['session'] == B and accepted['zoom'] == 6
     request(server, **camera(A, 99, ''))
@@ -103,7 +103,7 @@ def test_invalid_claim_never_transfers_owner_or_activity(server, tmp_path):
     before = server._read_radar_intent()
     for changes in ({'radarClaim': ''}, {'radarMoving': 1}, {'radarGeoZoom': 11},
                     {'radarGeoCenter': '91,0'}, {'radarPolicy': 'bogus'},
-                    {'radarSource': ['auto', 'site']}, {'radarSession': [B, A]},
+                    {'radarSession': [B, A]},
                     {'radarGeneration': ['1', '2']}, {'radarHeartbeat': 'bad'}):
         request(server, **dict(camera(B, 1, A, epoch=1), **changes))
         assert server._read_radar_intent() == before
@@ -144,19 +144,16 @@ def test_panel_viewing_is_independent_of_remote_camera_owner(server, tmp_path):
     assert not (tmp_path/'radar_viewing').exists()
 
 
-def test_lan_touch_expires_source_before_refreshing_presence(server, tmp_path, monkeypatch):
+def test_lan_touch_writes_presence_directly_and_leaves_intent(server, tmp_path, monkeypatch):
     now = 1800000000
     monkeypatch.setattr(server.time, 'time', lambda: now)
     (tmp_path/'presence').write_text(str(now-2700))
-    record = dict(seq=1, session=A, generation=1, source='site', sourceAcceptedAt=now-3000)
+    record = dict(seq=1, session=A, generation=1)
     (tmp_path/'radar_intent').write_text(json.dumps(record))
-    (tmp_path/'radar_source').write_text('site')
     request(server, touch=1)
-    server._flush_preferences()  # the touch lands after the staged source expiry, on the writer
+    # No staged preference orders a touch any more: it lands at once.
     assert float((tmp_path/'presence').read_text()) == now
-    accepted = server._read_radar_intent()
-    assert accepted['source'] == 'auto' and accepted['generation'] == 1
-    assert accepted['seq'] == 2
+    assert server._read_radar_intent() == record
     assert not (tmp_path/'radar_viewing').exists()
 
 

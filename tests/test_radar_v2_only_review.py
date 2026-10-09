@@ -167,7 +167,8 @@ def test_auto_watch_holds_attended_mode_without_neighbour_requests(
         'KNEA': (48.86, -122.33, 'north'), 'KMID': (46.26, -122.33, 'south'),
         'KFAR': (49.5, -122.33, 'far')})
     multisite.scans['KMID'] = list(multisite.scans['KNEA'])
-    intent(tmp_path, 8, 'auto')
+    hybrid.pin(None)
+    intent(tmp_path, 8)
     emitter = make_emitter()
     emitter._do_radar()
     assert emitter._radar_result.source_mode == 'site'
@@ -268,10 +269,10 @@ assert.doesNotMatch(caption(),/v2|byte ledger|accounting|daily data limit/);
 '''.replace('LEDGER', json.dumps(ledger)).replace('CEILING', json.dumps(ceiling)))
 
 
-@pytest.mark.parametrize('mode', ['mosaic', 'auto'])
 def test_region_evidence_remains_independent_when_level3_cools_mid_pass(
-        make_emitter, hybrid, multisite, native, tmp_path, monkeypatch, mode):
-    intent(tmp_path, 6, mode)
+        make_emitter, hybrid, multisite, native, tmp_path, monkeypatch):
+    hybrid.pin(None)
+    intent(tmp_path, 6)
     emitter = make_emitter()
     emitter._do_radar()
     reserve = emitter._radar_mandatory_reserve
@@ -317,7 +318,8 @@ def test_cold_auto_watch_uses_cached_neighbour_coverage_without_fetching_it(
     monkeypatch.setattr(ae, '_NEXRAD_SITES', {
         'KNEA': (48.86, -122.33, 'north'), 'KMID': (46.26, -122.33, 'south'),
         'KFAR': (49.5, -122.33, 'far')})
-    intent(tmp_path, 8, 'auto')
+    hybrid.pin(None)
+    intent(tmp_path, 8)
     emitter = make_emitter()
     tier(emitter, tmp_path, 'watch')
     emitter._radar_site_status['KMID'] = dict(reporting=True, newestTs=hybrid.latest,

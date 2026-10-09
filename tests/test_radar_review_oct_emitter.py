@@ -14,7 +14,6 @@ import pytest
 
 from lib import almanac_emit as ae
 from lib import radar_attention as ra
-from lib import radar_auto
 from lib import radar_basemap as bm
 from lib import radar_level3 as l3
 from lib import radar_mosaic as mosaic
@@ -589,18 +588,3 @@ def test_geo_eviction_frees_to_the_low_water_mark(tmp_path, monkeypatch):
     before = len(walks)
     bm.cache_tile(tmp_path, 'paper', 8, 11, 0)
     assert len(walks) == before, 'the eviction pass left headroom'
-
-
-# ------------------------------------------------------- L8: lease clean-up
-def test_superseded_lease_files_are_removed(tmp_path):
-    # Removal verifies the marker on disk (adversarial review), so write it.
-    radar_auto._lease_clocks.clear()
-    (tmp_path/'presence').write_text('2000.0')
-    radar_auto._lease_timestamp(tmp_path, 'presence', 2000., 1000.)
-    radar_auto._lease_timestamp(tmp_path, 'source', 2000., 1000.)
-    (tmp_path/'presence').write_text('3000.0')
-    radar_auto._lease_timestamp(tmp_path, 'presence', 3000., 1100.)
-    leases = sorted(p.name for p in tmp_path.glob('.radar-lease-*'))
-    assert len(leases) == 2 and sum(n.startswith('.radar-lease-presence-') for n in leases) == 1
-    radar_auto._lease_clocks.clear()   # a restart re-reads the surviving anchor
-    assert radar_auto._lease_timestamp(tmp_path, 'presence', 3000., 1200.) == 1100.

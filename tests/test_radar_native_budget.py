@@ -220,7 +220,8 @@ def test_unwritable_ledger_reports_persistence_failure(make_emitter, monkeypatch
 
 
 @pytest.mark.parametrize('ceiling', [budget.NATIVE_NEWEST_ONLY_BYTES, budget.NATIVE_PAUSE_BYTES])
-def test_native_ceiling_preserves_iem_prefetch(make_emitter, hybrid, multisite, native, monkeypatch, ceiling):
+def test_native_ceiling_preserves_iem_prefetch(make_emitter, hybrid, multisite, native, monkeypatch, tmp_path, ceiling):
+    (tmp_path/'radar_zoom').write_text('7')  # Auto's Site warms Region at zoom 7 and wider
     emitter = make_emitter(); emitter._radar_native_budget.add(ceiling+1)
     emitter._do_radar()
     source, ctx = emitter._radar_idle_context
