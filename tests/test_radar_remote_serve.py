@@ -25,7 +25,8 @@ def server(tmp_path, monkeypatch):
     monkeypatch.setattr(module.threading, 'Timer', Timer)
     monkeypatch.setattr(module.http.server.SimpleHTTPRequestHandler, 'do_GET', lambda h: h.reads.append(Path(module.DATA).read_text()))
     monkeypatch.setattr(module.http.server.SimpleHTTPRequestHandler, 'end_headers', lambda h: None)
-    return module
+    yield module
+    module._close_preferences()  # nor does the preference writer
 
 
 def request(server, address='192.168.1.20', **params):
@@ -64,6 +65,7 @@ def test_controllers_can_commit_and_receive_all_acknowledgements(server, tmp_pat
     else:
         assert not (tmp_path/'radar_activity').exists()
     server._camera_persist_timer.function()
+    server._flush_preferences()  # the preference writer thread lands it; wait for it
     assert (tmp_path/'radar_zoom').read_text().strip() == '8'
 
 
@@ -109,20 +111,23 @@ def test_invalid_claim_never_transfers_owner_or_activity(server, tmp_path):
         assert server._radar_owner['session'] == A
 
 
-def test_nonowner_preferences_need_valid_session_but_not_camera_acceptance(server, tmp_path):
+def test_smooth_needs_the_accepted_camera_owner(server, tmp_path):
+    # Smooth is durable and changes everyone's view: a valid session is not
+    # enough, only the owner's accepted camera transaction may change it.
     request(server, **camera())
     intent = server._read_radar_intent()
-    headers = request(server, radarSession=B, radarSmooth='on', radarRender='v2')
-    assert headers['X-Radar-Smooth'] == 'on' and 'X-Radar-Render' not in headers
-    for session in (None, '', 'short', [A, B]):
-        params = dict(radarSmooth='off', radarRender='v1')
-        if session is not None: params['radarSession'] = session
-        request(server, **params)
-    for smooth, render in (('ON', 'V2'), (['off', 'on'], ['v1', 'v2']), ('', '')):
-        request(server, radarSession=B, radarSmooth=smooth, radarRender=render)
-    assert (tmp_path/'radar_smooth').read_text().strip() == 'on'
-    assert not (tmp_path/'radar_render').exists()
+    for params in (dict(radarSession=B, radarSmooth='on', radarRender='v2'), dict(radarSmooth='on'),
+                   dict(camera(B, 1, ''), radarSmooth='on'), dict(camera(A, 1), radarSmooth='on')):
+        headers = request(server, **params)
+        assert headers['X-Radar-Smooth'] == 'off' and 'X-Radar-Render' not in headers
     assert server._read_radar_intent() == intent
+    for smooth in ('ON', ['off', 'on'], ''):
+        request(server, **camera(A, 2, radarSmooth=smooth))
+    server._flush_preferences(force=True)
+    assert not (tmp_path/'radar_smooth').exists() and not (tmp_path/'radar_render').exists()
+    assert request(server, **camera(A, 3, radarSmooth='on'))['X-Radar-Smooth'] == 'on'
+    server._flush_preferences(force=True)
+    assert (tmp_path/'radar_smooth').read_text().strip() == 'on'
 
 
 def test_panel_viewing_is_independent_of_remote_camera_owner(server, tmp_path):
@@ -147,6 +152,7 @@ def test_lan_touch_expires_source_before_refreshing_presence(server, tmp_path, m
     (tmp_path/'radar_intent').write_text(json.dumps(record))
     (tmp_path/'radar_source').write_text('site')
     request(server, touch=1)
+    server._flush_preferences()  # the touch lands after the staged source expiry, on the writer
     assert float((tmp_path/'presence').read_text()) == now
     accepted = server._read_radar_intent()
     assert accepted['source'] == 'auto' and accepted['generation'] == 1
@@ -158,16 +164,18 @@ def test_rate_limit_rejects_writes_not_reads_or_acknowledgements(server, tmp_pat
     clock = [100.0]
     monkeypatch.setattr(server.time, 'monotonic', lambda: clock[0])
     for _ in range(int(server._CONTROL_BURST)):
-        request(server, radarSession=A, radarSmooth='off')
+        request(server, radarSession=A)
     request(server, '::ffff:192.168.1.20', **camera(touch=1, radarSmooth='on'))
+    server._flush_preferences(force=True)
     assert not (tmp_path/'radar_intent').exists()
     assert not (tmp_path/'presence').exists()
-    assert (tmp_path/'radar_smooth').read_text().strip() == 'off'
+    assert not (tmp_path/'radar_smooth').exists()
     assert 'X-Radar-Intent' in request(server)
-    request(server, '192.168.1.21', radarSession=B, radarSmooth='on')
+    request(server, '192.168.1.21', **camera(B, radarSmooth='on'))
+    server._flush_preferences(force=True)
     assert (tmp_path/'radar_smooth').read_text().strip() == 'on'
     clock[0] += 1
-    request(server, **camera(touch=1))
+    request(server, **camera(A, 1, B, epoch=1, touch=1))
     assert server._read_radar_intent()['session'] == A
     assert (tmp_path/'presence').exists()
 

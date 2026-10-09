@@ -5,6 +5,16 @@ from statistics import median
 class DiscoverySchedule:
     FAST_POLLS = 6
     BACKOFF = 120
+    # A site's next volume is expected one observed scan interval after the
+    # newest. The interval comes from the primary's own listing (every N0B
+    # product it lists, drawn or not), so SAILS/MESO-SAILS cuts listed every
+    # ~2 minutes are checked for at that pace instead of a fixed 5-minute
+    # floor. The floor only guards a degenerate listing; the request budget,
+    # local backoff and the attention tier's listing floor still gate every
+    # wakeup in the emitter (_radar_arm_discovery).
+    SITE_MIN_CADENCE = 60
+    SITE_MAX_CADENCE = 600
+    SITE_DEFAULT_CADENCE = 300
 
     def __init__(self):
         self.identity = None
@@ -24,9 +34,14 @@ class DiscoverySchedule:
             return
         cadence = snap.cadence
         if snap.source_mode == 'site':
-            stamps = sorted({f['ts'] for f in snap.frames})
-            gaps = [b-a for a, b in zip(stamps, stamps[1:]) if b > a][-4:]
-            cadence = max(300, min(600, median(gaps))) if gaps else 300
+            observed = getattr(snap, 'scan_cadence_sec', None)
+            if not observed:
+                # No listing cadence (one listed scan): the drawn frames' spacing.
+                stamps = sorted({f['ts'] for f in snap.frames})
+                gaps = [b-a for a, b in zip(stamps, stamps[1:]) if b > a][-4:]
+                observed = median(gaps) if gaps else None
+            cadence = (max(self.SITE_MIN_CADENCE, min(self.SITE_MAX_CADENCE, observed))
+                       if observed else self.SITE_DEFAULT_CADENCE)
         lag = ready_lag if snap.source_id == 'iem-mrms-lcref' else 0
         self.identity = identity
         self.interval = 30 if snap.source_mode == 'site' else 20 if snap.source_id == 'iem-mrms-lcref' else 25

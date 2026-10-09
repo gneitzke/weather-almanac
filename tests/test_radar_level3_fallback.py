@@ -40,7 +40,7 @@ def test_a_level3_only_outage_draws_the_site_radar_from_v1(make_emitter, hybrid,
     assert r['available'] and r['sourceMode'] == 'site'
     assert r['native'] is False and r['tiles']['variant'] is False     # v1: IEM's site tiles
     assert [c for c in multisite.calls if c[0] == 'tile'], 'v1 fetched IEM ridge tiles'
-    fallback = r['health']['nativeFallback']
+    fallback = emitter._radar_health_payload()['nativeFallback']  # radar-health.json
     assert fallback['active'] is True and 'name resolution' in fallback['reason']
     assert r['nativeFallback'] == dict(active=True, reason='level3-unreachable', recovering=False)
 
@@ -92,7 +92,7 @@ def test_an_open_level3_breaker_draws_v1(make_emitter, hybrid, multisite, native
     assert emitter._radar_level3_down()
     emitter._do_radar()
     r = emitter._build_payload()['radar']
-    assert r['native'] is False and r['health']['nativeFallback']['active'] is True
+    assert r['native'] is False and emitter._radar_health_payload()['nativeFallback']['active'] is True
 
 
 def test_a_level3_failure_pass_keeps_the_fallback_chain_and_retries_soon(make_emitter, hybrid):
@@ -138,7 +138,7 @@ def test_a_failed_n0h_fetch_keeps_its_retry_and_is_not_a_qc_failure(
     emitter._do_radar()
     payload = emitter._build_payload()['radar']
     assert payload['available'] and payload['native']
-    assert payload['health']['classification']['qcFailures'] == 0
+    assert emitter._radar_health_payload()['classification']['qcFailures'] == 0
     failures = [v for k, v in emitter._radar_level3_failed.items() if len(k) == 3]
     assert failures
     assert all(v[0] - ae.time.monotonic() <= 20 for v in failures)
@@ -167,7 +167,7 @@ def test_a_failing_classification_qc_is_logged_once_counted_and_not_rerun(
     assert first >= 1
     emitter._do_radar()
     assert len(runs) == first, 'the same failing QC ran again'
-    health = emitter._build_payload()['radar']['health']['classification']
+    health = emitter._radar_health_payload()['classification']
     assert health['qcFailures'] == first and 'volume differs' in health['lastQcError']['error']
     logged = [message for message in warnings if 'QC failed' in message]
     assert len(logged) == len({message.split()[2] for message in logged})   # once per site
@@ -186,7 +186,7 @@ def test_a_per_site_level3_failure_is_counted_and_logged_at_a_bounded_rate(
     emitter._do_radar()
     payload = emitter._build_payload()['radar']
     assert payload['available'] and payload['native']
-    mosaic_health = payload['health']['mosaic']
+    mosaic_health = emitter._radar_health_payload()['mosaic']
     count = mosaic_health['siteFailures']['KMID']['count']
     assert count >= 1
     assert 'KNEA' not in mosaic_health['siteFailures']

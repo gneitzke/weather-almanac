@@ -26,7 +26,8 @@ const server={owner:'',epoch:0,high:new Map(),generation:0,heartbeat:0,ownerIdle
      const center=q.get('radarGeoCenter').split(',').map(Number);
      this.intent={seq:++this.seq,session,generation,epoch:this.epoch,acceptedAt:1000,zoom:Number(q.get('radarGeoZoom')),center:{lat:center[0],lon:center[1]},zoomPolicy:q.get('radarPolicy'),source:q.get('radarSource')||this.intent.source};
    }
-   if(!this.public&&!this.throttled){if(q.has('radarSmooth'))this.smooth=q.get('radarSmooth');}
+   // Smooth applies only for the owner's accepted transaction (serve.py B5e).
+   if(!this.public&&!this.throttled&&session&&session===this.owner){if(q.has('radarSmooth'))this.smooth=q.get('radarSmooth');}
    const headers=this.public?{}:{'X-Radar-Intent':JSON.stringify({session:this.owner,epoch:this.epoch,generation:this.generation,ownerIdleSec:this.ownerIdle,intent:this.intent}),
      'X-Radar-Smooth':this.smooth,'X-View-Session':'','X-Radar-Panel':panel?'1':'0','X-Radar-Throttled':this.throttled?'1':null};
    return {ok:true,headers:{get:k=>headers[k]??null},json:()=>Promise.resolve({ts:1000000,radar:{...manifest(),intent:structuredClone(this.intent),sourcePref:this.intent.source}})};
@@ -113,15 +114,20 @@ a.run('assert.doesNotMatch(caption(),/Updating view|Switching/)');
 '''.replace('ACTION', json.dumps(action)))
 
 
-def test_nonowner_smooth_taps_do_not_claim_and_follow_headers():
+def test_nonowner_smooth_tap_claims_the_view_and_followers_follow_headers():
     run_remote(r'''
 const a=page(),b=page();await a.poll();a.run('radarZoomChange(1)');await a.poll();await b.poll();
-const owner=server.owner,mark=server.requests.length;
+const B=b.run('radarIntent.session'),mark=server.requests.length;
 b.run("$('rad-smooth').listeners.click()");
 await new Promise(setImmediate);await b.poll();await a.poll();
-assert.equal(server.smooth,'on');assert.equal(server.owner,owner);
-assert.ok(server.requests.slice(mark).every(q=>!q.has('radarClaim')&&!q.has('radarCommit')));
-a.run("assert.equal(radarSmooth.value,true)");
+// Smooth changes everyone's view: the tap is a user commit that takes ownership.
+assert.equal(server.smooth,'on');assert.equal(server.owner,B);
+assert.ok(server.requests.slice(mark).some(q=>q.get('radarSmooth')==='on'&&q.get('radarCommit')==='1'));
+a.run("assert.equal(radarSmooth.value,true);assert.equal(radarIntent.owned,false)");
+// A refused tap (here: the server refuses every commit) drops back to the server's value.
+server.public=false;server.throttled=false;server.high.set(a.run('radarIntent.session'),{generation:1e9,heartbeat:1e9});
+a.run("$('rad-smooth').listeners.click()");await a.poll();
+assert.equal(server.smooth,'on');a.run("assert.equal(radarSmooth.pending,null);assert.equal(radarSmooth.value,true)");
 server.public=true;const viewer=page();await viewer.poll();
 viewer.run("assert.equal(radarSmooth.writable,false);radarZoomChange(1);radarChooseSource('site');assert.equal(radarIntent.ready,false);assert.doesNotMatch(caption(),/Updating view|Switching/)");
 ''')

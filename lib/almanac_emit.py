@@ -134,6 +134,14 @@ RADAR_SITE_MIN_ZOOM = 7
 RADAR_SITE_RANGE_METERS = 230000
 RADAR_SITE_MAX_COUNT = 4
 RADAR_SITE_MAX_AGE_SEC = 900
+# The oldest stamp any view can show: a newest frame up to its source's
+# acceptance age (site 15 min, RainViewer 20 min, MRMS 10 min) plus the hour of
+# history behind it. Older cached stamps are deleted at boot without opening.
+RADAR_CACHE_RETENTION_SEC = RADAR_HISTORY_SEC + max(RADAR_SITE_MAX_AGE_SEC, RADAR_IEM_STALE_SEC, RADAR_RAINVIEWER_STALE_SEC)
+RADAR_CACHE_RETRY_SEC = 5          # first retry of a failed cache boot, doubling
+RADAR_CACHE_RETRY_MAX_SEC = 300
+RADAR_SITE_STALE_MIN_SEC = 480     # a site frame is never stale sooner than 8 minutes
+RADAR_HEALTH_WRITE_SEC = 15        # radar-health.json cadence (sooner on a state change)
 RADAR_MIN_ZOOM = 4
 RADAR_MAX_ZOOM = 9
 RADAR_TARGET_METERS = 200000
@@ -870,7 +878,91 @@ def _radar_tile_metadata(path, source):
             if int(image.info['radarVisiblePixels'])!=visible:raise ValueError('cached tile visibility count')
             if variant is not True and visible>meta['opaquePixels']-meta['unmatchedPixels']:
                 raise ValueError('cached tile visibility')
+        if variant == 'native':
+            # A visible pixel is a measured one: the two counts cannot overlap.
+            uncovered = image.info['radarUncoveredPixels']
+            if not re.fullmatch(r'[0-9]{1,5}', uncovered) or int(uncovered)+visible > 65536:
+                raise ValueError('cached tile coverage count')
+            grid = image.info['radarMeasuredGrid']
+            _radar_check_grid(grid, int(uncovered))
+            meta = dict(meta, uncoveredPixels=int(uncovered), measuredGrid=grid)
         return dict(meta, weatherPixels=weather_pixels(image))
+
+
+def _radar_check_grid(grid, uncovered):
+    """A native tile's radarMeasuredGrid must agree with its uncovered count:
+    a fully measured cell holds no uncovered pixel, and a tile with none
+    uncovered has every cell measured. Raises ValueError."""
+    from lib.radar_mosaic import grid_cells
+    cells = int(grid_cells(grid).sum())
+    if cells*256 > 65536-uncovered or (uncovered == 0) != (cells == 256):
+        raise ValueError('cached tile coverage grid')
+
+
+@lru_cache(maxsize=256)
+def _radar_disc_grid(site, zoom, x, y):
+    """Cells of tile (zoom, x, y) wholly inside a site's range disc, for site
+    layers drawn from IEM tiles, which carry no measured grid. A cell counts
+    when all four of its corners are in range: the disc is convex at this
+    scale, so its corners in range put the whole cell in range. Hex as
+    radarMeasuredGrid; '0'*64 for an unknown site."""
+    from lib.radar_mosaic import GRID_CELLS
+    import numpy as np
+    if site not in _NEXRAD_SITES:
+        return '0' * (GRID_CELLS*GRID_CELLS//4)
+    lat, lon, _ = _NEXRAD_SITES[site]
+    edge = np.arange(GRID_CELLS+1) * (256 // GRID_CELLS)
+    n = 2**zoom * 256
+    lons = np.radians((x*256 + edge) / n * 360 - 180)
+    lats = np.arctan(np.sinh(np.pi * (1 - 2 * (y*256 + edge) / n)))
+    a, b = math.radians(lat), math.radians(lon)
+    la, lo = lats[:, None], lons[None, :]
+    hav = np.sin((la-a)/2)**2 + math.cos(a)*np.cos(la)*np.sin((lo-b)/2)**2
+    inside = 2*6371008.8*np.arcsin(np.minimum(1, np.sqrt(hav))) <= RADAR_SITE_RANGE_METERS
+    cells = inside[:-1, :-1] & inside[1:, :-1] & inside[:-1, 1:] & inside[1:, 1:]
+    return np.packbits(cells.ravel()).tobytes().hex()
+
+
+def _radar_view_measured(snap, records):
+    """Whether every 16-pixel cell of the snapshot's view, at its acquisition
+    zoom, was measured in the newest frame: True, False, or None while a tile
+    of it is not on disk yet. Native mosaic tiles answer from their
+    radarMeasuredGrid; IEM site layers from their range discs (a layer covers
+    a cell if any layer does); Region and RainViewer tiles count as measured
+    (MRMS's domain edge is partialCoverage's job)."""
+    from lib.radar_mosaic import grid_cells, GRID_CELLS
+    import numpy as np
+    frame = next((f for f in reversed(snap.frames) if f['ts'] == snap.ts_frame), None)
+    if frame is None or snap.bounds is None or snap.zoom is None:
+        return None
+    if snap.source_id != 'iem-nexrad-n0b':
+        return True
+    zoom, bounds = snap.zoom, snap.bounds
+    # Bounds came from these pixel edges; round away float noise so a view
+    # edge on a tile edge does not reach a sliver into the next tile.
+    left, top = (round(v, 6) for v in world_point(bounds['n'], bounds['w'], zoom))
+    right, bottom = (round(v, 6) for v in world_point(bounds['s'], bounds['e'], zoom))
+    world = 2**zoom * 256
+    if right <= left:
+        right += world
+    side = 256 // GRID_CELLS
+    for ty in range(max(0, math.floor(top/256)), min(2**zoom, math.ceil(bottom/256))):
+        for tx in range(math.floor(left/256), math.ceil(right/256)):
+            measured = np.zeros((GRID_CELLS, GRID_CELLS), bool)
+            for site, stamp in _radar_frame_pairs(frame):
+                if frame.get('mosaicKey'):
+                    record = records.get(_radar_disk_key('iem-nexrad-n0b', site, stamp, zoom, tx, ty, 'native'))
+                    if record is None or 'measuredGrid' not in (record[2] or {}):
+                        return None
+                    measured |= grid_cells(record[2]['measuredGrid'])
+                else:
+                    measured |= grid_cells(_radar_disc_grid(site, zoom, tx % 2**zoom, ty))
+            x0, x1 = max(left, tx*256) - tx*256, min(right, (tx+1)*256) - tx*256
+            y0, y1 = max(top, ty*256) - ty*256, min(bottom, (ty+1)*256) - ty*256
+            crop = measured[int(y0//side):math.ceil(y1/side), int(x0//side):math.ceil(x1/side)]
+            if crop.size and not crop.all():
+                return False
+    return True
 
 
 def _radar_grid(ctx, zoom=None, margin=0):
@@ -881,8 +973,86 @@ def _radar_grid(ctx, zoom=None, margin=0):
     return tiles
 
 
-def _radar_site_pairs(ctx, ts):
-    """v1 keeps its 15-minute rule; v2 accepts -8 minutes through +60 s."""
+def _radar_site_stale_sec(cadence):
+    """A site frame is stale after about 2.5 scan intervals of the primary's
+    own listing (one scan in flight, one and a half missed), whole minutes,
+    never under 8 or over 15 minutes. Unknown cadence keeps 15 minutes."""
+    if not cadence:
+        return RADAR_SITE_MAX_AGE_SEC
+    return int(min(RADAR_SITE_MAX_AGE_SEC, max(RADAR_SITE_STALE_MIN_SEC, math.ceil(2.5*cadence/60)*60)))
+
+
+def _radar_contributors(frame):
+    """The scans a frame's pixels came from: acquired layers, else its pairs."""
+    return frame.get('acquiredSites') or frame.get('siteScans') or ()
+
+
+def _radar_observed_range(frame):
+    """[oldest, newest] contributing scan stamp (UTC epoch s), None if single-source."""
+    stamps = [p['ts'] for p in _radar_contributors(frame) if type(p.get('ts')) in (int, float)]
+    return [min(stamps), max(stamps)] if stamps else None
+
+
+def _radar_freshness(snap, now):
+    """Age/staleness of what the newest frame shows. A site frame is as old as
+    its OLDEST contributing scan, not its anchor: neighbours can be minutes
+    older than the primary that clocks the frame."""
+    newest = next((f for f in reversed(snap.frames) if f['ts'] == snap.ts_frame), None)
+    observed = _radar_observed_range(newest) if newest is not None else None
+    oldest = observed[0] if observed else snap.ts_frame
+    age = int(now-oldest) if oldest is not None else None
+    stale_sec = (_radar_site_stale_sec(snap.scan_cadence_sec) if snap.source_mode == 'site'
+                 else snap.stale_sec or RADAR_IEM_STALE_SEC)
+    return dict(age=age, observed=observed, stale_sec=stale_sec,
+                stale=age is not None and age >= stale_sec)
+
+
+def _radar_expected_sites(ctx):
+    """The in-view radars a site frame should draw from, decided before any
+    contributor is chosen: every listed site that reports, plus every site
+    whose listing failed. A freshness or time-window rule, a failed product or
+    a failed listing can drop a site from the contributors, never from this
+    set. Sites with fresh evidence that they are not reporting are not
+    expected; their range simply shows as unmeasured in the tile grids."""
+    return sorted(s['id'] for s in ctx.get('sites', ())
+                  if s.get('reporting') or s.get('reason') == 'scan unavailable')
+
+
+def _radar_partial_coverage(source, frame, ctx):
+    """DATA_CONTRACT partialCoverage. MRMS: the view reaches past its domain.
+    Site frames: an expected contributor is missing - its listing failed, it
+    had no scan in the frame's window, it aged past the freshness limit, or
+    its requested scan was not acquired. Geometry (view beyond every
+    contributor's range, missing gates) is not this flag: native tiles carry
+    their measured grid and the page and health read it."""
+    bounds = ctx['bounds']
+    if source == 'iem-mrms-lcref':
+        return any(bounds[k] < _RADAR_IEM_DOMAIN[k] if k in ('w', 's') else
+                   bounds[k] > _RADAR_IEM_DOMAIN[k] for k in ('w', 'e', 's', 'n'))
+    if source != 'iem-nexrad-n0b' or frame is None:
+        return False
+    acquired = {(p['id'], p['ts']) for p in _radar_contributors(frame)}
+    requested = {tuple(p) for p in frame.get('requestedPairs', ())}
+    expected = set(frame.get('expectedSites', ())) | {site for site, _ in requested}
+    return bool(requested - acquired) or bool(expected - {site for site, _ in acquired})
+
+
+def _radar_site_pairs(ctx, ts, now=None):
+    """Contributors of the frame anchored at ts (the primary's scan).
+
+    Relative window: v1 keeps its 15-minute rule; v2 accepts -8 minutes
+    through +60 s. Absolute limit: a neighbour must still be fresh (younger
+    than the site stale threshold) as of the moment the frame stops being the
+    newest - now for the newest frame, the primary's next scan for an older
+    one - so a stale neighbour never blends into a current frame, and an
+    older frame's set does not change as the clock runs on.
+    """
+    now = time.time() if now is None else now
+    primary = ctx.get('site_id')
+    timeline = ctx['site_scans'].get(primary, ()) if primary else ()
+    later = next((t for t in timeline if t > ts), None)
+    as_of = now if later is None else min(now, later)
+    limit = _radar_site_stale_sec(_radar_scan_cadence(timeline)['scan_cadence_sec'])
     pairs = []
     for site in ctx['sites']:
         stamps = ctx['site_scans'].get(site['id'], ()) if site['reporting'] else ()
@@ -890,7 +1060,8 @@ def _radar_site_pairs(ctx, ts):
         stamp = next((t for t in reversed(stamps) if t <= ts + (60 if native else 0)), None)
         if native and site['id'] == ctx.get('site_id'):
             stamp = ts if ts in stamps else None  # the primary clocks this frame
-        if stamp is not None and ts - stamp <= (480 if native else RADAR_SITE_MAX_AGE_SEC):
+        if (stamp is not None and ts - stamp <= (480 if native else RADAR_SITE_MAX_AGE_SEC)
+                and (site['id'] == primary or as_of - stamp < limit)):
             pairs.append((site['id'], stamp))
     return tuple(pairs)
 
@@ -903,8 +1074,11 @@ def _radar_frame_pairs(frame):
 
 
 def _radar_frame(source, ts, ctx, pairs=None):
-    return dict(ts=ts, stamp=datetime.fromtimestamp(ts, timezone.utc).strftime('%Y%m%d%H%M'),
-                complete=False, levels={}, siteScans=[dict(id=site, ts=scan) for site,scan in pairs or ()])
+    frame = dict(ts=ts, stamp=datetime.fromtimestamp(ts, timezone.utc).strftime('%Y%m%d%H%M'),
+                 complete=False, levels={}, siteScans=[dict(id=site, ts=scan) for site,scan in pairs or ()])
+    if source == 'iem-nexrad-n0b' and pairs is not None:
+        frame['expectedSites'] = _radar_expected_sites(ctx)
+    return frame
 
 
 @lru_cache(maxsize=512)
@@ -1170,6 +1344,18 @@ class AlmanacEmitter:
         self._radar_geometry_since = 0.
         self._radar_geo_state = None
         self._radar_geo_idle = None
+        # LOCK ORDER (outermost first). A thread may take a later lock while
+        # holding an earlier one, never the reverse:
+        #   _life_lock -> HostHealth.lock (any instance: _radar_health,
+        #   _radar_n0h_health) -> _radar_lock -> RadarSession pool condition
+        #   -> Attempt.lock.
+        # Request admission (_radar_request) and hedge claims hold a host-health
+        # lock while the rate gate takes _radar_lock, so code holding
+        # _radar_lock must never call into HostHealth (snapshot, record,
+        # admit, probe_delay, ...). Native input workers outlive their frame
+        # (a running future cannot be cancelled), so any inversion here is a
+        # reachable deadlock, not a theoretical one. Snapshot health first,
+        # then take _radar_lock (see _radar_log_pass).
         self._radar_lock = _RLock()
         self._radar_session = None
         self._radar_provider = None
@@ -1195,7 +1381,13 @@ class AlmanacEmitter:
         self._radar_acquisition_pending = False
         from lib.radar_cache import TileInventory
         self._radar_disk_inventory = TileInventory(RADAR_DIR)  # caps sized to the disk it lives on
-        self._radar_cache_ready = _Event()
+        self._radar_cache_ready = _Event()      # set only by a successful boot scan
+        self._radar_cache_done = _Event()       # the current boot attempt finished (either way)
+        self._radar_cache_error = None          # last failed boot attempt; cleared on success
+        self._radar_cache_deferred = False      # a pass found the cache not ready
+        self._radar_health_key = None           # radar-health.json: last written summary state
+        self._radar_health_written = -math.inf
+        self._radar_health_warned = False
         self._radar_boot_mono = time.monotonic()  # the 'starting' state is bounded from here
         self._radar_attention = Attention()
         self._radar_glances = GlanceHistory(os.path.join(os.path.dirname(output_path) or '.', 'radar_glances.json'))
@@ -1578,6 +1770,12 @@ class AlmanacEmitter:
         except (OSError, ValueError, TypeError, KeyError):
             return False
 
+    def _radar_forecast_age(self, now):
+        """Seconds since the forecast's last successful update (lib/forecast.py
+        stamps Met['UpdatedTs']); None while no forecast has ever succeeded."""
+        updated = _num((getattr(self.screen, 'Met', {}) or {}).get('UpdatedTs'))
+        return None if updated is None else now - updated
+
     def _radar_attention_signals(self, payload, now, tz):
         snap = self._radar_result
         newest = snap.frames[-1] if snap.frames else None
@@ -1599,6 +1797,7 @@ class AlmanacEmitter:
             lightning_age=lightning_since if isinstance(lightning_since, (int, float)) else None,
             precip_pct=payload.get('fcPrecipPct'),
             conditions=payload.get('conditions'),
+            forecast_age=self._radar_forecast_age(now),
             echo=newest.get('echo') if newest else None,
             echo_age=(now - snap.ts_frame) if newest and snap.ts_frame else None,
             sentinel_echo=sentinel.get('echo'),
@@ -1639,8 +1838,6 @@ class AlmanacEmitter:
                 frames=knobs['frames'], tiles=knobs['tiles'],
                 waiting=self._radar_attention_active() and self._radar_quiet_at is not None
                     and not self._radar_result.available and self._radar_result.reason == 'no data yet')
-            if 'health' in payload['radar']:
-                payload['radar']['health']['attention'] = self._radar_attention_health(now, tz)
         except Exception as error:                                       # noqa: BLE001
             Logger.warning(f'almanac_emit: radar attention tick failed - {error}')
 
@@ -1662,7 +1859,7 @@ class AlmanacEmitter:
     def _radar_current_complete(self, now):
         snap = self._radar_result
         return bool(snap.frames and snap.frames[-1]['complete'] and snap.ts_frame is not None
-            and 0 <= now - snap.ts_frame < (snap.stale_sec or RADAR_IEM_STALE_SEC)
+            and 0 <= now - snap.ts_frame and not _radar_freshness(snap, now)['stale']
             and self._radar_result_stamp == self._radar_preference_stamp()
             and (snap.source_mode != 'site' or (snap.tiles or {}).get('variant', False) == _radar_variant(dict(
                 native=self._radar_native_requested, attention=self._radar_effective_tier(),
@@ -1862,9 +2059,86 @@ class AlmanacEmitter:
         now = time.time()
         health['attention'] = self._radar_attention_health(now, self._station_tz(getattr(self.app, 'config', {}) or {}))
         cache = self._radar_disk_inventory
+        failure = self._radar_cache_error
         health['cache'] = dict(files=len(cache), bytes=cache.bytes, maxFiles=cache.MAX_FILES,
-            maxBytes=cache.MAX_BYTES, ready=self._radar_cache_ready.is_set(), startup=dict(cache.startup))
+            maxBytes=cache.MAX_BYTES, ready=self._radar_cache_ready.is_set(), startup=dict(cache.startup),
+            initError=dict(error=failure['error'], attempts=failure['attempts'], ts=failure['ts'],
+                           retryTs=failure['retryTs']) if failure is not None else None)
         return health
+
+    def _radar_health_summary(self, now):
+        """The few fields a monitor reads first (DATA_CONTRACT: radar-health.json).
+        Radar never changes the engine's own /health status."""
+        if not RADAR_ENABLED:
+            return dict(state='off', newestObservationTs=None, newestObservationAgeSec=None, lastSuccessTs=None,
+                        source=None, fallbackReason=None, coverage='unknown', nextAttemptTs=None,
+                        attentionTier=None, attentionReason=None, initError=None)
+        snap = self._radar_result
+        failure = self._radar_cache_error
+        fresh = _radar_freshness(snap, now) if snap.available else None
+        observed = fresh['observed'][0] if fresh and fresh['observed'] else snap.ts_frame if snap.available else None
+        native = self._radar_native_fallback(snap)
+        retry = self._radar_next_retry if self._radar_next_retry is not None and self._radar_next_retry > now else None
+        attempts = [t for t in (retry, self._radar_discovery.due,
+                                failure['retryTs'] if failure else None) if t is not None]
+        attention = self._radar_attention
+        state = ('error' if failure is not None and not self._radar_cache_ready.is_set() else
+                 'starting' if self._radar_starting(snap) is not None else
+                 ('stale' if fresh['stale'] else 'current') if snap.available else 'unavailable')
+        return dict(state=state, newestObservationTs=observed,
+            newestObservationAgeSec=max(0, int(now-observed)) if observed is not None else None,
+            lastSuccessTs=self._radar_health.last_success,
+            source=snap.source_id if snap.available else None,
+            fallbackReason=(native['reason'] if native['active'] else None) or snap.source_fallback,
+            coverage=self._radar_health_coverage(snap),
+            nextAttemptTs=min(attempts) if attempts else None,
+            attentionTier=attention.tier, attentionReason=attention.reason,
+            initError=failure['error'] if failure is not None and not self._radar_cache_ready.is_set() else None)
+
+    def _radar_health_coverage(self, snap):
+        """summary.coverage (DATA_CONTRACT): 'partial' when an expected
+        contributor is missing or a cell of the acquired view was not measured
+        in the newest frame; 'full' when neither, proven from the tiles' own
+        grids; 'unknown' with no radar or while a view tile is not on disk."""
+        if not snap.available:
+            return 'unknown'
+        if snap.partial_coverage:
+            return 'partial'
+        try:
+            measured = _radar_view_measured(snap, self._radar_disk_inventory.records)
+        except (KeyError, TypeError, ValueError):
+            measured = None
+        return 'unknown' if measured is None else 'full' if measured else 'partial'
+
+    def _radar_write_health(self, now, force=False):
+        """radar-health.json beside wx.json: the diagnostics wx.json used to
+        carry on every poll. At most every RADAR_HEALTH_WRITE_SEC, and at once
+        when the summary's state changes. Atomic (tmp + replace); no fsync, it
+        is diagnostics on tmpfs."""
+        summary = self._radar_health_summary(now)
+        key = tuple(summary[k] for k in ('state', 'source', 'coverage', 'fallbackReason', 'attentionTier', 'initError'))
+        mono = time.monotonic()
+        if (not force and key == self._radar_health_key
+                and mono - self._radar_health_written < RADAR_HEALTH_WRITE_SEC):
+            return False
+        if RADAR_ENABLED:
+            health = self._radar_health_payload()
+        else:
+            health = dict(enabled=False, lastSuccessTs=None, breaker='closed', cache=None, attention=None)
+        health.update(summary=summary, writtenTs=now)
+        directory = os.path.dirname(self.output_path) or '.'
+        target = os.path.join(directory, 'radar-health.json')
+        tmp_path = f'{target}.tmp.{os.getpid()}'
+        try:
+            with open(tmp_path, 'w') as tmp_file:
+                json.dump(_json_safe(health), tmp_file, allow_nan=False, separators=(',', ':'))
+            os.replace(tmp_path, target)
+        finally:
+            try: os.unlink(tmp_path)
+            except FileNotFoundError: pass
+        self._radar_health_key, self._radar_health_written = key, mono
+        self._radar_health_warned = False
+        return True
 
     def _radar_attention_health(self, now, tz):
         local = datetime.fromtimestamp(now, tz or timezone.utc)
@@ -2301,6 +2575,14 @@ class AlmanacEmitter:
                 self._radar_pass['error'] = type(error).__name__+': '+str(error)
 
     def _radar_log_pass(self, started):
+        # Host-health state is read BEFORE _radar_lock, never inside it: the
+        # documented order is health -> _radar_lock (see __init__). A late
+        # native input worker can be inside request admission (health held,
+        # waiting for the rate gate's _radar_lock) while this pass logs.
+        with self._radar_health.lock:
+            states = {self._radar_health.state(s) for s in self._radar_health.hosts.values()}
+            breaker = 'open' if 'open' in states else 'half' if 'half' in states else 'closed'
+            hedges_now = self._radar_health.hedges
         with self._radar_lock:
             p = self._radar_pass
             # Only verified source success ends an episode. Cached/budget-only
@@ -2328,10 +2610,7 @@ class AlmanacEmitter:
             retry_times = [t for t in (retry_at, self._radar_discovery.due) if t is not None]
             retry = max(0, min(retry_times)-time.time()) if retry_times else None
             # Deliberately do not build/serialize the rolling health payload here.
-            with self._radar_health.lock:
-                states = {self._radar_health.state(s) for s in self._radar_health.hosts.values()}
-                breaker = 'open' if 'open' in states else 'half' if 'half' in states else 'closed'
-                hedges = self._radar_health.hedges-p['hedges']
+            hedges = hedges_now-p['hedges']
             source = p['source'] or self._radar_result.source_id
             site = p['site'] if p['source'] is not None else self._radar_result.site_id
             outcome = p['outcome']
@@ -2599,7 +2878,8 @@ class AlmanacEmitter:
                     # Gates are measured values, never matched colours: nothing is unmatched or ambiguous.
                     return tile, store(target, disk_key, drawn, visible, dict(remapped=True, unmatchedColors=0,
                         opaqueColors=colours, unmatchedPixels=0, opaquePixels=visible, ambiguousPixels=0,
-                        revision=NATIVE_REVISION))
+                        revision=NATIVE_REVISION), uncovered=drawn.info['radarUncoveredPixels'],
+                        grid=drawn.info['radarMeasuredGrid'])
             # Native IEM bytes have no dependency on our remapping revision.
             # RainViewer's server-side colour scheme/options DO affect raw bytes.
             native = (RADAR_RAINVIEWER_COLOR, RADAR_RAINVIEWER_TILE_OPTS) if source == 'rainviewer' else None
@@ -2642,11 +2922,18 @@ class AlmanacEmitter:
                         visible = mapped.width*mapped.height-alpha.histogram()[0]
                     return tile, store(target, disk_key, mapped, visible, metadata)
 
-        def store(target, disk_key, mapped, visible, metadata):
+        def store(target, disk_key, mapped, visible, metadata, uncovered=None, grid=None):
             from PIL.PngImagePlugin import PngInfo
             from lib.radar_palette import weather_pixels
             info = PngInfo(); info.add_text('radarRemap',json.dumps(metadata,separators=(',',':')))
             info.add_text('radarVisiblePixels',str(visible))
+            if uncovered is not None:
+                # Native mosaics only (DATA_CONTRACT: pixels with no valid
+                # measurement, and which 16-pixel cells were wholly measured).
+                _radar_check_grid(grid, uncovered)
+                info.add_text('radarUncoveredPixels',str(uncovered))
+                info.add_text('radarMeasuredGrid',grid)
+                metadata = dict(metadata, uncoveredPixels=uncovered, measuredGrid=grid)
             encoded = io.BytesIO()
             mapped.save(encoded, format='PNG', pnginfo=info)
             rendered = encoded.getvalue()
@@ -3089,6 +3376,7 @@ class AlmanacEmitter:
                             source_mode='site' if source=='iem-nexrad-n0b' else 'mosaic',
                             site_id=ctx.get('site_id'),sites=tuple(ctx.get('sites',())),
                             sites_considered=ctx.get('sites_considered',0),
+                            partial_coverage=_radar_partial_coverage(source,frame,ctx),
                             tiles=_radar_tile_manifest(source,[frame],ctx))
                         retained = self._radar_sliding_frames(source, ts, ctx)
                         if retained:
@@ -3656,9 +3944,7 @@ class AlmanacEmitter:
                 sources=tuple(dict(s) for s in ctx.get('sources', ())),
                 **({k:ctx.get(k) for k in ('scan_cadence_sec','scan_mode','scan_mode_source','scanning_slowly')}
                    if source == 'iem-nexrad-n0b' else dict(scanning_slowly=False)),
-                partial_coverage=source == 'iem-mrms-lcref' and any(
-                    ctx['bounds'][k] < _RADAR_IEM_DOMAIN[k] if k in ('w', 's') else
-                    ctx['bounds'][k] > _RADAR_IEM_DOMAIN[k] for k in ('w', 'e', 's', 'n')))
+                partial_coverage=_radar_partial_coverage(source, frames[newest], ctx))
             self._radar_result_stamp = ctx.get('preference_stamp')
             self._radar_publish_refresh(ctx, snapshot=snapshot, frameIndex=sum(f['complete'] for f in frames.values()))
             return True
@@ -4110,22 +4396,54 @@ class AlmanacEmitter:
 
 
     def _radar_start_inventory(self):
+        """Boot the tile cache: publish revision markers, then scan and
+        reconcile the tile tree. Ready only when both succeed. A failure (disk
+        full, transient storage trouble) is not ready: the server refuses tiles
+        without their revision markers, and files outside the inventory escape
+        eviction. It is recorded for /health and retried with bounded backoff;
+        each retry rescans from an empty inventory, so admission resumes only
+        on a reconciled cache. Acquisition stays parked until then."""
         with self._radar_lock:
-            if self._radar_cache_thread is not None:
+            if self._radar_cache_thread is not None or self._radar_cache_ready.is_set():
+                return
+            failure = self._radar_cache_error
+            if failure is not None and time.monotonic() < failure['retryMono']:
                 return
             root = Path(RADAR_DIR)
+            self._radar_cache_done.clear()
             def bootstrap():
+                error = None
                 try:
                     self._radar_migrate_cache(str(root))
                     self._radar_disk_inventory.scan_roots(tuple(
                         (root/'t'/_radar_render_revision(v), (v,) if v else ())
-                        for v in RADAR_RENDER_VARIANTS), _radar_tile_metadata)
+                        for v in RADAR_RENDER_VARIANTS), _radar_tile_metadata,
+                        expire_before=_radar_stamp_text(int(time.time()-RADAR_CACHE_RETENTION_SEC)))
+                except Exception as caught:                          # noqa: BLE001
+                    error = caught
+                deferred, delay = False, None
+                with self._radar_lock:
                     self._radar_disk_files=len(self._radar_disk_inventory)
                     self._radar_disk_bytes=self._radar_disk_inventory.bytes
-                except OSError as error:
-                    Logger.warning(f'almanac_emit: radar inventory startup failed - {error}')
-                finally:
-                    self._radar_cache_ready.set()
+                    if error is None:
+                        self._radar_cache_error = None
+                        self._radar_cache_ready.set()
+                        deferred, self._radar_cache_deferred = self._radar_cache_deferred, False
+                    else:
+                        attempts = (self._radar_cache_error or {}).get('attempts', 0) + 1
+                        delay = min(RADAR_CACHE_RETRY_MAX_SEC, RADAR_CACHE_RETRY_SEC * 2**(attempts-1))
+                        self._radar_cache_error = dict(error=f'{type(error).__name__}: {error}'[:200],
+                            attempts=attempts, ts=time.time(), retryTs=time.time()+delay,
+                            retryMono=time.monotonic()+delay)
+                    self._radar_cache_thread = None
+                    self._radar_cache_done.set()
+                # Scheduling takes _life_lock, which orders before _radar_lock.
+                if error is not None:
+                    Logger.warning(f'almanac_emit: radar inventory startup failed - {error}; '
+                                   f'retry in {delay:g} s')
+                    self._schedule(lambda _dt: self._radar_start_inventory(), delay)
+                elif deferred:
+                    self._schedule(self._check_radar, 0)  # the pass that found the cache scanning
             self._radar_cache_thread = _InventoryThread(target=bootstrap, name='radar-inventory', daemon=True)
             self._radar_cache_thread.start()
 
@@ -4381,8 +4699,16 @@ class AlmanacEmitter:
         self._radar_start_inventory()
         # Production starts this at boot, 60s before the provider. An early tap
         # yields the lane while the bounded scanner finishes; no cache I/O here.
-        if not self._radar_cache_ready.wait(0 if 'radar' in self._inflight else 30):
-            self._schedule_retry('radar', self._check_radar, .1, retry_reason='local')
+        # The finished scan runs the deferred pass itself (no polling), and a
+        # failed one stays parked until its backoff retry succeeds.
+        ready = self._radar_cache_ready
+        if not ready.is_set() and 'radar' not in self._inflight:
+            self._radar_cache_done.wait(30)  # direct callers (tools, tests) wait out the attempt
+        with self._radar_lock:
+            usable = ready.wait(0)
+            if not usable:
+                self._radar_cache_deferred = True
+        if not usable:
             return
         # Boot validation owns a separate deadline. A successful 26-second
         # inventory wait must not hand acquisition an already expired budget.
@@ -4689,7 +5015,8 @@ class AlmanacEmitter:
                     with self._radar_lock:
                         self._radar_pass['error'] = 'deferred: '+(str(error) or type(error).__name__)
                     self._radar_forget(source)
-                    fresh = previous.available and previous.ts_frame is not None and 0 <= time.time()-previous.ts_frame < previous.stale_sec
+                    fresh = (previous.available and previous.ts_frame is not None and 0 <= time.time()-previous.ts_frame
+                             and not _radar_freshness(previous, time.time())['stale'])
                     if self._radar_result.ts_frame is None:
                         self._radar_result = previous
                     self._radar_retained_refresh('idle' if fresh else 'failed')
@@ -4766,7 +5093,8 @@ class AlmanacEmitter:
             return _clock(datetime.fromtimestamp(ts,tz), style) if ts is not None else None
         complete = [f['ts'] for f in snap.frames if f['complete']]
         gaps = [b-a for a,b in zip(complete,complete[1:]) if b>a]
-        age = int(now-snap.ts_frame) if snap.ts_frame is not None else None
+        fresh = _radar_freshness(snap, now)
+        age = fresh['age']
         factor = 1609.344 if snap.units == 'mi' else 1000
         choices = [dict(meters=d*factor,label=f'{d} {snap.units}') for d in (5,10,20,25,50,100,150,200,250)]
         nearest = None
@@ -4776,7 +5104,8 @@ class AlmanacEmitter:
             nearest.update(ageSec=max(0, int(now-nearest['newestTs'])) if nearest['newestTs'] is not None else None,
                            checkedAt=local(nearest['checkedTs']), nextCheckAt=local(nearest['nextCheckTs']))
         tiles = dict(snap.tiles or {})
-        tiles['frames'] = [{k:v for k,v in dict(f,at=local(f['ts'])).items() if k not in ('complete','publishable','acquiredSites')}
+        tiles['frames'] = [{k:v for k,v in dict(f,at=local(f['ts']),**({'observedRange':_radar_observed_range(f)}
+                               if _radar_observed_range(f) else {})).items() if k not in ('complete','publishable','acquiredSites')}
                            for f in tiles.get('frames',())]
         return dict(available=snap.available,reason=snap.reason,geo=snap.geo,tiles=tiles,
             intent=tiles.get('intent', {}), geometry=tiles.get('geometry'), camera=tiles.get('camera'),
@@ -4806,7 +5135,7 @@ class AlmanacEmitter:
             zoomDesired=snap.zoom_desired,units=snap.units,scaleChoices=choices,
             rings=[dict(meters=float(r['label'].split()[0])*factor,label=r['label']) for r in snap.rings or ()],
             frameCount=len(snap.frames),observedAt=local(snap.ts_frame),observedTs=snap.ts_frame,
-            ageSec=age,staleSec=snap.stale_sec,stale=age is not None and age>=snap.stale_sec,
+            ageSec=age,staleSec=fresh['stale_sec'],stale=fresh['stale'],observedRange=fresh['observed'],
             fetchedAt=snap.ts_fetch,updatedAt=local(snap.ts_fetch),nexrad=nearest,legend=dict(snap.legend))
 
     def _check_version(self, _dt=None):
@@ -5506,6 +5835,12 @@ class AlmanacEmitter:
             if not self._warned:
                 Logger.warning(f'almanac_emit: emit failed - {error}')
                 self._warned = True
+        try:
+            self._radar_write_health(time.time())
+        except Exception as error:                                       # noqa: BLE001
+            if not self._radar_health_warned:
+                Logger.warning(f'almanac_emit: radar health write failed - {error}')
+                self._radar_health_warned = True
 
     def _write_atomic(self, payload):
         """ Write temp file + os.replace so the HTML reader never observes a
@@ -5684,8 +6019,7 @@ class AlmanacEmitter:
                           sitePreferred=(self._radar_source_pref or radar_snap.source_pref) == 'site',
                           nativeBudget=self._radar_native_budget.snapshot(),
                           nativeFallback=self._radar_native_fallback(radar_snap),
-                          starting=self._radar_starting(radar_snap),
-                          health=self._radar_health_payload()),
+                          starting=self._radar_starting(radar_snap)),
             'ts':      int(now),                     # engine heartbeat ONLY - see obsAgeSec
             'obsTs':     int(obs_ts) if obs_ts is not None else None,
             'obsAgeSec': obs_age,                    # age of the newest OUTDOOR observation
@@ -5842,8 +6176,7 @@ class AlmanacEmitter:
         if RADAR_ENABLED:
             self._radar_attention_tick(payload, now, tz)
         else:
-            payload['radar'] = dict(available=False, reason='radar off', enabled=False, starting=None, attention=None,
-                                    health=dict(enabled=False, lastSuccessTs=None, breaker='closed', cache=None, attention=None))
+            payload['radar'] = dict(available=False, reason='radar off', enabled=False, starting=None, attention=None)
         return _json_safe(payload)
 
     # --------------------------------------------------------------------

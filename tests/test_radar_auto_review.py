@@ -208,14 +208,14 @@ def test_camera_only_commit_preserves_expired_source_and_lease(tmp_path, monkeyp
     os.utime(tmp_path/'radar_source', (now-3000, now-3000))
     record = intent(tmp_path, 9, 'site'); record['acceptedAt'] = now-3000
     (tmp_path/'radar_intent').write_text(json.dumps(record))
-    server._expire_radar_source()
+    server._expire_radar_source(); server._flush_preferences()  # preference writer thread: wait for the durable write
     stamp = (tmp_path/'radar_source').stat().st_mtime_ns
     params = dict(radarSession=['review-session-12345'], radarGeneration=['1'], radarHeartbeat=['1'], radarClaim=[''], radarClaimEpoch=['0'], radarCommit=['1'], radarPolicy=['manual'])
     activity = dict(moving=False, zoom=9, center=dict(lat=47, lon=-122))
     assert server._camera_transaction(activity, params)
     params.update(radarGeneration=['2'], radarHeartbeat=['2'], radarCommit=['1'], radarPolicy=['manual'])
     assert server._camera_transaction(activity, params)
-    server._camera_persist_timer.cancel(); server._camera_persist_timer.function()
+    server._camera_persist_timer.cancel(); server._camera_persist_timer.function(); server._flush_preferences()
     accepted = server._read_radar_intent()
     assert accepted['source'] == 'auto' and accepted['sourceAcceptedAt'] == now-3000
     assert (tmp_path/'radar_source').stat().st_mtime_ns == stamp

@@ -166,7 +166,7 @@ def test_source_marker_loopback_validation(monkeypatch,tmp_path,address,query,va
     module=_load_serve(monkeypatch,tmp_path,_payload())
     monkeypatch.setattr(module.http.server.SimpleHTTPRequestHandler,'do_GET',lambda h:None)
     handler=object.__new__(module.Handler);handler.client_address=(address,1);handler.path='/wx.json?'+query
-    handler.do_GET();pref=tmp_path/'radar_source'
+    handler.do_GET();module._flush_preferences();pref=tmp_path/'radar_source'  # preference writer thread: wait for the durable write
     assert (pref.read_text().strip() if pref.exists() else None)==value
 
 

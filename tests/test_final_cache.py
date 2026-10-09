@@ -73,6 +73,8 @@ def test_both_revisions_share_age_order_and_boot_budget(make_emitter, monkeypatc
     new = tile(root/ae._radar_render_revision(), 'iem-mrms-lcref', '-', '202609161200', 8, 0, 0)
     old = tile(root/ae._radar_render_revision(True), 'iem-mrms-lcref', '-', '202609160000', 8, 0, 0)
     e._radar_disk_inventory.MAX_FILES = 1
+    # Fixed 2026-09-16 stamps: ordering under the budget, not boot expiry.
+    monkeypatch.setattr(ae, 'RADAR_CACHE_RETENTION_SEC', 10**9)
     monkeypatch.setattr(e, '_radar_migrate_cache', lambda *args: None)
     monkeypatch.setattr(ae, '_radar_tile_metadata', lambda *args: {})
     e._radar_start_inventory()

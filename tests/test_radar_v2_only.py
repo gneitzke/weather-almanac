@@ -190,8 +190,8 @@ def test_smooth_still_works_on_region_and_fallback_but_not_native():
     run_remote(r'''
 const a=page();await a.poll();
 a.run("radarView.data={...manifest(),native:true,sourceMode:'site'};radarZoomRender();$('rad-smooth').listeners.click();assert.equal(radarSmooth.pending,null)");
-a.run("radarView.data.native=false;$('rad-smooth').listeners.click()");await new Promise(setImmediate);assert.equal(server.smooth,'on');
-a.run("radarView.data.sourceMode='mosaic';$('rad-smooth').listeners.click()");await new Promise(setImmediate);assert.equal(server.smooth,'off');
+a.run("radarView.data.native=false;$('rad-smooth').listeners.click()");await a.poll();assert.equal(server.smooth,'on');
+a.run("radarView.data.sourceMode='mosaic';$('rad-smooth').listeners.click()");await a.poll();assert.equal(server.smooth,'off');
 assert.ok(server.requests.every(q=>!q.has('radarRender')));
 ''')
 

@@ -78,8 +78,10 @@ def test_all_indices_and_clear_air_alpha(source):
 def test_loopback_only_preference(monkeypatch,tmp_path,address,query,value):
     module = _load_serve(monkeypatch,tmp_path,_payload())
     monkeypatch.setattr(module.http.server.SimpleHTTPRequestHandler,'do_GET',lambda h:None)
-    h=object.__new__(module.Handler);h.client_address=(address,1);h.path='/wx.json?radarSession=preference-session-123&'+query
-    h.do_GET();marker=tmp_path/'radar_smooth'
+    # Smooth rides on the camera owner's accepted transaction (a first claim here).
+    camera='radarSession=preference-session-123&radarGeneration=1&radarHeartbeat=1&radarClaim=&radarClaimEpoch=0&radarCommit=1&radarPolicy=manual&view=radar&radarTheme=paper&radarGeoZoom=8&radarGeoCenter=47,-122&radarMoving=0&'
+    h=object.__new__(module.Handler);h.client_address=(address,1);h.path='/wx.json?'+camera+query
+    h.do_GET();module._flush_preferences(force=True);marker=tmp_path/'radar_smooth'
     expected=value if address in module.LOOPBACK else None
     assert (marker.read_text().strip() if marker.exists() else None)==expected
 
@@ -92,9 +94,9 @@ def test_durable_atomic_changed_only(monkeypatch,tmp_path):
     (runtime/'radar_smooth').write_text('off')
     subprocess.run(['bash','-c',setup],env=env,check=True)
     module=_load_serve(monkeypatch,runtime,_payload())
-    module._write_radar_preference('radar_smooth',['on'])
+    module._write_radar_preference('radar_smooth',['on']);module._flush_preferences()  # writer thread: wait for it
     marker=runtime/'radar_smooth';before=marker.stat()
-    module._write_radar_preference('radar_smooth',['on'])
+    module._write_radar_preference('radar_smooth',['on']);module._flush_preferences()
     assert marker.stat().st_ino==before.st_ino
     assert marker.is_symlink()
     shutil.rmtree(runtime);runtime.mkdir()

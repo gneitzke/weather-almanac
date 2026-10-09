@@ -6,9 +6,13 @@ The boot scanner yields between bounded chunks on a dedicated thread.
 from collections import OrderedDict, defaultdict
 from pathlib import Path
 import os
+import re
 import shutil
 import time
 from threading import RLock
+
+
+_STAMP = re.compile(r'[0-9]{12}')
 
 
 class TileInventory:
@@ -113,24 +117,42 @@ class TileInventory:
                 self.directories.discard(str(parent))
                 parent = parent.parent
 
-    def scan(self, root, validate, suffix=(), entry_limit=None):
-        return self.scan_roots(((root, suffix),), validate, entry_limit)
+    def scan(self, root, validate, suffix=(), entry_limit=None, expire_before=None):
+        return self.scan_roots(((root, suffix),), validate, entry_limit, expire_before)
 
-    def scan_roots(self, roots, validate, entry_limit=None):
+    def reset(self):
+        """Forget every record (a failed boot scan is redone from the disk)."""
+        self.frame_metadata.clear()
+        self.records = OrderedDict()
+        self.bytes = 0
+        self.generation += 1
+        self.groups = defaultdict(int)
+        self.group_counts = defaultdict(int)
+        self.directories = set()
+        self.startup = {}
+
+    def scan_roots(self, roots, validate, entry_limit=None, expire_before=None):
         """Admit newest stamps across all sources, sites and render revisions.
 
         Directory discovery/cleanup must see the whole tree; MAX_ENTRIES bounds
         validation, not that metadata traversal. Only indexed files survive,
         including in a stamp where the budget expires. No symlinks are followed.
         Both render revisions share one budget and one oldest-first eviction.
+
+        expire_before is a UTC stamp name ('%Y%m%d%H%M'). A stamp directory
+        older than it can never be displayed again, so it is deleted with the
+        rest of the unindexed tree without opening a single tile. The scan
+        starts from an empty inventory: it reconciles the disk to the index,
+        including after an earlier scan failed part way.
         """
+        self.reset()
         limit = self.MAX_ENTRIES if entry_limit is None else max(0, entry_limit)
         started, cpu = time.perf_counter(), time.thread_time()
         visited = loaded = invalid = 0
         bounded = False
         roots = [(Path(root), suffix) for root, suffix in roots]
         stamps = []
-        discovered = 0
+        discovered = expired = 0
 
         def discover():
             nonlocal visited, discovered, bounded
@@ -161,8 +183,13 @@ class TileInventory:
                         continue
                     for stamp in children(site.path):
                         discover()
-                        if stamp.is_dir(follow_symlinks=False):
-                            stamps.append((stamp.name, Path(stamp.path), root, suffix))
+                        if not stamp.is_dir(follow_symlinks=False):
+                            continue
+                        if (expire_before is not None and _STAMP.fullmatch(stamp.name)
+                                and stamp.name < expire_before):
+                            expired += 1  # purged below, unopened
+                            continue
+                        stamps.append((stamp.name, Path(stamp.path), root, suffix))
 
         # A DFS sorted within each site is not a global age order. In particular
         # an old smooth revision must never displace a new native revision.
@@ -203,6 +230,7 @@ class TileInventory:
         before = len(self)
         self.evict()
         self.startup = dict(entries=visited, discoveredEntries=discovered, files=loaded, invalid=invalid, purgedDirs=purged,
+            expiredStamps=expired,
             evicted=before-len(self), wallSec=time.perf_counter()-started,
             cpuSec=time.thread_time()-cpu, bounded=bounded)
         self.writable = True
@@ -267,6 +295,10 @@ class FrameMetadataIndex:
                 paths.discard(path)
                 if not paths:
                     del self._paths[key]
+
+    def clear(self):
+        with self._lock:
+            self._paths.clear()
 
     def paths(self, root, stamp):
         with self._lock:

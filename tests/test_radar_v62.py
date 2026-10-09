@@ -38,6 +38,7 @@ def test_saturated_history_compact_pass_and_health(make_emitter, logs, serve_at,
     assert 'source=iem-nexrad-n0b site=KATX' in line
     assert '\n' not in line and 'phases' not in line and 'detail' not in line
     payload = e._build_payload()
+    e._radar_write_health(ae.time.time(), force=True)  # /health reads radar-health.json
     _, url = serve_at(payload)
     _, health = _get(url+'/health')
     assert health['radar']['requests'] == e._radar_request_metrics

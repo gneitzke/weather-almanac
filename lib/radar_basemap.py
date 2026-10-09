@@ -7,6 +7,7 @@ from pathlib import Path
 import struct
 import tempfile
 import zlib
+import threading
 import time
 from collections import deque
 
@@ -320,24 +321,66 @@ def home_requests(station,home_zoom=8,theme='paper'):
                 if 0<=cy+dy<2**z:yield theme,z,(cx+dx)%2**z,cy+dy
 
 
+GEO_MAX_FILES,GEO_MAX_BYTES=6000,32_000_000
+GEO_LOW_WATER=.9  # an eviction pass frees a tenth of the cap, so passes are rare
+
+
+class GeoCache:
+    """Running file/byte totals for one geo cache; the disk is walked once,
+    then again only when an admission would exceed a cap. That walk resyncs
+    the totals and evicts least-recently-served tiles (atime) down to the
+    low-water mark, so a full cache pays one walk per ~600 new tiles instead
+    of one per tile. Only the geo worker writes here; the lock is a guard."""
+    def __init__(self,radar_dir):
+        self.root=Path(radar_dir)/'geo';self.count=None;self.size=0;self.lock=threading.Lock()
+    def _walk(self):
+        records=[]
+        for p in self.root.glob('*/*/*/*/*.png'):
+            try:st=p.stat()
+            except FileNotFoundError:continue
+            records.append((st.st_atime,st.st_size,p))
+        self.count,self.size=len(records),sum(r[1] for r in records)
+        return records
+    def fits(self,incoming_size=0,incoming_files=0,low=1.):
+        return self.count+incoming_files<=GEO_MAX_FILES*low and self.size+incoming_size<=GEO_MAX_BYTES*low
+    def prune(self,pinned=(),incoming_size=0,incoming_files=0):
+        with self.lock:
+            if self.count is None:self._walk()
+            if self.fits(incoming_size,incoming_files):return True
+            pinned=set(pinned)
+            for _,length,p in sorted(self._walk()):
+                if self.fits(incoming_size,incoming_files,GEO_LOW_WATER):break
+                if p in pinned:continue
+                p.unlink(missing_ok=True);remove_empty_parents(p,self.root);self.count-=1;self.size-=length
+            return self.fits(incoming_size,incoming_files)
+    def added(self,length):
+        with self.lock:
+            if self.count is not None:self.count+=1;self.size+=length
+
+
+_GEO_CACHES={}
+_GEO_CACHES_LOCK=threading.Lock()
+
+
+def geo_cache(radar_dir):
+    with _GEO_CACHES_LOCK:
+        key=str(Path(radar_dir))
+        if key not in _GEO_CACHES:_GEO_CACHES[key]=GeoCache(radar_dir)
+        return _GEO_CACHES[key]
+
+
 def prune(radar_dir,pinned=(),incoming_size=0,incoming_files=0):
-    root=Path(radar_dir)/'geo';pinned=set(pinned);records=[]
-    for p in root.glob('*/*/*/*/*.png'):
-        st=p.stat();records.append((p in pinned,st.st_atime,st.st_size,p))
-    count,size=len(records),sum(r[2] for r in records)
-    for pin,_,length,p in sorted(records):
-        if count+incoming_files<=6000 and size+incoming_size<=32_000_000:break
-        if pin:continue
-        p.unlink(missing_ok=True);remove_empty_parents(p,root);count-=1;size-=length
-    return count+incoming_files<=6000 and size+incoming_size<=32_000_000
+    return geo_cache(radar_dir).prune(pinned,incoming_size,incoming_files)
 
 
 def cache_tile(radar_dir,theme,z,x,y,pinned=()):
     target=tile_path(radar_dir,theme,z,x,y)
     if target.is_file():return target
     raw=tile(theme,z,x,y)
-    if not prune(radar_dir,pinned,len(raw),1):return None
+    cache=geo_cache(radar_dir)
+    if not cache.prune(pinned,len(raw),1):return None
     atomic_write(target,raw)
+    cache.added(len(raw))
     return target
 
 

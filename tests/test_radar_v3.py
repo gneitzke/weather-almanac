@@ -118,7 +118,7 @@ def test_slot_omits_stale_and_future_and_dark_scans():
     ctx = dict(sites=[dict(id='old', reporting=True), dict(id='future', reporting=True),
                      dict(id='good', reporting=True), dict(id='dark', reporting=False)],
                site_scans={'old': (0,), 'future': (1001,), 'good': (101, 998, 1001), 'dark': (999,)})
-    assert ae._radar_site_pairs(ctx, 1000) == (('good', 998),)
+    assert ae._radar_site_pairs(ctx, 1000, now=1000) == (('good', 998),)  # relative rules, seen at the anchor
 
 
 @pytest.mark.parametrize('zoom', [7, 8])
@@ -304,7 +304,7 @@ def test_loopback_sequence_intent_and_duplicate(monkeypatch,tmp_path,address):
     monkeypatch.setattr(module.http.server.SimpleHTTPRequestHandler,'do_GET',lambda h:None)
     handler=object.__new__(module.Handler);handler.client_address=(address,1)
     handler.path='/wx.json?radarZoom=7&radarSource=site&radarCenter=station&radarSeq=41'
-    handler.do_GET();marker=tmp_path/'radar_intent'
+    handler.do_GET();module._flush_preferences();marker=tmp_path/'radar_intent'  # preference writer thread: wait for the durable write
     assert marker.exists()==(address in module.LOOPBACK)
     if marker.exists():
         assert json.loads(marker.read_text())==dict(seq=41,zoom=7,source='site',center='station')

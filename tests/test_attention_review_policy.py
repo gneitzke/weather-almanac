@@ -88,12 +88,12 @@ def test_force_expiry_shadow_and_health_share_current_decision(make_emitter, hyb
     scheduled = []
     e._schedule = lambda *args, **kwargs: scheduled.append(args)
     p = e._build_payload()['radar']
-    assert p['attention']['tier'] == p['health']['attention']['tier'] == 'dormant'
+    assert p['attention']['tier'] == e._radar_health_payload()['attention']['tier'] == 'dormant'  # health: radar-health.json
     assert not scheduled
     hybrid.mono += ae.RADAR_ATTENTION_FORCE_TTL
     p = e._build_payload()['radar']
     assert p['attention']['tier'] == 'watch'
-    assert p['health']['attention']['forced'] is None
+    assert e._radar_health_payload()['attention']['forced'] is None
     assert not scheduled
 
 

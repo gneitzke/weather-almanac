@@ -168,7 +168,7 @@ def test_server_parses_only_loopback(monkeypatch, tmp_path, query, expected, add
     served = []
     monkeypatch.setattr(module.http.server.SimpleHTTPRequestHandler,'do_GET',lambda h: served.append(h.path))
     h = object.__new__(module.Handler); h.client_address=(address,1); h.path='/wx.json?'+query
-    h.do_GET(); pref=tmp_path/'radar_zoom'
+    h.do_GET(); module._flush_preferences(); pref=tmp_path/'radar_zoom'  # preference writer thread: wait for the durable write
     expected = expected if address in module.LOOPBACK else None
     assert (pref.read_text().strip() if pref.exists() else None) == expected
     assert served == [h.path] and module._polls == 1
@@ -183,10 +183,11 @@ def test_server_atomic_changed_only_and_restart(serve_at, tmp_path, monkeypatch)
         calls.append((src,dst)); replace(src,dst)
     monkeypatch.setattr(module.os,'replace',replacing)
     for _ in range(3): assert _get(url+'/wx.json?radarZoom=8')[0] == 200
+    module._flush_preferences()  # preference writer thread: wait for the durable write
     assert len(calls) == 1 and pref.read_text() == '8\n'
     module2 = _load_serve(monkeypatch,tmp_path,_payload())
-    module2._write_radar_zoom(['8']); assert len(calls) == 1
-    module2._write_radar_zoom(['auto']); assert len(calls) == 2 and pref.read_text() == 'auto\n'
+    module2._write_radar_zoom(['8']); module2._flush_preferences(); assert len(calls) == 1
+    module2._write_radar_zoom(['auto']); module2._flush_preferences(); assert len(calls) == 2 and pref.read_text() == 'auto\n'
     assert not list(tmp_path.glob('radar_zoom.tmp.*'))
     assert _get(url+'/health')[1]['status'] == 'ok'
 
@@ -204,6 +205,7 @@ def test_zoom_io_error_does_not_break_polling(serve_at,tmp_path,monkeypatch,fail
             return original(path,*args,**kwargs)
         monkeypatch.setattr(builtins,'open',opening)
     assert _get(url+'/wx.json?radarZoom=8')[0] == 200
+    module._flush_preferences()  # preference writer thread: wait for the durable write
     assert pref.read_text() == '6' and not list(tmp_path.glob('radar_zoom.tmp.*'))
     assert _get(url+'/health')[1]['status'] == 'ok'
 
@@ -218,14 +220,14 @@ def test_durable_link_survives_runtime_directory_recreation(make_emitter,hybrid,
     (runtime/'radar_zoom').write_text('6')
     subprocess.run(['bash','-c',setup],env=env,check=True)
     module=_load_serve(monkeypatch,runtime,_payload())
-    module._write_radar_zoom(['8'])
+    module._write_radar_zoom(['8']); module._flush_preferences()  # preference writer thread: wait for the durable write
     assert (runtime/'radar_zoom').is_symlink()
     (runtime/'radar_zoom').unlink(); (runtime/'wx.json').unlink(); runtime.rmdir(); runtime.mkdir()
     subprocess.run(['bash','-c',setup],env=env,check=True)
     assert (runtime/'radar_zoom').read_text() == '8\n'
     emitter=make_emitter(output_path=str(runtime/'wx.json')); emitter._do_radar()
     assert emitter._radar_zoom == 8
-    module._write_radar_zoom(['auto'])
+    module._write_radar_zoom(['auto']); module._flush_preferences()
     assert (runtime/'radar_zoom').is_symlink() and (state/'wfpiconsole/radar_zoom').read_text() == 'auto\n'
 
 

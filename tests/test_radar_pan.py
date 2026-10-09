@@ -28,7 +28,7 @@ def test_loopback_center_validation(monkeypatch, tmp_path, value, valid, address
     monkeypatch.setattr(module.http.server.SimpleHTTPRequestHandler, 'do_GET', lambda h: served.append(h.path))
     h = object.__new__(module.Handler); h.client_address = (address, 1)
     h.path = '/wx.json?' + urlencode({'radarCenter': value})
-    h.do_GET()
+    h.do_GET(); module._flush_preferences()  # preference writer thread: wait for the durable write
     marker = tmp_path / 'radar_center'
     assert marker.exists() is (valid and address in module.LOOPBACK)
     if marker.exists():
@@ -58,9 +58,9 @@ def test_center_never_follows_durable_symlink(monkeypatch, tmp_path):
     durable = tmp_path / 'durable'; durable.mkdir()
     saved = durable / 'radar_center'; saved.write_text('1.0,2.0\n')
     marker = tmp_path / 'radar_center'; marker.symlink_to(saved)
-    module._write_radar_center(['1,2'])
+    module._write_radar_center(['1,2']); module._flush_preferences()  # preference writer thread: wait for the durable write
     assert not marker.is_symlink() and saved.read_text() == '1.0,2.0\n'
-    module._write_radar_center(['station'])
+    module._write_radar_center(['station']); module._flush_preferences()
     assert saved.read_text() == '1.0,2.0\n'
 
 
@@ -73,7 +73,7 @@ def test_runtime_recreation_keeps_zoom_only(monkeypatch, tmp_path):
     env = dict(os.environ, XDG_STATE_HOME=str(tmp_path / 'durable'), DATA_DIR=str(runtime))
     subprocess.run(['bash', '-c', setup], env=env, check=True)
     module = _load_serve(monkeypatch, runtime, _payload())
-    module._write_radar_zoom(['8']); module._write_radar_center(['1,2'])
+    module._write_radar_zoom(['8']); module._write_radar_center(['1,2']); module._flush_preferences()  # preference writer thread: wait for the durable write
     assert not (runtime / 'radar_center').is_symlink()
     for item in runtime.iterdir(): item.unlink()
     runtime.rmdir(); runtime.mkdir()
@@ -136,7 +136,7 @@ def test_mercator_inverse_roundtrip(lat, lon, zoom):
 
 def test_small_decimal_center_survives_writer_and_emitter(make_emitter, hybrid, tmp_path, monkeypatch):
     module = _load_serve(monkeypatch, tmp_path, _payload())
-    module._write_radar_center(['0.0000000001,-0.000000001'])
+    module._write_radar_center(['0.0000000001,-0.000000001']); module._flush_preferences()  # preference writer thread: wait for the durable write
     assert (tmp_path / 'radar_center').read_text() == '0.0000000001,-0.000000001\n'
     emitter = make_emitter(); emitter._do_radar()
     assert emitter._radar_result.center == dict(lat=47.61,lon=-122.33)
@@ -173,4 +173,5 @@ def test_center_io_error_preserves_marker_and_poll(serve_at, tmp_path, monkeypat
             return original(path, *args, **kwargs)
         monkeypatch.setattr(builtins, 'open', opening)
     assert _get(url + '/wx.json?radarCenter=3,4')[0] == 200
+    module._flush_preferences()  # preference writer thread: wait for the failed write
     assert marker.read_text() == '1,2' and not list(tmp_path.glob('radar_center.tmp.*'))

@@ -113,7 +113,7 @@ def test_hard_ceiling_uses_v1_until_next_utc_day(make_emitter, hybrid, multisite
     assert emitter._radar_result.tiles['variant'] is False
     wire = emitter._build_payload()['radar']
     assert wire['nativeBudget']['ceilingState'] == 'paused'
-    assert wire['health']['native'] == wire['nativeBudget']
+    assert emitter._radar_health_payload()['native'] == wire['nativeBudget']  # radar-health.json
     assert wire['nativeFallback'] == dict(active=True, reason='daily-limit', recovering=False) and not wire['native']
     with pytest.raises(ae._RadarSuperseded):
         emitter._radar_request(ae.RADAR_LEVEL3_TRANSPORT, ae.RADAR_LEVEL3_BUCKET+'blocked', 10)

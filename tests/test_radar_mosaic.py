@@ -88,9 +88,11 @@ def test_identity_is_sorted_exact_and_qc_sensitive():
 def test_time_selection_drops_stale_missing_and_accepts_future_minute():
     ctx = dict(native=True, attention='live', sites=[dict(id=i, reporting=True) for i in 'ABCDE'],
                site_scans=dict(A=[500, 1000, 1060, 1061], B=[519], C=[], D=[520], E=[700, 900]))
-    assert ae._radar_site_pairs(ctx, 1000) == (('A', 1060), ('D', 520), ('E', 900))
+    # The relative windows, observed at the anchor (the absolute freshness
+    # limit has its own tests in test_radar_review_oct_emitter.py).
+    assert ae._radar_site_pairs(ctx, 1000, now=1000) == (('A', 1060), ('D', 520), ('E', 900))
     ctx['native'] = False
-    assert ae._radar_site_pairs(ctx, 1000) == (('A', 1000), ('B', 519), ('D', 520), ('E', 900))
+    assert ae._radar_site_pairs(ctx, 1000, now=1000) == (('A', 1000), ('B', 519), ('D', 520), ('E', 900))
 
 
 @pytest.fixture

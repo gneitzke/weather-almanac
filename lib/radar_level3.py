@@ -33,7 +33,7 @@ EARTH_RADIUS_M = 6371000.0
 EFFECTIVE_RADIUS_M = EARTH_RADIUS_M * 4 / 3  # standard refraction
 SITE_TOLERANCE_DEG = 0.05
 # The render identity of a native tile; bump when geometry or colouring changes.
-NATIVE_REVISION = "level3-n0b-n0h-mosaic-v5"
+NATIVE_REVISION = "level3-n0b-n0h-mosaic-v7"  # v6: radarUncoveredPixels tEXt; v7: radarMeasuredGrid tEXt
 
 
 class Scan:

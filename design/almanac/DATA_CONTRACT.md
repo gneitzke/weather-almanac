@@ -174,6 +174,148 @@ its next poll only after `render()` returned, and the server credits that mark o
 from a loopback client. The launcher's watchdog reads `renders`, because a request
 count never proved anything reached the screen.
 
+## Radar review fixes, engine side (2026-10-09)
+
+**Radar health file.** `wx.json` no longer carries `radar.health` (about 75 KB the
+page never read, rebuilt and parsed every poll). The engine writes
+`radar-health.json` in the same directory as `wx.json`, atomically (temp file +
+`os.replace`, no fsync: diagnostics), at most every 15 s
+(`RADAR_HEALTH_WRITE_SEC`) and at the next emit tick after a state change (the
+summary's `state`, `source`, `coverage`, `fallbackReason`, `attentionTier` or
+`initError` differs). Content is the former health object (`breaker`, `hosts`,
+`phases`, `requests`, `cache`, `discovery`, `attention`, `native`,
+`nativeFallback`, `classification`, `mosaic`, ...) plus `writtenTs` (UTC epoch s)
+and a `summary`:
+
+| field | meaning |
+|---|---|
+| `state` | `off` (radar disabled), `error` (tile cache failed to initialise), `starting`, `current`, `stale`, `unavailable` |
+| `newestObservationTs` / `newestObservationAgeSec` | the newest frame's observation time: its OLDEST contributing scan for a site frame, else the frame time (same clock as `radar.ageSec`) |
+| `lastSuccessTs` | last usable newest publication (as `health.lastSuccessTs`) |
+| `source` | `sourceId` drawn now, null when unavailable |
+| `fallbackReason` | native fallback reason while IEM draws the site view, else the source-chain fallback (`site-zoom-floor`, ...) |
+| `coverage` | `full`, `partial` or `unknown`; see "Coverage" below |
+| `nextAttemptTs` | earliest scheduled retry, discovery check or cache-init retry |
+| `attentionTier` / `attentionReason` | the attention policy's decision |
+| `initError` | the cache-init failure text while init is failing, else null |
+
+Null where unknown; every `*Ts` is UTC epoch seconds. With radar off the file holds
+`{enabled: false, ..., summary: {state: "off", ...}}`. `/health` (serve.py) reads
+this file and reports it under `radar`; radar never changes the engine `status`.
+
+**Contributor time (site view).** A site frame is a composite: the primary's scan
+anchors it (`ts`, `observedTs`, animation keys) but neighbours may be older. Every
+site frame in `tiles.frames[]` carries `observedRange: [oldestTs, newestTs]` (UTC
+epoch s) of the scans its pixels came from (acquired layers; for a native mosaic its
+contributors), and the payload carries top-level `observedRange` for the newest
+frame (null for Region sources, whose frames have one time). `ageSec`, `stale` and
+`radar-health.json` age come from the OLDEST contributor, so a mosaic whose primary
+product failed and whose pixels came from an 8-minute-older neighbour reads its
+real age. `observedTs` keeps its meaning (the anchor).
+
+Contributors are admitted by two rules. Relative: native accepts a neighbour scan
+from 8 minutes before to 60 s after the anchor; v1 (IEM site tiles) keeps 15
+minutes. Absolute: a neighbour must be younger than the site stale threshold as
+of the moment its frame stops being the newest — now for the newest frame, the
+primary's next scan for an older one — so a stale neighbour is dropped from the
+current frame instead of making it read stale, and an older frame's contributor
+set (and mosaic identity) does not change as the clock runs on.
+
+The site `staleSec` follows the primary's listing cadence (`scanCadenceSec`):
+2.5 scan intervals rounded up to whole minutes, within 8–15 minutes
+(`RADAR_SITE_STALE_MIN_SEC`…`RADAR_SITE_MAX_AGE_SEC`); 15 minutes when the cadence
+is unknown. Precipitation mode at ~4.5 min is stale at 12 min, SAILS at 8 min,
+clear air at 15. Region sources keep the table's fixed thresholds.
+
+**Coverage.** Native mosaic tiles carry two tEXt chunks, computed from the
+mosaic's own validity mask. A pixel is *measured* when some contributor returned
+a valid gate for it; it is unmeasured when it lies outside every contributor's
+230 km disc, on a bearing a scan lacks, or on a missing/range-folded gate (code 1,
+which QC also uses for removed clutter). At zooms below 8 an output pixel is
+measured when any of its 2×2 samples is, so a visible pixel is always a measured
+one. Unmeasured pixels stay transparent, like measured clear air.
+
+- `radarUncoveredPixels`: the count of unmeasured pixels (0–65,536);
+  `radarVisiblePixels + radarUncoveredPixels ≤ 65536`.
+- `radarMeasuredGrid`: 64 lowercase hex digits, one bit per cell of a 16×16 grid
+  of 16×16-pixel cells, row-major from the north-west cell, most significant bit
+  first. A bit is set only when every pixel of its cell is measured. A set cell
+  holds no unmeasured pixel (`set cells × 256 ≤ 65536 − radarUncoveredPixels`) and
+  the count is 0 exactly when all 256 bits are set.
+
+Both chunks are required on a native tile and checked against each other when a
+cached tile is admitted and when the page decodes it (a mismatch is a bad tile).
+IEM, MRMS and RainViewer tiles carry neither. `NATIVE_REVISION` is
+`level3-n0b-n0h-mosaic-v7`, so tiles without the grid are never served.
+
+What each coverage field guarantees:
+
+- **`partialCoverage`** (payload) is about contributors, not geometry. For a site
+  frame it is true exactly when an *expected contributor* is missing from the
+  newest frame. The expected set is fixed by discovery before any contributor is
+  chosen and travels as the frame's `expectedSites`: every in-view site whose
+  listing reports, plus every in-view site whose listing failed (`scan
+  unavailable`). A site is missing when its listing failed, when no scan of its
+  fell in the frame's window, when it aged past the freshness limit, or when its
+  requested pair (`requestedPairs`) was not acquired. A site with fresh evidence
+  that it is not reporting is not expected. For MRMS it is true when the view
+  reaches past the MRMS domain; RainViewer never sets it.
+- **The page's "No echoes" claim** (`radarView.clear`) additionally requires every
+  16-pixel cell that the 956×490 viewport shows to be measured. For a native
+  mosaic that is the tile's `radarMeasuredGrid`, intersected with the visible crop
+  of each drawn tile, so unmeasured pixels clipped outside the view do not count.
+  An IEM site layer measures a cell when the whole cell lies inside its site's
+  230 km disc (four corners in range; the disc is convex at this scale); layered
+  sites measure a cell if any layer does. Region/RainViewer tiles have no grid.
+  Otherwise the caption says `partial coverage`. The check is conservative at cell
+  granularity.
+- **`radar-health.json` `summary.coverage`** describes the engine's acquired view
+  (the snapshot's bounds at its acquisition zoom), newest frame: `partial` when
+  `partialCoverage` is true or any cell of that view is unmeasured by the same
+  grid rule as the page; `full` when neither, proven from tiles on disk;
+  `unknown` with nothing drawn or while a native tile of the view is not on disk.
+  A missing gate inside an otherwise covered view therefore reads `partial`.
+
+**Tile cache boot.** Stamps older than `RADAR_CACHE_RETENTION_SEC` (one hour of
+history behind the oldest acceptable newest frame: 3,600 + 1,200 s) can never be
+shown again; the boot scan deletes those stamp directories with the unindexed
+tree without opening a tile (`health.cache.startup.expiredStamps`). Only newer
+stamps are validated. Cache init (revision markers + scan) is ready only when it
+succeeds. A failure is recorded in `health.cache.initError` (`error`, `attempts`,
+`ts`, `retryTs`) and `summary.initError`, and retried after 5 s, doubling to
+300 s; each retry rescans from an empty inventory, so tiles are admitted only to
+a reconciled cache. A pass that finds the cache not ready parks (no polling);
+the finished scan starts it.
+
+**Discovery.** A site's next scan is expected one observed scan interval after
+the newest: the primary listing's median gap (`scanCadenceSec`), bounded to
+60–600 s, else the drawn frames' spacing, else 300 s. SAILS cuts listed every
+~2 minutes are checked for at that pace; the request budget, local backoff and
+the attention tier's listing floor still gate every wakeup.
+
+**Forecast evidence (attention).** The forecast hold counts only while the
+forecast is current: `lib/forecast.py` stamps `Met.UpdatedTs` (UTC epoch s) on
+each successful *acquisition*: the response time of a fetch whose response parsed.
+A re-parse of the cached response (a unit or time-format change) never renews
+it, and a failed fetch blanks the values but keeps it. A
+positive call is valid for two hours after that update
+(`FORECAST_VALID_SEC`, one missed hourly refresh); when the values go missing it
+is held at most 15 minutes more (`FORECAST_MISSING_GRACE_SEC`) and never renewed
+by the blank. `attention.holds.forecast` is the live state and `forecastSec` the
+seconds it has left.
+
+**Housekeeping.** The geography cache keeps running file/byte totals and walks
+the disk only when an admission would exceed a cap, then evicts least-recently
+served tiles to 90 % of the cap. Superseded `.radar-lease-<marker>-*` files are
+removed when a reader sees its marker's stamp change. The server and the engine
+both read and create leases, so every creation and removal happens under one
+advisory `flock` on `.radar-lease.lock` beside them, and the remover keeps every
+lease whose stamp it can still derive from disk under that lock (`presence`'s
+time; `radar_source`'s mtime and `radar_intent`'s `sourceAcceptedAt`/`acceptedAt`),
+never just its own possibly older stamp. A stale reader therefore cannot delete
+the lease another process just anchored for the newer stamp (which a later read
+would re-anchor, extending the hold).
+
 ## Radar display floor (2026-09-24)
 
 `DISPLAY_FLOOR_DBZ` (15) is the drawing floor for every source. `source_palette()`
@@ -214,7 +356,7 @@ A kiosk that cannot show radar runs none of it. The launcher passes
 `WFP_RADAR="${WFP_RADAR:-${WFP_TABS:-1}}"` to the engine: with the tab bar off the
 engine schedules no acquisition, cache scan, geography pre-warm or listings, and
 publishes `radar: {available: false, reason: "radar off", enabled: false, starting:
-null, attention: null}`. `/health.radar.enabled` says so. `WFP_RADAR=1` forces it on.
+null, attention: null}`. `/health.radar.enabled` (from `radar-health.json`) says so. `WFP_RADAR=1` forces it on.
 
 ## Radar attention tiers (2026-09-17)
 
@@ -637,7 +779,7 @@ while respecting the requested restart persistence.
 | Source | `sourceId` | `provider` | Nominal `cadenceSec` | Display stale at (`staleSec`) | Zoom bounds |
 | --- | --- | --- | --- | --- | --- |
 | IEM MRMS | `iem-mrms-lcref` | `iem` | 120 | 600 seconds | 4–9 |
-| IEM NEXRAD N0B | `iem-nexrad-n0b` | `iem` | 300 | 900 seconds | 7–10 |
+| IEM NEXRAD N0B | `iem-nexrad-n0b` | `iem` | 300 | 2.5 scan intervals, 480–900 seconds (900 when the cadence is unknown) | 7–10 |
 | RainViewer | `rainviewer` | `rainviewer` | 600 | 1200 seconds | 4–7 |
 
 Mosaic tries IEM first for CONUS station centers, then RainViewer. A bundled
@@ -948,7 +1090,8 @@ and the shared rate cap still apply. Fallback and recovery obey the failed-pass
 threshold, publication barrier and dwell above.
 A shared-host outage applies to both IEM products. Paid-for successes stay cached.
 
-**Operator health.** `wx.json.radar.health` is exposed as `/health.radar`:
+**Operator health.** The engine's `radar-health.json` (formerly `wx.json.radar.health`;
+see "Radar review fixes, engine side") is exposed as `/health.radar`:
 
 ```json
 {"lastSuccessTs":1789444700.5,"successRate60s":0.78,"hedges":9,"stallHedges":3,"retries":2,
@@ -978,8 +1121,8 @@ after suspension; old losses cannot repeatedly retrigger it.
 `breaker` is the worst state across known hosts (`open`, `half`, `closed`), so a
 working fallback does not hide the primary outage. `lastError` retains the last
 request error even after recovery. Radar faults do not change the engine/sensor
-HTTP health verdict. Health reflects the latest engine payload, like other
-`/health` fields.
+HTTP health verdict. Health reflects the latest `radar-health.json` (written at
+most every 15 s, sooner on a state change).
 
 **v6.2 logging (no wire-field changes).** The per-pass INFO message is a compact
 summary, separate from the health object: `outcome`, attempted `source`/`site`,
@@ -1179,7 +1322,8 @@ a legacy payload falls back to 3×cadence). Header age suffix starts at **80% of
 routinely-delayed feed reads clean and the suffix forecasts the stale flag. Nominal cadence belongs only in the
 source caption; scan age belongs only beside AS OF. Never label data LIVE.
 
-AS OF, ageSec and staleness all describe the newest primary scan. The loop
+AS OF names the newest frame's anchor (the primary scan); ageSec and staleness
+describe its oldest contributing scan (`observedRange`, 2026-10-09). The loop
 frame read names the displayed historical scan once the eight-frame inventory
 is ready. A tile contributes its own remap counts only when drawn. More than
 2% discarded opaque pixels or any cross-stop ambiguity marks `palette incomplete`.
@@ -1475,8 +1619,17 @@ The quiet **SMOOTH** button beside zoom reset uses the existing control colours,
 `aria-pressed` and a 64×44px target. Default is **off**. Any controller with a
 valid page session sends `radarSmooth=on|off` on an explicit tap; exactly one
 value is accepted, independently of camera ownership. Duplicate, empty and
-invalid values and non-controller callers cannot write it. The handler atomically replaces `radar_smooth`
-only when its value changes, following the durable symlink just like zoom.
+invalid values and non-controller callers cannot write it. Accepted durable preferences
+(`radar_smooth`, `radar_zoom`, `radar_source`, `radar_center`) are staged in memory and
+written by one dedicated writer thread in serve.py, which atomically replaces each
+marker (fsync, then rename) only when its value changes, following the durable symlink.
+No request waits on that write, including the one that made the change; the server
+reads staged values back at once. Smooth waits out its debounce; a newer staging of the
+same preference replaces the older one (newest decision wins), and staged values land
+in staging order. A touch (`presence`, tmpfs) noted while a `radar_source` write is still
+staged is queued behind it on the same writer, so the engine never sees the new touch
+beside the expired choice it would otherwise renew. On shutdown (SIGTERM or exit) every
+staged value is written before the process ends.
 The launcher backs it with `$XDG_STATE_HOME/wfpiconsole/radar_smooth` (default
 `~/.local/state/wfpiconsole/radar_smooth`), preserving it across tmpfs recreation.
 `X-Radar-Smooth: on|off` acknowledges the stored preference on controller responses,

@@ -239,7 +239,7 @@ def test_future_lease_anchor_survives_process_restart_and_server_expiry(tmp_path
         assert result.stdout.strip() == expected
     server = _load_serve(monkeypatch, tmp_path, {})
     monkeypatch.setattr(server.time, 'time', lambda: now+2700)
-    server._expire_radar_source()
+    server._expire_radar_source(); server._flush_preferences()  # preference writer thread: wait for the durable write
     assert source.read_text().strip() == 'auto'
 
 

@@ -21,7 +21,11 @@ the tier and every stronger hold expired. Weather holds: rain 60 min after the
 last wet observation, lightning 30 min after the last strike (each strike
 extends), echo 60 min after the last echo-positive footprint. A forecast is
 "positive" at 50 % or when the conditions text names rain, showers, snow or
-thunder, and stays positive until under 30 % with none of those words. An
+thunder, and stays positive until under 30 % with none of those words. Forecast
+evidence is only as current as the forecast's last successful update: it counts
+for two hours after that update (one missed hourly refresh), and when the
+forecast goes missing (a failed fetch blanks it) a positive call is held for at
+most 15 minutes more, never renewed by the blank. An
 observation older than five minutes is unknown, not dry: unknown keeps at
 least watch. A LAN browser polling is weak evidence: watch at most, never live.
 """
@@ -48,6 +52,8 @@ REST_TO_DORMANT_SEC = 2 * 3600
 AWAY_SEC = 3 * 86400
 NIGHT_START, NIGHT_END = 23, 6
 FORECAST_ON_PCT, FORECAST_OFF_PCT = 50, 30
+FORECAST_VALID_SEC = 2 * 3600          # the forecast refreshes hourly; one missed refresh still counts
+FORECAST_MISSING_GRACE_SEC = 15 * 60   # a failed fetch retries within minutes; a blank cannot hold forever
 
 KNOBS = {
     #            frames by day/night, tiles, listing floor (s), sentinel by day/night (s), prefetch
@@ -69,6 +75,7 @@ class Signals:
     """Everything the decision reads. Ages are seconds; None means unknown."""
     __slots__ = ('now', 'local_hour', 'viewing', 'viewed_age', 'touch_age', 'lan_viewer_age',
                  'obs_age', 'rain_rate_mm', 'rain_wet', 'rain_starting', 'lightning_age', 'precip_pct', 'conditions',
+                 'forecast_age',
                  'echo', 'echo_age', 'sentinel_echo', 'sentinel_age', 'expected_glance')
 
     def __init__(self, now, **values):
@@ -90,6 +97,8 @@ class Attention:
         self.lightning_until = 0.0
         self.echo_until = 0.0
         self.forecast_on = False
+        self.forecast_until = 0.0          # forecast evidence expires here (wall time)
+        self.forecast_missing_since = None
         self.rest_since = now if tier in ('rest', 'dormant') else None
         self.transitions = []          # (ts, from, to, reason), bounded
         self.forced = None
@@ -117,15 +126,32 @@ class Attention:
             words = False
             spoken_pct = int(spoken.group(1))
             pct = max(pct, spoken_pct) if pct is not None else spoken_pct
-        if (pct is not None and pct >= FORECAST_ON_PCT) or words:
-            self.forecast_on = True
-        elif pct is not None and pct < FORECAST_OFF_PCT and not words:
+        # forecast_age: seconds since the forecast's last successful update.
+        # None means the caller cannot say; the reading is then taken as current.
+        age = s.forecast_age if s.forecast_age is None else max(0, s.forecast_age)
+        updated = s.now - (age or 0)
+        evidence = pct is not None or bool(s.conditions and re.search('[A-Za-z]', s.conditions))
+        if evidence and s.now - updated <= FORECAST_VALID_SEC:
+            self.forecast_missing_since = None
+            if (pct is not None and pct >= FORECAST_ON_PCT) or words:
+                self.forecast_on = True
+            elif pct is not None and pct < FORECAST_OFF_PCT and not words:
+                self.forecast_on = False
+            if self.forecast_on:
+                self.forecast_until = updated + FORECAST_VALID_SEC
+        else:
+            # Missing or outdated: nothing renews the call. A short grace from
+            # when it went missing, never past the last update's own validity.
+            if self.forecast_missing_since is None:
+                self.forecast_missing_since = s.now
+            self.forecast_until = min(self.forecast_until, self.forecast_missing_since + FORECAST_MISSING_GRACE_SEC)
+        if self.forecast_on and s.now >= self.forecast_until:
             self.forecast_on = False
         holds = []
         if self.wet_until > s.now: holds.append('rain')
         if self.lightning_until > s.now: holds.append('lightning')
         if self.echo_until > s.now: holds.append('echo')
-        if self.forecast_on: holds.append('forecast')
+        if self._forecast_active(s.now): holds.append('forecast')
         return holds, unknown
 
     # ---- decision ----------------------------------------------------------
@@ -185,9 +211,12 @@ class Attention:
         del self.transitions[:-64]
         self.tier, self.since, self.reason = tier, now, why
 
+    def _forecast_active(self, now):
+        return self.forecast_on and now < self.forecast_until
+
     def weather(self, now):
         """True when weather is present for the Radar tab's dot (holds only, never 'unknown')."""
-        return self.forecast_on or max(self.wet_until, self.lightning_until, self.echo_until) > now
+        return self._forecast_active(now) or max(self.wet_until, self.lightning_until, self.echo_until) > now
 
     def knobs(self, local_hour):
         k = KNOBS[self.tier]
@@ -200,7 +229,8 @@ class Attention:
         return dict(tier=self.tier, reason=self.reason, since=self.since, forced=self.forced, unattended=self.unattended,
                     weather=self.weather(now), holds=dict(
                         rain=max(0, int(self.wet_until - now)), lightning=max(0, int(self.lightning_until - now)),
-                        echo=max(0, int(self.echo_until - now)), forecast=self.forecast_on),
+                        echo=max(0, int(self.echo_until - now)), forecast=self._forecast_active(now),
+                        forecastSec=max(0, int(self.forecast_until - now)) if self._forecast_active(now) else 0),
                     transitions=[dict(at=t, **{'from': a, 'to': b}, reason=r) for t, a, b, r in self.transitions[-32:]])
 
 

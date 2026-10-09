@@ -143,6 +143,7 @@ def test_all_legacy_camera_paths_are_panel_only(server, tmp_path, params):
     request(server, '127.0.0.1', **params)
     if server._camera_persist_timer:
         server._camera_persist_timer.function()
+    server._flush_preferences()  # preference writer thread: wait for the durable write
     assert durable.read_text().strip() == '5'
 
 

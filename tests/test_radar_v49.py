@@ -3,6 +3,7 @@ import json
 import os
 import threading
 import time
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -182,10 +183,13 @@ def test_host_breaker_open_half_close_and_failed_probe(monkeypatch):
 def test_health_endpoint(engine, serve_at):
     engine._radar_health.last_success = time.time()
     payload = engine._build_payload()
+    assert 'health' not in payload['radar']  # diagnostics live in radar-health.json
+    assert engine._radar_write_health(time.time(), force=True)
+    written = json.loads((Path(engine.output_path).parent/'radar-health.json').read_text())
     _, url = serve_at(payload)
     _, response = _get(url+'/health')
     h = response['radar']
-    assert h == payload['radar']['health']
+    assert {k: v for k, v in h.items() if k not in ('available', 'fileAgeSec')} == written
     assert set(('lastSuccessTs', 'successRate60s', 'hedges', 'retries', 'breaker', 'lastError')) <= h.keys()
 
 

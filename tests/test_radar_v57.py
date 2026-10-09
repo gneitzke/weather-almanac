@@ -40,7 +40,7 @@ def test_ordered_requests_user_claim_and_auto(serve_at, tmp_path):
     assert module._read_radar_intent() == before  # reload reconciliation is read-only
     assert transaction(module,b,1,source='site',zoom=8,policy='auto',claim=a)
     assert not transaction(module,a,3)
-    module._camera_persist_timer.join(2)
+    module._camera_persist_timer.join(2); module._flush_preferences()  # preference writer thread: wait for the durable write
     assert (tmp_path/'radar_zoom').read_text().strip() == 'auto'
 
 

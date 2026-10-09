@@ -17,7 +17,7 @@ def function(name):
 def test_radar_has_no_hatch_machinery_or_token():
     for obsolete in ('hatch', 'Hatch', 'radarMissingSince', 'radarManifestExpected',
                      'radarDrawnCoverage', 'radarCoverage',
-                     'partial coverage', 'expectedCells', 'missingCells',
+                     'expectedCells', 'missingCells',
                      'radarMetrics.acquiring'):
         assert obsolete not in RADAR
     assert "--rule-faint" not in function("radarEchoPaint")

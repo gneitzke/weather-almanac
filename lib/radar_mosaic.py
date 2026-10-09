@@ -7,6 +7,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import time
 from collections import OrderedDict
 from threading import BoundedSemaphore, RLock
@@ -170,11 +171,23 @@ def _geometry(site, z, x, y, size, radius, cache_geometry=True):
     return cached
 
 
-def mosaic_codes(scans, z, x, y, size=256, radius=230000, filtered=None, *, cache_geometry=True):
-    """Lowest echo wins; lower filtered clear excludes higher unfiltered echo."""
+def mosaic_codes(scans, z, x, y, size=256, radius=230000, filtered=None, *, cache_geometry=True,
+                 with_coverage=False):
+    """Lowest echo wins; lower filtered clear excludes higher unfiltered echo.
+
+    Output code 0 means both "measured, below the display floor" and "no
+    measurement". with_coverage also returns the boolean mask of samples that
+    some contributor actually measured: inside its range, on a bearing it
+    scanned, and not a missing/range-folded gate (code 1, which QC also uses
+    for removed clutter). Everything else is uncovered, never clear.
+    """
     result = np.zeros(size*size, np.uint8)
+    covered = np.zeros(size*size, bool)
+    def done():
+        codes = result.reshape(size, size)
+        return (codes, covered.reshape(size, size)) if with_coverage else codes
     if not scans:
-        return result.reshape(size, size)
+        return done()
     filtered = tuple(filtered) if filtered is not None else (True,) * len(scans)
     if len(filtered) != len(scans):
         raise ValueError('classification flags must match scans')
@@ -196,8 +209,9 @@ def mosaic_codes(scans, z, x, y, size=256, radius=230000, filtered=None, *, cach
         values.append(codes.ravel())
         heights.append(height.ravel())
         flags.append(classified)
+        covered |= values[-1] != 1
     if not values:
-        return result.reshape(size, size)
+        return done()
     values = np.asarray(values)
     order = np.argsort(heights, axis=0, kind='stable').astype(np.uint8)
     blocked = np.zeros(size*size, bool)
@@ -209,7 +223,7 @@ def mosaic_codes(scans, z, x, y, size=256, radius=230000, filtered=None, *, cach
         good = (result == 0) & (codes >= floor) & (classified | ~blocked)
         result[good] = codes[good]
         blocked |= classified & (codes != 1) & (codes < floor)
-    return result.reshape(size, size)
+    return done()
 
 
 def render_mosaic(scans, z, x, y, palette, radius=230000, *, filtered=None, deadline=None, cache_geometry=True):
@@ -231,16 +245,46 @@ def render_mosaic(scans, z, x, y, palette, radius=230000, *, filtered=None, dead
 def _render_mosaic(scans, z, x, y, palette, radius, filtered=None, cache_geometry=True):
     from PIL import Image
     factor = 2 if z < 8 else 1
-    codes = mosaic_codes(scans, z, x, y, 256*factor, radius, filtered, cache_geometry=cache_geometry)
+    codes, covered = mosaic_codes(scans, z, x, y, 256*factor, radius, filtered,
+                                  cache_geometry=cache_geometry, with_coverage=True)
     if factor > 1:
         codes = codes.reshape(256, factor, 256, factor).max(axis=(1, 3))
+        # A pixel is covered when any of its samples was measured, so every
+        # visible pixel (some sample echoed) is a covered one.
+        covered = covered.reshape(256, factor, 256, factor).any(axis=(1, 3))
     slots, colours = colour_table(palette)
     pixels = slots[codes]
     image = Image.fromarray(pixels, 'P')
     flat = [v for colour in colours for v in colour[:3]]
     image.putpalette(flat + [0]*(768-len(flat)))
     image.info['transparency'] = bytes(c[3] for c in colours)
+    # Uncovered pixels stay transparent like clear ones. The count and a coarse
+    # spatial mask travel with the tile (PNG tEXt radarUncoveredPixels and
+    # radarMeasuredGrid) so "no echoes" is never claimed where nothing was
+    # measured, including in just the part of a tile a viewport shows.
+    image.info['radarUncoveredPixels'] = int(covered.size - np.count_nonzero(covered))
+    image.info['radarMeasuredGrid'] = measured_grid(covered)
     return image, int(np.count_nonzero(pixels))
+
+
+GRID_CELLS = 16  # per tile side: 16 x 16 cells of 16 x 16 pixels
+
+
+def measured_grid(covered):
+    """256x256 boolean coverage -> 64 lowercase hex digits, one bit per cell,
+    row-major from the north-west cell, most significant bit first. A bit is
+    set only when every pixel of its cell was measured."""
+    side = covered.shape[0] // GRID_CELLS
+    cells = covered.reshape(GRID_CELLS, side, GRID_CELLS, side).all(axis=(1, 3))
+    return np.packbits(cells.ravel()).tobytes().hex()
+
+
+def grid_cells(text):
+    """Inverse of measured_grid: a (16, 16) boolean array. Raises ValueError."""
+    if not isinstance(text, str) or not re.fullmatch('[0-9a-f]{%d}' % (GRID_CELLS*GRID_CELLS//4), text):
+        raise ValueError('measured grid')
+    raw = bytes.fromhex(text)
+    return np.unpackbits(np.frombuffer(raw, np.uint8)).astype(bool).reshape(GRID_CELLS, GRID_CELLS)
 
 
 def read_frame_metadata(root, stamp, pairs, revision, index):

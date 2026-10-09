@@ -1,5 +1,8 @@
 """Fork-only settled-camera source policy and spherical viewport coverage."""
+import contextlib
+import fcntl
 import hashlib
+import json
 import math
 import os
 import threading
@@ -19,6 +22,75 @@ _lease_clocks = OrderedDict()
 _lease_lock = threading.Lock()
 
 
+def _lease_name(marker, stamp):
+    return '.radar-lease-' + marker + '-' + hashlib.sha256(repr(float(stamp)).encode()).hexdigest()[:24]
+
+
+def _float(value):
+    try:
+        value = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return value if math.isfinite(value) else None
+
+
+def _disk_stamps(root, marker):
+    """Every stamp a reader could take for a marker from what is on disk now
+    (source_preference's derivations, unvalidated so a superset of them)."""
+    root = Path(root)
+    stamps = set()
+    try:
+        if marker == 'presence':
+            stamps.add(_float((root / 'presence').read_text()[:128].split()[0]))
+        else:
+            try:
+                stamps.add((root / 'radar_source').stat().st_mtime)
+            except OSError:
+                pass
+            record = json.loads((root / 'radar_intent').read_text()[:4096])
+            if isinstance(record, dict):
+                stamps.update(_float(record.get(k)) for k in ('sourceAcceptedAt', 'acceptedAt'))
+    except (OSError, UnicodeError, ValueError, IndexError):
+        pass
+    stamps.discard(None)
+    return stamps
+
+
+@contextlib.contextmanager
+def _leases_locked(root):
+    """Leases are shared by the server and the engine (two processes): every
+    creation and removal happens under one advisory file lock beside them."""
+    try:
+        stream = open(Path(root) / '.radar-lease.lock', 'a')
+    except OSError:
+        yield False
+        return
+    with stream:
+        try:
+            fcntl.flock(stream, fcntl.LOCK_EX)
+        except OSError:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            fcntl.flock(stream, fcntl.LOCK_UN)
+
+
+def _retire_leases(root, marker):
+    """Caller holds the lease file lock. Remove this marker's leases for
+    stamps no longer on disk. A caller's own stamp is not evidence: another
+    process may have read a newer one and created its lease a moment ago, so
+    keep every lease whose stamp a reader could still derive from disk."""
+    keep = {_lease_name(marker, stamp) for stamp in _disk_stamps(root, marker)}
+    try:
+        for stale in Path(root).glob('.radar-lease-' + marker + '-*'):
+            if stale.name not in keep:
+                stale.unlink(missing_ok=True)
+    except OSError:
+        pass  # cleanup only; the lease itself is decided below
+
+
 def _lease_timestamp(root, marker, stamp, now):
     # Anchor an unchanged future marker once, so repeated polls cannot slide the
     # start of its hold forward forever after a backwards clock adjustment.
@@ -28,24 +100,29 @@ def _lease_timestamp(root, marker, stamp, now):
         if stamp != old_stamp:
             # A stamp-specific, exclusive file lets server and engine share the
             # first anchor across restarts. Never rewrite a newer touch/choice.
-            digest = hashlib.sha256(repr(float(stamp)).encode()).hexdigest()[:24]
-            path = Path(root) / ('.radar-lease-' + marker + '-' + digest)
-            try:
+            path = Path(root) / _lease_name(marker, stamp)
+            with _leases_locked(root) as locked:
+                # A marker has one current stamp; leases of earlier stamps (one
+                # per pre-NTP boot whose clock ran behind) are never read again.
+                # Without the lock, removal waits for a call that has it.
+                if locked:
+                    _retire_leases(root, marker)
                 try:
-                    if stamp > now:
-                        with path.open('x') as stream:
-                            stream.write(str(now))
-                            stream.flush()
-                            os.fsync(stream.fileno())
-                except FileExistsError:
-                    pass
-                anchor = float(path.read_text())
-                if not math.isfinite(anchor):
-                    anchor = 0.
-            except FileNotFoundError:
-                anchor = stamp if stamp <= now else 0.
-            except (OSError, ValueError):
-                anchor = 0.  # cannot durably anchor: expire, never slide the lease
+                    try:
+                        if stamp > now:
+                            with path.open('x') as stream:
+                                stream.write(str(now))
+                                stream.flush()
+                                os.fsync(stream.fileno())
+                    except FileExistsError:
+                        pass
+                    anchor = float(path.read_text())
+                    if not math.isfinite(anchor):
+                        anchor = 0.
+                except FileNotFoundError:
+                    anchor = stamp if stamp <= now else 0.
+                except (OSError, ValueError):
+                    anchor = 0.  # cannot durably anchor: expire, never slide the lease
         anchor = min(anchor, now)
         _lease_clocks[key] = (stamp, anchor)
         _lease_clocks.move_to_end(key)

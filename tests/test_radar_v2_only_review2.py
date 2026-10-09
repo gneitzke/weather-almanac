@@ -138,7 +138,7 @@ def test_watch_level3_stall_warns_and_draws_labelled_iem_until_publication_resum
     wire = emitter._build_payload()['radar']
     assert wire['sourceMode'] == 'site' and wire['tiles']['variant'] is False
     assert wire['nativeFallback'] == dict(active=True, reason='level3-stalled', recovering=False)
-    assert 'not published' in wire['health']['nativeFallback']['reason']
+    assert 'not published' in emitter._radar_health_payload()['nativeFallback']['reason']  # radar-health.json
     assert max(ages[15:]) < ae.RADAR_LEVEL3_UNPUBLISHED_LOG_SEC + 120, 'IEM keeps the frame current'
     assert not emitter._radar_transport_failures, 'a Level III stall never strikes IEM'
     # Publication resumes: the next Level III check draws v2 and ends the stall.

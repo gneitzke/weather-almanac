@@ -100,9 +100,11 @@ class forecast():
 
         """
 
-        # Parse the latest daily and hourly weather forecast data
+        # Parse the latest daily and hourly weather forecast data. Only a
+        # newly acquired response stamps UpdatedTs; re-parsing the cached one
+        # (unit or time format change) keeps its acquisition time.
         self.met_data['Response'] = Response
-        self.parse_forecast()
+        self.parse_forecast(acquired=int(UNIX.time()))
 
     def fail_forecast(self, *largs):
 
@@ -149,11 +151,15 @@ class forecast():
         self.app.Sched.metDownload.cancel()
         self.app.Sched.metDownload = Clock.schedule_once(self.fetch_forecast, secondsSched)
 
-    def parse_forecast(self):
+    def parse_forecast(self, acquired=None):
 
         """ Parse the latest daily and hourly weather forecast from the
         WeatherFlow BetterForecast API and format for display based on user
         specified units
+
+        INPUTS:
+            acquired            UTC epoch seconds the response was fetched, or
+                                None when re-parsing the cached response
         """
 
         # Extract Forecast dictionary
@@ -269,6 +275,12 @@ class forecast():
             self.met_data['Conditions']   = Conditions
             self.met_data['Icon']         = Icon
             self.met_data['Status']       = ''
+            # UTC epoch of the successful fetch these values came from. A
+            # failed fetch blanks the values but keeps it, and a re-parse of
+            # the cached response never renews it, so consumers can bound how
+            # long the last good forecast still counts (radar attention).
+            if acquired is not None:
+                self.met_data['UpdatedTs'] = acquired
 
             # Check expected conditions icon is recognised
             if Icon in ['clear-day', 'clear-night', 'rainy', 'possibly-rainy-day',

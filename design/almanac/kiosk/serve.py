@@ -11,11 +11,28 @@
 #             "error"     wx.json missing/unreadable (engine down)
 #     reason: "engine stalled" | "sensor silent" | the read error
 #   HTTP 200 when ok, 503 otherwise (so a monitor can alert on non-2xx).
+#   radar: the emitter's radar-health.json (written beside wx.json), plus
+#     available:true and fileAgeSec. Missing or unreadable -> {available:false,
+#     reason}. Radar health is diagnostics: it never changes `status` or the code.
 #
 # Bind stays on 127.0.0.1 by default (chromium is local; no data leaves the box).
 # Set WFP_BIND=0.0.0.0 to expose /health (and the page) to the LAN for remote
 # monitoring and radar control — private-network browsers share the panel view.
-import http.server, socketserver, json, math, os, time, threading, re, io, zlib, ipaddress
+# LAN mode protections (all also active on loopback):
+#   - Host allow-list (DNS rebinding): IP literals, localhost, this machine's
+#     hostname and hostname.local, plus WFP_ALLOWED_HOSTS (comma separated).
+#   - Control side effects of the wx.json poll (session/touch/view/radarSmooth/
+#     camera) are dropped for cross-site requests (Sec-Fetch-Site, else Origin
+#     vs Host); the read is still served.
+#   - Connections: LAN clients share a bounded pool (per client and in total);
+#     loopback has its own pool, so LAN clients cannot starve the kiosk. Idle
+#     keep-alive, request-header and I/O socket deadlines bound every connection.
+#   - No directory listings.
+#   - Smooth changes need the current camera owner, a small per-client budget,
+#     and reach durable storage debounced. Durable (fsync) writes run only on a
+#     dedicated writer thread: no request, not even the one that made the
+#     change, waits on the SD card.
+import http.server, socketserver, json, math, os, time, threading, re, io, zlib, ipaddress, socket
 from urllib.parse import parse_qs
 from decimal import Decimal
 from pathlib import Path
@@ -34,6 +51,17 @@ STALE_SEC = int(os.environ.get("WFP_STALE_SEC", "20"))
 # A station can go silent for minutes while the engine keeps emitting. Long
 # enough not to trip on one dropped Tempest report (they arrive ~60 s apart).
 OBS_STALE_SEC = int(os.environ.get("WFP_OBS_STALE_SEC", "300"))
+# Extra Host names this server answers to (a DNS name pointing at the Pi, say).
+ALLOWED_HOSTS = frozenset(h.strip().lower().rstrip('.') for h in os.environ.get("WFP_ALLOWED_HOSTS", "").split(',') if h.strip())
+
+# Socket deadlines. The kiosk polls every 2 s (300 ms while steering), so an idle
+# keep-alive connection past 15 s is abandoned; a request's line and headers must
+# arrive within 10 s of its first byte however slowly they trickle in; any one
+# read or write of the body/response then gets 30 s.
+KEEPALIVE_IDLE_SEC, HEADER_DEADLINE_SEC, IO_TIMEOUT_SEC = 15.0, 10.0, 30.0
+# Concurrent connections. Loopback (the kiosk) has its own pool; LAN clients
+# share the other, with a per-address cap so one device cannot hold all of it.
+LOCAL_CONNECTIONS, LAN_CONNECTIONS, LAN_CLIENT_CONNECTIONS = 64, 48, 12
 
 # Aligned with the emitter shared floor and highest source ceiling.
 RADAR_MIN_ZOOM, RADAR_MAX_DESIRED_ZOOM = 4, 10
@@ -123,24 +151,84 @@ _CONTROL_RATE, _CONTROL_BURST = 20.0, 60.0
 _CONTROL_CLIENTS = 4096
 _control_buckets = {}
 _bad_tile_buckets = {}
+# Smooth is a durable (SD card) preference: a change costs a write, so a client
+# gets a few in a row and then one every ten seconds. No-op repeats are free.
+_SMOOTH_RATE, _SMOOTH_BURST, _SMOOTH_DEBOUNCE_SEC = 0.1, 3.0, 1.0
+_smooth_buckets = {}
 
 
-def _allow_control_write(address, buckets=None):
+def _allow_control_write(address, buckets=None, rate=None, burst=None):
     if buckets is None:
         buckets = _control_buckets
+    rate = _CONTROL_RATE if rate is None else rate
+    burst = _CONTROL_BURST if burst is None else burst
     now = time.monotonic()
     key = str(_client_ip(address))
     if key not in buckets:
-        for stale, (_, at) in list(buckets.items()):
-            if now - at >= 60:
+        for stale, (tokens, at) in list(buckets.items()):
+            # Idle long enough to have refilled completely: forgetting it is free.
+            if now - at >= max(60, burst/rate):
                 del buckets[stale]
         if len(buckets) >= _CONTROL_CLIENTS:
             return False
-    tokens, at = buckets.get(key, (_CONTROL_BURST, now))
-    tokens = min(_CONTROL_BURST, tokens + max(0, now-at)*_CONTROL_RATE)
+    tokens, at = buckets.get(key, (burst, now))
+    tokens = min(burst, tokens + max(0, now-at)*rate)
     allowed = tokens >= 1
     buckets[key] = (tokens-1 if allowed else tokens, now)
     return allowed
+
+
+def _host_name(value):
+    """The host part of a Host header, lower-cased, or None when malformed."""
+    value = value.strip().lower()
+    if value.startswith('['):
+        host, bracket, rest = value[1:].partition(']')
+        if not bracket or (rest and not re.fullmatch(r':[0-9]{1,5}', rest)):
+            return None
+        return host
+    host, _, port = value.partition(':')
+    if port and not re.fullmatch(r'[0-9]{1,5}', port):
+        return None
+    return host.rstrip('.')
+
+
+def _host_allowed(value):
+    """DNS rebinding guard: a page from another name must not reach this server.
+
+    IP literals (how LAN browsers and the kiosk address the Pi), localhost, this
+    machine's own name and its mDNS name, and WFP_ALLOWED_HOSTS. A request
+    without Host (HTTP/1.0 tools) carries no foreign name and is allowed.
+    """
+    if value is None:
+        return True
+    host = _host_name(value)
+    if not host:
+        return False
+    try:
+        ipaddress.ip_address(host.split('%', 1)[0])
+        return True
+    except ValueError:
+        pass
+    own = socket.gethostname().lower().rstrip('.')
+    short = own.split('.', 1)[0]
+    return host in {'localhost', own, short, own+'.local', short+'.local'} or host in ALLOWED_HOSTS
+
+
+def _cross_site(headers):
+    """True when a browser says this request came from another origin.
+
+    Fetch metadata first (Chromium 76+, Firefox 90+, Safari 16.4+): only the
+    page's own origin, or a user's direct navigation, may steer. Without it,
+    an Origin header must name this Host. Requests with neither are not from a
+    cross-origin page of a current browser (curl, the tests, old engines).
+    """
+    site = headers.get('Sec-Fetch-Site')
+    if site is not None:
+        return site.strip().lower() not in ('same-origin', 'none')
+    origin, host = headers.get('Origin'), headers.get('Host')
+    if origin is None:
+        return False
+    return host is None or origin.strip().lower() not in ('http://'+host.strip().lower(), 'https://'+host.strip().lower())
 
 
 def _valid_radar_session(params):
@@ -223,11 +311,23 @@ def _view_transaction(params):
 
 
 def _note_presence():
-    global _presence_at
+    global _presence_at, _pref_seq
     now = time.time()
     with _presence_lock:
         if 0 <= now - _presence_at < 10:
             return
+        with _pref_lock:
+            if 'radar_source' in _pref_pending:
+                # A source expiry (or choice) is still on its way to disk. The
+                # engine must never see this touch beside the old choice - it
+                # would renew the expired lease - so the touch lands after it,
+                # in order, on the writer thread.
+                _pref_seq += 1
+                _pref_pending['presence'] = (_pref_seq, str(now), time.monotonic())
+                _start_pref_writer()
+                _pref_wake.notify_all()
+                _presence_at = now
+                return
         marker = os.path.join(os.path.dirname(DATA), 'presence')
         tmp = f'{marker}.tmp.{os.getpid()}'
         try:
@@ -288,40 +388,155 @@ def _write_radar_source(values):
     return _write_radar_preference('radar_source', values)
 
 
-def _write_radar_preference(name, values):
-    """Caller holds _count_lock and has checked controller admission. Polling cannot fail here."""
+def _preference_value(name, values):
+    """The canonical marker text for one valid request value, else None."""
     if name not in ('radar_zoom', 'radar_source', 'radar_center', 'radar_smooth') or len(values) != 1:
-        return
+        return None
     value = values[0]
     if name == 'radar_center':
         if value != 'station':
             if not re.fullmatch(r'-?\d{1,3}(\.\d+)?,-?\d{1,3}(\.\d+)?', value, re.ASCII):
-                return
+                return None
             lat, lon = map(float, value.split(','))
             if not (-85.05112878 <= lat <= 85.05112878 and -180 <= lon <= 180):
-                return
+                return None
             # Keep canonical floats in the decimal grammar (str() can emit 1e-10).
             value = ','.join(format(Decimal(str(n)), 'f') for n in (lat, lon))
     elif name == 'radar_smooth':
         if value not in ('on', 'off'):
-            return
+            return None
     elif name == 'radar_source':
         if value not in ('auto', 'mosaic', 'site'):
-            return
+            return None
     elif value != 'auto':
         if not re.fullmatch(r'[0-9]{1,2}', value):
-            return
+            return None
         level = int(value)
         if not RADAR_MIN_ZOOM <= level <= RADAR_MAX_DESIRED_ZOOM:
-            return
+            return None
         value = str(level)
+    return value
+
+
+def _preference_path(name):
     # The kiosk links this sibling to durable station storage before startup.
     # Resolve the link so replacement updates its target, not the link.
     marker = os.path.join(os.path.dirname(DATA), name)
     # Pan belongs to tmpfs. Never follow a durable link, even if one was
     # accidentally installed: atomic replacement replaces the link itself.
-    if name != 'radar_center':
-        marker = os.path.realpath(marker)
+    return marker if name == 'radar_center' else os.path.realpath(marker)
+
+
+# Preference writes are staged in memory and written (with fsync, on the SD
+# card) by one dedicated writer thread. No request thread - not even the one
+# whose request staged the value - ever waits on that write: an SD stall
+# inside a request stalled its response, and inside _count_lock every
+# client's poll. A sequence number per staging keeps the newest decision when
+# a value is restaged during its write; readers in this process see staged
+# values before they land. Debounced values wait for their due time; shutdown
+# writes everything still staged.
+_pref_lock = threading.Lock()       # guards the fields below; no I/O under it
+_pref_wake = threading.Condition(_pref_lock)
+_pref_io_lock = threading.Lock()    # serializes durable writes; never taken by a request thread
+_pref_pending = {}                  # name -> (seq, value, due on the monotonic clock)
+_pref_seq = 0
+_pref_writer = None
+_pref_closing = False
+
+
+def _stage_preference(name, values, delay=0.0):
+    """Record a valid preference to be written. Returns the canonical value or None."""
+    global _pref_seq
+    value = _preference_value(name, values)
+    if value is None:
+        return None
+    with _pref_lock:
+        _pref_seq += 1
+        # Debounce: a newer staging replaces the value and moves `due`.
+        _pref_pending[name] = (_pref_seq, value, time.monotonic()+delay)
+        _start_pref_writer()
+        _pref_wake.notify_all()
+    return value
+
+
+def _start_pref_writer():
+    """Caller holds _pref_lock."""
+    global _pref_writer
+    if _pref_writer is None or not _pref_writer.is_alive():
+        _pref_writer = threading.Thread(target=_pref_writer_loop, name='preference-writer', daemon=True)
+        _pref_writer.start()
+
+
+def _pref_writer_loop():
+    while True:
+        with _pref_lock:
+            while True:
+                if _pref_closing:
+                    return  # _close_preferences writes what remains
+                now = time.monotonic()
+                due = min((at for _, _, at in _pref_pending.values()), default=None)
+                if due is not None and due <= now:
+                    break
+                # The clock is read again on every wake; a timeout only re-checks.
+                _pref_wake.wait(None if due is None else min(max(due-now, .01), 1.0))
+        _flush_preferences()
+
+
+def _flush_preferences(force=False):
+    """Write due (or, with force, all) staged preferences, waiting for any
+    write in progress. Only the writer thread, shutdown and tests call it."""
+    with _pref_io_lock:
+        while True:
+            with _pref_lock:
+                now = time.monotonic()
+                due = [(name, seq, value) for name, (seq, value, at) in _pref_pending.items() if force or at <= now]
+            if not due:
+                return
+            for name, seq, value in sorted(due, key=lambda item: item[1]):  # staging order
+                _persist_preference(name, value)
+                with _pref_lock:
+                    # A failed write is dropped like it always was: polling never fails here.
+                    if _pref_pending.get(name, (None,))[0] == seq:
+                        del _pref_pending[name]
+
+
+def _close_preferences(timeout=5.0):
+    """Shutdown: stop the writer and write every staged value now, debounced or not."""
+    global _pref_closing
+    with _pref_lock:
+        _pref_closing = True
+        writer = _pref_writer
+        _pref_wake.notify_all()
+    if writer is not None and writer is not threading.current_thread():
+        writer.join(timeout)
+    _flush_preferences(force=True)
+
+
+def _read_preference(name):
+    """The effective preference: a staged value, else the marker's text, else None."""
+    with _pref_lock:
+        pending = _pref_pending.get(name)
+    if pending is not None:
+        return pending[1]
+    limit = 1024 if name == 'radar_center' else 128
+    try:
+        with open(os.path.join(os.path.dirname(DATA), name)) as stream:
+            text = stream.read(limit)
+    except (OSError, UnicodeError):
+        return None
+    return text.strip() if len(text) < limit else None
+
+
+def _write_radar_preference(name, values):
+    """Validated preference write, staged for the writer thread."""
+    _stage_preference(name, values)
+
+
+def _persist_preference(name, value):
+    if name == 'presence':
+        _persist_runtime(name, value)
+        return
+    marker = _preference_path(name)
     tmp = f"{marker}.tmp.{os.getpid()}"
     try:
         try:
@@ -337,6 +552,23 @@ def _write_radar_preference(name, values):
             f.write(value + '\n')
             f.flush()
             os.fsync(f.fileno())
+        os.replace(tmp, marker)
+    except OSError:
+        pass
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
+def _persist_runtime(name, value):
+    """A runtime (tmpfs) marker the writer orders after a durable one: atomic, no fsync."""
+    marker = os.path.join(os.path.dirname(DATA), name)
+    tmp = f'{marker}.tmp.{os.getpid()}'
+    try:
+        with open(tmp, 'w') as f:
+            f.write(value)
         os.replace(tmp, marker)
     except OSError:
         pass
@@ -368,10 +600,7 @@ def _expire_radar_source():
     record = _read_radar_intent()
     intent = record if 'source' in record else None
     root = Path(DATA).parent
-    try:
-        requested = intent['source'] if intent else (root/'radar_source').read_text()[:128].strip()
-    except (OSError, UnicodeError):
-        return
+    requested = intent['source'] if intent else _read_preference('radar_source')
     if requested not in ('mosaic', 'site'):
         return
     if source_preference(root, intent, time.time()) != 'auto':
@@ -413,7 +642,7 @@ def _write_radar_intent(params):
     tmp = f'{marker}.tmp.{os.getpid()}'
     try:
         with open(tmp, 'w') as stream:
-            json.dump(record, stream); stream.flush(); os.fsync(stream.fileno())
+            json.dump(record, stream)  # runtime tmpfs: atomic, no fsync
         os.replace(tmp, marker)
         # Durable preferences are persistence only once a runtime intent exists.
         _write_radar_zoom([str(zoom)])
@@ -523,10 +752,7 @@ def _write_settled_camera(activity, params, epoch=None):
     sources = params.get('radarSource', [])
     source = sources[0] if len(sources) == 1 and sources[0] in ('auto', 'site', 'mosaic') else old.get('source')
     if source is None:
-        try:
-            source = open(os.path.join(os.path.dirname(DATA), 'radar_source')).read().strip()
-        except OSError:
-            source = 'auto'
+        source = _read_preference('radar_source')
     if source not in ('auto', 'site', 'mosaic'):
         source = 'auto'
     record = dict(zoom=activity['zoom'], center=activity['center'], source=source, camera=True)
@@ -553,7 +779,7 @@ def _write_settled_camera(activity, params, epoch=None):
     if _camera_persist_timer is not None:
         _camera_persist_timer.cancel()
     def persist():
-        with _count_lock:
+        with _count_lock:  # staged preferences land on the writer thread
             if _read_radar_intent() == record:
                 _write_radar_zoom(['auto' if record.get('zoomPolicy') == 'auto' else str(record['zoom'])])
                 _write_radar_source([record['source']])
@@ -575,15 +801,141 @@ def _radar_activity(params):
     return record
 
 
+def _stage_smooth(address, values):
+    """Caller holds _count_lock and has accepted the owner's camera transaction."""
+    value = _preference_value('radar_smooth', values)
+    if value is None or value == _read_preference('radar_smooth'):
+        return
+    if _allow_control_write(address, _smooth_buckets, _SMOOTH_RATE, _SMOOTH_BURST):
+        _stage_preference('radar_smooth', [value], delay=_SMOOTH_DEBOUNCE_SEC)
+
+
+def _reject_constant(name):
+    raise ValueError(f'non-finite number {name}')
+
+
+def _finite_float(text):
+    # json turns an overflowing literal (1e999) into infinity without calling
+    # parse_constant; refuse it here like NaN and Infinity.
+    value = float(text)
+    if not math.isfinite(value):
+        raise ValueError(f'non-finite number {text}')
+    return value
+
+
+def _check_finite(value, depth=0):
+    """Every number in a JSON value is finite and fits a float. Raises ValueError."""
+    if depth > 64:
+        raise ValueError('nested too deeply')
+    if isinstance(value, dict):
+        for item in value.values():
+            _check_finite(item, depth+1)
+    elif isinstance(value, list):
+        for item in value:
+            _check_finite(item, depth+1)
+    elif isinstance(value, float) and not math.isfinite(value):
+        raise ValueError(f'non-finite number {value}')
+    elif isinstance(value, int) and not isinstance(value, bool) and abs(value) > 2**53:
+        raise ValueError('integer out of range')
+
+
+def _radar_health():
+    """The emitter's radar-health.json beside wx.json, for /health.
+
+    Missing, unreadable, non-object or non-finite content (NaN, Infinity, an
+    overflowing literal such as 1e999, an integer no float can hold) is
+    reported as unavailable with the reason. Everything is decided inside this
+    boundary, and the result always serializes, so radar diagnostics can never
+    change /health's status or HTTP code.
+    """
+    path = os.path.join(os.path.dirname(DATA), 'radar-health.json')
+    try:
+        with open(path) as stream:
+            health = json.load(stream, parse_constant=_reject_constant, parse_float=_finite_float)
+        if not isinstance(health, dict):
+            return dict(available=False, reason='radar-health.json is not an object')
+        _check_finite(health)
+        written = health.get('writtenTs')
+        age = (round(time.time() - written, 1) if isinstance(written, (int, float))
+               and not isinstance(written, bool) else None)
+        result = dict(health, available=True, fileAgeSec=age)
+        json.dumps(result, allow_nan=False)
+        return result
+    except FileNotFoundError:
+        return dict(available=False, reason='radar-health.json missing')
+    except (OSError, UnicodeError, ValueError, TypeError, OverflowError, RecursionError) as error:
+        return dict(available=False, reason=f'radar-health.json unreadable: {error}'[:300])
+
+
+class _DeadlineReader(io.RawIOBase):
+    """Socket reads under one absolute deadline (None: the socket's own timeout).
+
+    A per-read timeout alone lets a client trickle a header one byte at a time
+    forever; every recv here gets only what remains of the request's deadline.
+    """
+    def __init__(self, sock):
+        self.sock, self.deadline = sock, None
+
+    def readable(self):
+        return True
+
+    def readinto(self, buffer):
+        if self.deadline is not None:
+            remaining = self.deadline - time.monotonic()
+            if remaining <= 0:
+                raise socket.timeout('request deadline')
+            self.sock.settimeout(remaining)
+        return self.sock.recv_into(buffer)
+
+
 class Handler(http.server.SimpleHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
+    timeout = IO_TIMEOUT_SEC
     def __init__(self, *a, **k):
         super().__init__(*a, directory=WEB, **k)
+
+    def setup(self):
+        super().setup()
+        # Requests are read through the deadline reader; responses keep wfile.
+        self.rfile.close()
+        self._reader = _DeadlineReader(self.connection)
+        self.rfile = io.BufferedReader(self._reader)
+
+    def handle_one_request(self):
+        # Wait for the next request's first byte for at most the keep-alive
+        # idle time; an idle close is routine, not an error to log.
+        self._reader.deadline = time.monotonic() + KEEPALIVE_IDLE_SEC
+        try:
+            if not self.rfile.peek(1):
+                self.close_connection = True
+                return
+        except OSError:
+            self.close_connection = True
+            return
+        self._reader.deadline = time.monotonic() + HEADER_DEADLINE_SEC
+        super().handle_one_request()
+
+    def parse_request(self):
+        parsed = super().parse_request()
+        # Headers are in: the body and response get ordinary I/O timeouts.
+        self._reader.deadline = None
+        self.connection.settimeout(IO_TIMEOUT_SEC)
+        if not parsed:
+            return False
+        if not _host_allowed(self.headers.get('Host')):
+            self.send_error(421, 'Unknown host')
+            return False
+        return True
+
+    def list_directory(self, path):
+        self.send_error(404, 'File not found')
+        return None
 
     def do_POST(self):
         # The engine alone owns tile eviction. A page may report corruption or
         # an unexpected 404; bounded hints are validated against its own index.
-        if self.path != '/radar-bad-tile' or not _is_loopback(self.client_address[0]):
+        if (self.path != '/radar-bad-tile' or not _is_loopback(self.client_address[0])
+                or _cross_site(self.headers)):
             self.send_error(403)
             return
         try:
@@ -622,14 +974,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             panel, controller = _is_loopback(address), _is_controller(address)
             params = parse_qs(query, keep_blank_values=True)
             viewed_radar = params.get('view') == ['radar']
-            with _count_lock:
+            # A page on another origin can make a browser send this GET (an
+            # image, a script tag) but must not steer the panel through it.
+            same_site = not _cross_site(getattr(self, 'headers', None) or {})
+            with _count_lock:  # staged preferences land on the writer thread
                 _polls += 1
                 # A poll may expire a source or update viewing without a
                 # camera commit. Gate all its side effects, never the read.
-                admitted = controller and _allow_control_write(address)
-                self._radar_throttled = controller and not admitted
+                admitted = controller and same_site and _allow_control_write(address)
+                self._radar_throttled = controller and same_site and not admitted
                 view_accepted = False
-                if panel and params.get('r') == ['1']:
+                if panel and same_site and params.get('r') == ['1']:
                     _renders += 1
                 if admitted:
                     _expire_radar_source()
@@ -639,8 +994,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     view_accepted = panel and _view_transaction(params)
                     if view_accepted:
                         _write_radar_viewing(viewed_radar)
-                    if _valid_radar_session(params):
-                        _write_radar_preference('radar_smooth', params.get('radarSmooth', []))
+                    if ordered and camera_report and accepted:
+                        # Smooth changes what everyone sees: only the camera
+                        # owner whose transaction was just accepted may change it.
+                        _stage_smooth(address, params.get('radarSmooth', []))
                     if camera_report and view_accepted:
                         marker=os.path.join(os.path.dirname(DATA),'radar_activity');tmp=marker+'.tmp'
                         try:
@@ -697,7 +1054,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self._immutable_radar=immutable and os.path.isfile(local)
         if path.startswith(('/radar/t/','/radar/geo/','/radar/sites')) and not self._immutable_radar:
             self.send_error(404,'File not found');return None
-        if self._immutable_radar:
+        if self._immutable_radar and geo:
+            # Geography prunes by served atime (radar_basemap.prune). Radar tiles
+            # evict in write order, so serving them costs no SD metadata write.
             stat=os.stat(local);os.utime(local,ns=(time.time_ns(),stat.st_mtime_ns))
         return super().send_head()
 
@@ -706,11 +1065,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             with _count_lock:
                 record = _read_radar_intent()
                 owner = _camera_owner(record)
-                try:
-                    with open(os.path.join(os.path.dirname(DATA), 'radar_smooth')) as stream:
-                        smooth = stream.read(128).strip() == 'on'
-                except (OSError, UnicodeError):
-                    smooth = False
+                smooth = _read_preference('radar_smooth') == 'on'
                 if getattr(self, '_radar_throttled', False):
                     self.send_header('X-Radar-Throttled', '1')
                 self.send_header('X-Radar-Panel', '1' if _is_loopback(self.client_address[0]) else '0')
@@ -726,7 +1081,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         super().end_headers()
 
     def log_error(self,format,*args):
-        if self.path.startswith(('/radar/t/','/radar/geo/')):return
+        if getattr(self,'path','').startswith(('/radar/t/','/radar/geo/')):return
         super().log_error(format,*args)
 
     def log_request(self, code="-", size="-"):
@@ -745,8 +1100,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 d = json.load(f)
             age = time.time() - float(d.get("ts", 0))
             h["dataAgeSec"]      = round(age, 1)
-            h["radar"] = (d.get("radar") or {}).get("health", dict(lastSuccessTs=None,
-                successRate60s=None, hedges=0, retries=0, breaker="closed", lastError=None))
             h["station"]         = d.get("station")
             h["temp"]            = d.get("temp")
             h["updateAvailable"] = d.get("updateAvailable")
@@ -766,6 +1119,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         except Exception as e:                                            # noqa: BLE001
             h["status"] = "error"
             h["reason"] = h["error"] = str(e)
+        # Read after the verdict: radar diagnostics never change status or code.
+        h["radar"] = _radar_health()
         try:
             body = json.dumps(h, allow_nan=False).encode()
         except ValueError as e:                                          # a non-finite crept in
@@ -779,10 +1134,76 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
 
 class Server(socketserver.ThreadingTCPServer):
+    """Threaded server with connection admission in the accept loop.
+
+    Admission is decided before a thread exists: over its pool, a connection
+    is closed at once. Loopback has its own pool, so a LAN flood can delay the
+    kiosk by at most an accept, never lock it out.
+    """
     allow_reuse_address = True
     daemon_threads = True
+    request_queue_size = 128
+
+    def __init__(self, *args, **kwargs):
+        self._admission = threading.Lock()
+        self._local = self._lan = 0
+        self._clients = {}
+        super().__init__(*args, **kwargs)
+
+    def _admit(self, address):
+        local, key = _is_loopback(address), str(_client_ip(address))
+        with self._admission:
+            if local:
+                if self._local >= LOCAL_CONNECTIONS:
+                    return None
+                self._local += 1
+            else:
+                if self._lan >= LAN_CONNECTIONS or self._clients.get(key, 0) >= LAN_CLIENT_CONNECTIONS:
+                    return None
+                self._lan += 1
+                self._clients[key] = self._clients.get(key, 0) + 1
+        return local, key
+
+    def _release(self, ticket):
+        local, key = ticket
+        with self._admission:
+            if local:
+                self._local -= 1
+            else:
+                self._lan -= 1
+                self._clients[key] -= 1
+                if not self._clients[key]:
+                    del self._clients[key]
+
+    def process_request(self, request, client_address):
+        ticket = self._admit(client_address[0])
+        if ticket is None:
+            self.shutdown_request(request)
+            return
+        try:
+            threading.Thread(target=self._serve_admitted, args=(request, client_address, ticket),
+                             daemon=True).start()
+        except BaseException:
+            self._release(ticket)
+            self.shutdown_request(request)
+            raise
+
+    def _serve_admitted(self, request, client_address, ticket):
+        try:
+            self.process_request_thread(request, client_address)
+        finally:
+            self._release(ticket)
+
+
+def _terminate(signum, frame):
+    raise SystemExit(0)  # unwinds serve_forever so staged preferences are written
 
 
 if __name__ == "__main__":
-    with Server((BIND, PORT), Handler) as httpd:
-        httpd.serve_forever()
+    import signal
+    signal.signal(signal.SIGTERM, _terminate)
+    try:
+        with Server((BIND, PORT), Handler) as httpd:
+            httpd.serve_forever()
+    finally:
+        _close_preferences()

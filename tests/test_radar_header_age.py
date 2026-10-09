@@ -9,22 +9,24 @@ HTML = Path('design/almanac/console_live.html').read_text()
 
 
 def radar_state_source():
-    start = HTML.index('function radarState(')
+    # radarState and the age helpers declared just above it.
+    start = HTML.index('  function radarReceivedAge(')
     return HTML[start:HTML.index('\n  function radarActivate(', start)]
 
 
+# The age is always shown now (October review B2); what it measures is unchanged.
 @pytest.mark.parametrize('frame_offset,received_age,retained,expect_old', [
-    (-2700, 30, False, False),   # a 45-minute-old loop frame of a fresh loop
-    (0, 30, False, False),       # the newest frame, fresh
-    (0, 780, False, True),       # the newest frame itself is 13 min old
-    (-900, 30, True, True),      # a retained frame from an abandoned window, 15.5 min old
+    (-2700, 30, False, ' · under 1 min old'),   # a 45-minute-old loop frame of a fresh loop
+    (0, 30, False, ' · under 1 min old'),       # the newest frame, fresh
+    (0, 780, False, ' · 13 min old'),           # the newest frame itself is 13 min old
+    (-900, 30, True, ' · 15 min old · stale'),  # a retained frame from an abandoned window, 15.5 min old
 ])
 def test_header_age_follows_the_data(frame_offset, received_age, retained, expect_old):
     script = """
 const nodes={};
 function el(id){return nodes[id]||(nodes[id]={id,dataset:{},text:'',replaceChildren(...c){this.text=c.map(n=>n.text||'').join('')},append(...c){this.text+=c.map(n=>n.text||'').join('')},set textContent(v){this.text=v},get textContent(){return this.text}});}
 const $=el;const document={createTextNode:t=>({text:t}),createElement:()=>({text:'',set textContent(v){this.text=v}})};
-const performance={now:()=>1000};
+const performance={now:()=>1000};const isNum=v=>typeof v==='number'&&Number.isFinite(v);
 function radarFrameLabel(f){return 'T'+f.ts}
 const args=%s;
 const newest=100000,f={ts:newest+args.offset};
@@ -33,4 +35,4 @@ var radarView={data:{staleSec:900,observedTs:newest,tiles:{frames:args.retained?
 radarState();console.log(JSON.stringify(el('rad-status').text));
 """ % (json.dumps(dict(offset=frame_offset, received=received_age, retained=retained)), radar_state_source())
     out = subprocess.run(['node', '-e', script], capture_output=True, text=True, check=True).stdout
-    assert ('min old' in json.loads(out)) == expect_old, out
+    assert json.loads(out).endswith(expect_old), out

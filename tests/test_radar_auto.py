@@ -142,6 +142,8 @@ def test_manual_expiry_reuses_presence_and_server_persists_before_new_touch(tmp_
     assert auto.source_preference(tmp_path, record, now) == 'auto'
     server._expire_radar_source()
     assert server._read_radar_intent()['source'] == 'auto'
+    assert server._read_preference('radar_source') == 'auto'   # at once in the server
+    server._flush_preferences()  # durable on the preference writer thread
     assert (tmp_path/'radar_source').read_text().strip() == 'auto'
     (tmp_path/'presence').write_text(str(now))
     assert auto.source_preference(tmp_path, server._read_radar_intent(), now) == 'auto'
@@ -162,10 +164,12 @@ def test_auto_is_valid_durable_intent_and_duplicate_or_moving_cannot_write(tmp_p
     target = tmp_path/'durable-source'; target.write_text('site')
     (tmp_path/'radar_source').symlink_to(target)
     server._write_radar_intent(dict(radarSeq=['1'], radarZoom=['8'], radarSource=['auto'], radarCenter=['station']))
+    server._flush_preferences()  # durable writes land on the preference writer thread
     assert target.read_text().strip() == 'auto' and (tmp_path/'radar_source').is_symlink()
     assert server._read_radar_intent()['source'] == 'auto'
     for values in (['bad'], ['auto', 'site'], []):
         server._write_radar_source(values)
+        server._flush_preferences()
         assert target.read_text().strip() == 'auto'
     params = dict(radarSession=['auto-session-12345'], radarGeneration=['1'], radarHeartbeat=['1'], radarClaim=[''], radarClaimEpoch=['0'], radarCommit=['1'], radarPolicy=['manual'])
     activity = dict(moving=False, zoom=8, center=dict(lat=47, lon=-122))
