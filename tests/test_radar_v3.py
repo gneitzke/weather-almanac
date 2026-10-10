@@ -172,16 +172,34 @@ def test_supersede_tile_boundary_immediate_new_pass(make_emitter, hybrid, monkey
     monkeypatch.setattr(ae, 'threading', SimpleNamespace(Thread=InlineThread))
     emitter._runtime.running = True
     emitter.radar._schedule_retry('radar', emitter.radar._check, 120)
+    # Tile requests run concurrently.  Do not let the result depend on which
+    # worker gets scheduled first: hold every new-frame response until the
+    # intent marker is durable, so the next tile-boundary checkpoint must
+    # supersede this pass before it can publish a partial newest frame.
+    import threading
+    entered, release = threading.Event(), threading.Event()
     seen = []
     def slow(req, timeout):
-        if 'mrms::' in req.full_url and not seen:
-            seen.append(emitter.radar._refresh)
-            hybrid.mono += .25
-            (tmp_path/preference).write_text(value)
+        if 'mrms::' in req.full_url:
+            if not seen:
+                seen.append(emitter.radar._refresh)
+                hybrid.mono += .25
+                entered.set()
+            assert release.wait(10)
     hybrid.failure = slow
+    def supersede():
+        assert entered.wait(10)
+        (tmp_path/preference).write_text(value)
+        release.set()
+    writer = threading.Thread(target=supersede)
+    writer.start()
     closed = []
     monkeypatch.setattr(radar_engine.RadarSession, 'close', lambda self: closed.append(self))
-    emitter.radar._check()
+    try:
+        emitter.radar._check()
+    finally:
+        release.set(); writer.join(10)
+    assert not writer.is_alive()
     # Discovery already slid the old geometry before the superseding intent
     # arrived at a tile boundary. Keep that published hour until the next pass.
     pending = emitter.radar._result
