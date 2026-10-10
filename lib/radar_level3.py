@@ -34,6 +34,72 @@ EFFECTIVE_RADIUS_M = EARTH_RADIUS_M * 4 / 3  # standard refraction
 SITE_TOLERANCE_DEG = 0.05
 # The render identity of a native tile; bump when geometry or colouring changes.
 NATIVE_REVISION = "level3-n0b-n0h-mosaic-v7"  # v6: radarUncoveredPixels tEXt; v7: radarMeasuredGrid tEXt
+NATIVE_SMOOTH_REVISION = NATIVE_REVISION + "-dbz-bilinear-v1"
+
+
+@lru_cache(maxsize=16)
+def _azimuth_runs(bearing_bytes):
+    """Actual contiguous ray footprints, including missing sectors and north.
+
+    Bounded by 16 azimuth tables, independent of the number of scans/tiles.
+    Half-bin edges put a five-bin ray's centre at 0.25, not 0.20 degrees.
+    """
+    table = np.frombuffer(bearing_bytes, np.int16)
+    starts = np.flatnonzero(table != np.roll(table, 1))
+    if not len(starts):
+        starts = np.array([0])
+    widths = (np.roll(starts, -1) - starts) % 3600
+    widths[widths == 0] = 3600
+    runs = (np.searchsorted(starts, np.arange(3600), side='right') - 1) % len(starts)
+    return starts.astype(np.float32), widths.astype(np.float32), table[starts], runs.astype(np.int16)
+
+
+def interpolate_codes(scan, bearing, ranges, containing=None):
+    """Bilinear dBZ at polar sample positions (range in gate widths).
+
+    Return fractional N0B codes so the shared step palette can be applied
+    afterwards. Codes 0 (clear/QC suppressed) and 1 (missing/folded) have no
+    numerical dBZ: retain the containing gate if any corner is nonnumeric,
+    outside range, or separated by a missing azimuth. Never renormalize a
+    partial stencil across a hole, nor fill a nonnumeric containing gate.
+    """
+    bearing = np.asarray(bearing, dtype=np.float32)
+    ranges = np.asarray(ranges, dtype=np.float32)
+    bins = (bearing * 10).astype(np.int32) % 3600
+    if containing is None:
+        rows, gates = scan.bearing_index[bins], ranges.astype(np.int32)
+    else:
+        # Integer cells come from the float64 projection, so compact float32
+        # coordinates cannot move a coverage boundary or change the stencil ray.
+        rows, gates, bins = containing
+    inside = (rows >= 0) & (gates >= 0) & (gates < scan.gates)
+    nearest = scan.codes[np.maximum(rows, 0), np.clip(gates, 0, scan.gates-1)]
+    result = np.where(inside, nearest, 1).astype(np.float32)
+    numeric = inside & (nearest >= 2)
+    if not np.any(numeric):
+        return result
+    # Clear/missing footprints need no stencil. Compact before interpolation;
+    # this is especially useful on the Pi for sparse echoes and disc edges.
+    bearing, ranges, bins, rows = bearing[numeric], ranges[numeric], bins[numeric], rows[numeric]
+    starts, widths, ray_rows, runs = _azimuth_runs(scan.bearing_index.astype(np.int16).tobytes())
+    runs = runs[bins]
+    delta = (bearing*10 - (starts[runs] + widths[runs]/2) + 1800) % 3600 - 1800
+    adjacent = (runs + np.where(delta < 0, -1, 1)) % len(starts)
+    other = ray_rows[adjacent]
+    weight_a = np.abs(delta) / ((widths[runs] + widths[adjacent])/2)
+    lower = np.floor(ranges - .5).astype(np.int32)
+    weight_r = ranges - .5 - lower.astype(np.float32)
+    valid = (other >= 0) & (lower >= 0) & (lower+1 < scan.gates)
+    r0, r1 = np.maximum(rows, 0), np.maximum(other, 0)
+    g0, g1 = np.clip(lower, 0, scan.gates-1), np.clip(lower+1, 0, scan.gates-1)
+    corners = [scan.codes[r0, g0], scan.codes[r0, g1], scan.codes[r1, g0], scan.codes[r1, g1]]
+    for corner in corners:
+        valid &= corner >= 2
+    # Decode before interpolation; no RGBA channel is ever averaged.
+    a, b, c, d = [(v.astype(np.float32)-2)*.5-32 for v in corners]
+    dbz = (a + (b-a)*weight_r)*(1-weight_a) + (c + (d-c)*weight_r)*weight_a
+    result[numeric] = np.where(valid, (dbz+32)*2+2, nearest[numeric]).astype(np.float32)
+    return result
 
 
 class Scan:

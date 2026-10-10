@@ -185,14 +185,14 @@ radarSourceRender();assert.match(caption(),/NOAA Level III/);assert.doesNotMatch
 ''')
 
 
-def test_smooth_still_works_on_region_and_fallback_but_not_native():
+def test_smooth_works_on_native_region_and_fallback():
     html = Path('design/almanac/console_live.html').read_text()
     assert all(text not in html for text in ('rad-render', 'radarRender', 'X-Radar-Render', 'rad-v1', 'rad-v2'))
     run_remote(r'''
 const a=page();await a.poll();
-a.run("radarView.data={...manifest(),native:true,sourceMode:'site'};radarZoomRender();$('rad-smooth').listeners.click();assert.equal(radarSmooth.pending,null)");
-a.run("radarView.data.native=false;$('rad-smooth').listeners.click()");await a.poll();assert.equal(server.smooth,'on');
-a.run("radarView.data.sourceMode='mosaic';$('rad-smooth').listeners.click()");await a.poll();assert.equal(server.smooth,'off');
+a.run("radarView.data={...manifest(),native:true,sourceMode:'site'};radarZoomRender();$('rad-smooth').listeners.click();assert.equal(radarSmooth.pending,true)");await a.poll();assert.equal(server.smooth,'on');
+a.run("radarView.data.native=false;$('rad-smooth').listeners.click()");await a.poll();assert.equal(server.smooth,'off');
+a.run("radarView.data.sourceMode='mosaic';$('rad-smooth').listeners.click()");await a.poll();assert.equal(server.smooth,'on');
 assert.ok(server.requests.every(q=>!q.has('radarRender')));
 ''')
 

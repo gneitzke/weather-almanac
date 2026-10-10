@@ -206,22 +206,24 @@ def test_negative_volume_stays_negative_after_window_but_new_volume_can_fetch(ma
 
 
 def test_mosaic_render_concurrency_is_bounded(monkeypatch):
-    lock = Lock(); release = Event(); two = Event(); active = peak = 0
+    lock = Lock(); release = Event(); admitted = Event(); active = peak = 0
+    reservation = mosaic.render_admission_bytes([scan()], 7, 0, 0)
+    limit = min(6, mosaic.RENDER_WORKER_LIMIT, mosaic.RENDER_TRANSIENT_BYTES//reservation)
     def render(*args):
         nonlocal active,peak
         with lock:
             active += 1; peak = max(peak,active)
-            if active == mosaic.RENDER_SLOT_COUNT: two.set()
+            if active == limit: admitted.set()
         assert release.wait(2)
         with lock: active -= 1
     monkeypatch.setattr(mosaic,'_render_mosaic',render)
     with ThreadPoolExecutor(max_workers=6) as pool:
         jobs = [pool.submit(mosaic.render_mosaic,[scan()],7,0,0,[]) for _ in range(6)]
-        assert two.wait(2)
-        assert peak == mosaic.RENDER_SLOT_COUNT
+        assert admitted.wait(2)
+        assert peak == limit
         release.set()
         for job in jobs: job.result()
-    assert peak == mosaic.RENDER_SLOT_COUNT
+    assert peak == limit
 
 
 def test_prefetch_classification_budget_refusal_is_control_flow(make_emitter, hybrid, monkeypatch):

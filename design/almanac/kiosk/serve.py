@@ -1095,7 +1095,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             try:
                 with open(os.path.join(WEB,'radar','.'+kind+'-revision')) as f:return f.read()==value
             except OSError:return False
-        immutable=bool(tile and (not tile[3].startswith('M') or tile[2]=='iem-nexrad-n0b' and revision('native',tile[1])) and (revision('tile',tile[1]) or revision('smooth',tile[1]) or revision('native',tile[1])) and 4<=int(tile[4])<=10 and int(tile[5])<2**int(tile[4]) and int(tile[6])<2**int(tile[4]) or
+        immutable=bool(tile and (not tile[3].startswith('M') or tile[2]=='iem-nexrad-n0b' and (revision('native',tile[1]) or revision('native-smooth',tile[1]))) and (revision('tile',tile[1]) or revision('smooth',tile[1]) or (revision('native',tile[1]) or revision('native-smooth',tile[1]))) and 4<=int(tile[4])<=10 and int(tile[5])<2**int(tile[4]) and int(tile[6])<2**int(tile[4]) or
                        geo and revision('geo',geo[1]) and 4<=int(geo[3])<=10 and int(geo[4])<2**int(geo[3]) and int(geo[5])<2**int(geo[3]) or
                        sites and revision('sites',sites[1]))
         self._immutable_radar=immutable and os.path.isfile(local)

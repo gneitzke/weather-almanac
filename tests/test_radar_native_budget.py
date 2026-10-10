@@ -24,7 +24,7 @@ def test_variant_is_exact_for_tier_and_ceiling(tier, expected, state):
     assert radar_engine._radar_variant(ctx, SOURCE) == expected
     assert radar_engine._radar_variant(ctx, 'iem-mrms-lcref') is False
     ctx['smooth'] = True
-    assert radar_engine._radar_variant(ctx, SOURCE) == ('native' if expected == 'native' else True)
+    assert radar_engine._radar_variant(ctx, SOURCE) == ('native-smooth' if expected == 'native' else True)
     assert radar_engine._radar_render_revision('native') != radar_engine._radar_render_revision(True)
 
 

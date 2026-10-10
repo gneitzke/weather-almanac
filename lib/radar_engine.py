@@ -513,14 +513,15 @@ def _radar_revision_digest(remap_revision,basemap_revision,native_revision):
 
 
 def _radar_variant_revision(variant):
-    """The render identity stored in a tile: False remaps IEM colours, True smooths them, 'native' draws Level III gates."""
-    from lib.radar_level3 import NATIVE_REVISION
-    return NATIVE_REVISION if variant == 'native' else SMOOTH_REVISION if variant else REMAP_REVISION
+    """PNG identity for plain/smoothed IEM and plain/smoothed Level III."""
+    from lib.radar_level3 import NATIVE_REVISION, NATIVE_SMOOTH_REVISION
+    return (NATIVE_SMOOTH_REVISION if variant == 'native-smooth' else
+            NATIVE_REVISION if variant == 'native' else SMOOTH_REVISION if variant else REMAP_REVISION)
 
 
 def _radar_variant(ctx, source):
     # v2 mosaics native NEXRAD gates; Region keeps its existing renderer.
-    return 'native' if (source == 'iem-nexrad-n0b' and native_allowed(
+    return ('native-smooth' if ctx.get('smooth') else 'native') if (source == 'iem-nexrad-n0b' and native_allowed(
         ctx.get('native'), ctx.get('attention'), ctx.get('native_ceiling', 'normal'))) else bool(ctx.get('smooth', False))
 
 
@@ -530,7 +531,11 @@ def _radar_render_revision(smooth=False):
     return _radar_revision_digest(REMAP_REVISION + suffix,version(),_radar_native_table_revision())
 
 
-RADAR_RENDER_VARIANTS = (False, True, 'native')
+RADAR_RENDER_VARIANTS = (False, True, 'native', 'native-smooth')
+
+
+def _radar_is_native(variant):
+    return variant in ('native', 'native-smooth')
 
 
 def _radar_sites_revision():
@@ -574,7 +579,7 @@ def _radar_tile_metadata(path, source):
             if int(image.info['radarVisiblePixels'])!=visible:raise ValueError('cached tile visibility count')
             if variant is not True and visible>meta['opaquePixels']-meta['unmatchedPixels']:
                 raise ValueError('cached tile visibility')
-        if variant == 'native':
+        if _radar_is_native(variant):
             # A visible pixel is a measured one: the two counts cannot overlap.
             uncovered = image.info['radarUncoveredPixels']
             if not re.fullmatch(r'[0-9]{1,5}', uncovered) or int(uncovered)+visible > 65536:
@@ -647,7 +652,7 @@ def _radar_view_measured(snap, records):
             measured = np.zeros((GRID_CELLS, GRID_CELLS), bool)
             for site, stamp in _radar_frame_pairs(frame):
                 if frame.get('mosaicKey'):
-                    record = records.get(_radar_disk_key('iem-nexrad-n0b', site, stamp, zoom, tx, ty, 'native'))
+                    record = records.get(_radar_disk_key('iem-nexrad-n0b', site, stamp, zoom, tx, ty, (snap.tiles or {}).get('variant', 'native')))
                     if record is None or 'measuredGrid' not in (record[2] or {}):
                         return None
                     measured |= grid_cells(record[2]['measuredGrid'])
@@ -778,7 +783,7 @@ def _radar_site_pairs(ctx, ts, now=None):
     pairs = []
     for site in ctx['sites']:
         stamps = ctx['site_scans'].get(site['id'], ()) if site['reporting'] else ()
-        native = _radar_variant(ctx, 'iem-nexrad-n0b') == 'native'
+        native = _radar_is_native(_radar_variant(ctx, 'iem-nexrad-n0b'))
         stamp = next((t for t in reversed(stamps) if t <= ts + (60 if native else 0)), None)
         if native and site['id'] == ctx.get('site_id'):
             stamp = ts if ts in stamps else None  # the primary clocks this frame
@@ -869,7 +874,7 @@ def _radar_tile_manifest(source, frames, ctx):
     variant = _radar_variant(ctx,source)
     return dict(base='radar/t/',revision=_radar_render_revision(variant),
                 remapRevision=_radar_variant_revision(variant),
-                smooth=variant is True, variant=variant, tileSize=256,
+                smooth=variant in (True, 'native-smooth'), variant=variant, tileSize=256,
                 source=source,site=ctx.get('site_id') or '-',z=ctx['zoom'],levels=levels,grid=grid,
                 camera=dict(ctx['center'], zoom=ctx.get('camera_zoom', ctx['zoom'])),
                 geometry=[list(ctx.get('station', ctx['center'].values())), ctx['center'], ctx.get('camera_zoom',ctx['zoom']), ctx['zoom'], source, ctx.get('site_id')],
@@ -1302,7 +1307,7 @@ class RadarEngine:
         if (source == 'iem-nexrad-n0b' and not self._primary_only(ctx)
                 and any(f.get('primaryOnly') for f in snap.frames)):
             return  # attendance expands history even where only one radar covers the view
-        if _radar_variant(ctx, source) == 'native' and any(self._hca_due(f) for f in snap.frames[-RADAR_LOOP_FRAMES:]):
+        if _radar_is_native(_radar_variant(ctx, source)) and any(self._hca_due(f) for f in snap.frames[-RADAR_LOOP_FRAMES:]):
             return
         target = min(ctx.get('frames_target') or (RADAR_LOOP_FRAMES if ctx.get('viewed') else 1), len(snap.frames))
         if source == 'iem-nexrad-n0b' and (snap.site_id != ctx.get('site_id') or
@@ -2045,7 +2050,7 @@ class RadarEngine:
     def _transport_sources(self, source, ctx=None):
         if source != 'iem-nexrad-n0b':
             return (source,)  # Region admission never evaluates native policy
-        native = (_radar_variant(ctx, source) == 'native' if ctx is not None else
+        native = (_radar_is_native(_radar_variant(ctx, source)) if ctx is not None else
                   native_allowed(self._native_requested, self._effective_tier(),
                                  self._native_budget.snapshot()['ceilingState']))
         return (source, RADAR_LEVEL3_TRANSPORT) if native else (source,)
@@ -2433,7 +2438,7 @@ class RadarEngine:
         workers = ctx.get('tile_workers', RADAR_TILE_WORKERS)
         variant = _radar_variant(ctx, source)
         foreground_tiles = ({(x, y) for x, y, _, _ in _radar_grid(ctx)}
-                            if variant == 'native' and not ctx.get('prefetch') else set())
+                            if _radar_is_native(variant) and not ctx.get('prefetch') else set())
         interactive = workers == RADAR_NEWEST_TILE_WORKERS and not ctx.get('prefetch')
         hedge_budget = ctx.setdefault('hedge_budget', dict(count=0, limit=len(ctx['tiles'])//2))
         def claim_hedge(tile_url):
@@ -2458,13 +2463,13 @@ class RadarEngine:
             disk_key = _radar_disk_key(source,site,stamp,ctx['zoom'],tx,ty,variant)
             if disk_key in self._disk_inventory:
                 return tile, None  # bytes/metadata already validated; page decodes
-            if variant == 'native':
-                from lib.radar_level3 import NATIVE_REVISION
+            if _radar_is_native(variant):
                 from lib.radar_mosaic import render_mosaic
                 scans = ctx['mosaic_scans']
                 self._checkpoint(ctx)
                 drawn, visible = render_mosaic(scans, ctx['zoom'], tx, ty, source_palette(source),
                     RADAR_SITE_RANGE_METERS, filtered=ctx.get('mosaic_filtered'), deadline=deadline,
+                    smooth=variant == 'native-smooth',
                     cache_geometry=(not ctx.get('prefetch') and
                         ctx['zoom'] == ctx.get('camera_zoom', ctx['zoom']) and
                         (tx, ty) in foreground_tiles))
@@ -2473,7 +2478,7 @@ class RadarEngine:
                     # Gates are measured values, never matched colours: nothing is unmatched or ambiguous.
                     return tile, store(target, disk_key, drawn, visible, dict(remapped=True, unmatchedColors=0,
                         opaqueColors=colours, unmatchedPixels=0, opaquePixels=visible, ambiguousPixels=0,
-                        revision=NATIVE_REVISION), uncovered=drawn.info['radarUncoveredPixels'],
+                        revision=_radar_variant_revision(variant)), uncovered=drawn.info['radarUncoveredPixels'],
                         grid=drawn.info['radarMeasuredGrid'])
             # Native IEM bytes have no dependency on our remapping revision.
             # RainViewer's server-side colour scheme/options DO affect raw bytes.
@@ -2659,7 +2664,7 @@ class RadarEngine:
 
     def _mosaic_cached(self, pairs, ts, ctx):
         from lib.radar_mosaic import read_frame_metadata
-        revision = _radar_render_revision('native')
+        revision = _radar_render_revision(_radar_variant(ctx, 'iem-nexrad-n0b'))
         root = Path(RADAR_DIR) / 't' / revision / 'iem-nexrad-n0b'
         for metadata in read_frame_metadata(root, _radar_stamp_text(ts), pairs, revision,
                 self._disk_inventory.frame_metadata):
@@ -2778,7 +2783,7 @@ class RadarEngine:
 
     def _native_fallback(self, snap):
         """Describe the drawn pixels, including retained tiles during recovery."""
-        showing = snap.source_mode == 'site' and bool(snap.frames) and (snap.tiles or {}).get('variant') != 'native'
+        showing = snap.source_mode == 'site' and bool(snap.frames) and not _radar_is_native((snap.tiles or {}).get('variant'))
         paused = self._native_budget.snapshot()['ceilingState'] == 'paused'
         outage = self._level3_outage
         down = self._level3_down() or outage is not None
@@ -2891,7 +2896,7 @@ class RadarEngine:
                     self._remember_level3_failure((site, volume, 'N0H'),
                         10, 'classification flight timed out or cancelled', TimeoutError)
                     hca.cancel()
-        return dict(mosaicKey=mosaic_key(identities, _radar_render_revision('native')), siteScans=contributors,
+        return dict(mosaicKey=mosaic_key(identities, _radar_render_revision(_radar_variant(ctx, 'iem-nexrad-n0b'))), siteScans=contributors,
                     requestedPairs=sorted([list(p) for p in pairs]),
                     unfilteredSites=[p['id'] for p in contributors if not p['filtered']]), tuple(scans)
 
@@ -2907,7 +2912,7 @@ class RadarEngine:
         frame = _radar_frame(source,ts,ctx,pairs)
         if source == 'iem-nexrad-n0b':
             frame.update(primaryOnly=self._primary_only(ctx), requestedPairs=sorted([list(p) for p in pairs or ()]))
-        mosaic = layers is not None and _radar_variant(ctx, source) == 'native'
+        mosaic = layers is not None and _radar_is_native(_radar_variant(ctx, source))
         if mosaic:
             metadata = self._mosaic_cached(pairs, ts, ctx)
             scans = ()
@@ -3010,8 +3015,8 @@ class RadarEngine:
         frame['echo'] = self._frame_echo(ctx, source, _radar_frame_pairs(frame), ts) if frame['complete'] else None
         if mosaic and present:
             from lib.radar_mosaic import write_frame_metadata
-            path = _radar_tile_path(source, frame['mosaicKey'], ts, ctx['zoom'], 0, 0, 'native').parents[2] / 'frame.json'
-            write_frame_metadata(path, _radar_stamp_text(ts), pairs, metadata, _radar_render_revision('native'),
+            path = _radar_tile_path(source, frame['mosaicKey'], ts, ctx['zoom'], 0, 0, _radar_variant(ctx, source)).parents[2] / 'frame.json'
+            write_frame_metadata(path, _radar_stamp_text(ts), pairs, metadata, _radar_render_revision(_radar_variant(ctx, source)),
                                  self._disk_inventory.frame_metadata)
         return frame
 
@@ -3454,13 +3459,13 @@ class RadarEngine:
         primary_only = self._primary_only(ctx)
         if primary_only:
             ctx['frames_target'] = 1
-        candidates = stamps[-1:] if primary_only else stamps[-3:] if (_radar_variant(ctx, source) == 'native' and
+        candidates = stamps[-1:] if primary_only else stamps[-3:] if (_radar_is_native(_radar_variant(ctx, source)) and
                                      ctx.get('native_ceiling') == 'newest-only') else stamps
         for ts in reversed(candidates):
             if now - ts >= RADAR_SITE_MAX_AGE_SEC:
                 break
             ctx['candidates'].append(ts)
-            slots = [t for t in stamps if ts - RADAR_HISTORY_SEC <= t <= ts][-(8 if _radar_variant(ctx, source) == 'native' or len(_radar_site_pairs(ctx, ts)) >= 2 else 31):]
+            slots = [t for t in stamps if ts - RADAR_HISTORY_SEC <= t <= ts][-(8 if _radar_is_native(_radar_variant(ctx, source)) or len(_radar_site_pairs(ctx, ts)) >= 2 else 31):]
             self._publish_refresh(ctx, frameTotal=len(slots) if ctx['viewed'] else 1)
             latest = build(ts, deadline)
             if ctx.get('level3_failed'):
@@ -3523,7 +3528,7 @@ class RadarEngine:
         ctx['tile_workers'] = RADAR_TILE_WORKERS
         settings = _RADAR_SOURCES[source]
         newest_only = source == 'iem-nexrad-n0b' and (self._primary_only(ctx) or
-            _radar_variant(ctx, source) == 'native' and ctx.get('native_ceiling') == 'newest-only')
+            _radar_is_native(_radar_variant(ctx, source)) and ctx.get('native_ceiling') == 'newest-only')
         slots = [newest] if newest_only else slots or list(range(newest - RADAR_HISTORY_SEC, newest + 1, settings['cadence']))
         # The loop this pass builds: every refresh and publication below says so.
         ctx['loop_target'] = 1 if newest_only else self._loop_target(dict(ctx, loop_target=None))
@@ -3752,7 +3757,7 @@ class RadarEngine:
     def _frame_request_cost(self, source, ctx, pairs, frame_ts=None, priced=None):
         """Price network acquisitions, not the number of generated PNGs."""
         from lib.radar_level3 import match_key
-        native = _radar_variant(ctx, source) == 'native'
+        native = _radar_is_native(_radar_variant(ctx, source))
         scans, listings = priced if priced is not None else (set(), set())
         initial = len(scans) + len(listings)
         count = 0
@@ -3801,7 +3806,7 @@ class RadarEngine:
             if 'site_scans' in ctx:
                 return _radar_site_pairs(ctx,stamp)
             return [(site['id'],site.get('newestTs') or stamp) for site in ctx.get('sites',()) if site.get('reporting')]
-        if _radar_variant(ctx, source) == 'native':
+        if _radar_is_native(_radar_variant(ctx, source)):
             priced = (set(), set())
             count = sum(self._frame_request_cost(source, dict(ctx, tiles=tiles), required(stamp),
                         frame_ts=stamp, priced=priced) for stamp in stamps)
@@ -3902,7 +3907,7 @@ class RadarEngine:
                     else:
                         pairs = ((None, newest),)
                         signature = pairs
-                    if _radar_variant(warm, target) == 'native':
+                    if _radar_is_native(_radar_variant(warm, target)):
                         frame_ts = stamps[-1]
                         input_pairs = pairs
                         metadata = self._mosaic_cached(pairs, frame_ts, warm)
@@ -3948,12 +3953,12 @@ class RadarEngine:
                     if not all(_radar_present(warm, target, site, stamp, zoom, x, y)
                                for site, stamp in pairs for x, y, _, _ in _radar_site_tiles(warm, site)):
                         continue
-                    if _radar_variant(warm, target) == 'native':
+                    if _radar_is_native(_radar_variant(warm, target)):
                         from lib.radar_mosaic import write_frame_metadata
                         path = _radar_tile_path(target, metadata['mosaicKey'], frame_ts,
-                            zoom, 0, 0, 'native').parents[2] / 'frame.json'
+                            zoom, 0, 0, _radar_variant(warm, target)).parents[2] / 'frame.json'
                         write_frame_metadata(path, _radar_stamp_text(frame_ts), input_pairs,
-                                             metadata, _radar_render_revision('native'), self._disk_inventory.frame_metadata)
+                                             metadata, _radar_render_revision(_radar_variant(warm, target)), self._disk_inventory.frame_metadata)
                     self._prefetched[key] = signature
                 except (_RadarBudget, _RadarSuperseded):
                     raise
@@ -4115,6 +4120,7 @@ class RadarEngine:
                 shutil.rmtree(obsolete)
         (root/'.smooth-revision').write_text(smooth_revision)
         (root/'.native-revision').write_text(_radar_render_revision('native'))
+        (root/'.native-smooth-revision').write_text(_radar_render_revision('native-smooth'))
         revision=root/'.tile-revision'
         if revision.exists() and revision.read_text()==_radar_render_revision():return
         for name in ('basemap','t',*{s['legend']['id'] for s in _RADAR_SOURCES.values()}):
@@ -4731,12 +4737,12 @@ class RadarEngine:
             scanningSlowly=snap.scanning_slowly,latestOnly=snap.source_mode=='site' and snap.scan_cadence_sec is None and len(snap.frames)==1,
             scanCadenceSec=snap.scan_cadence_sec,scanLatencySec=snap.scan_latency_sec,scanMode=snap.scan_mode,scanModeSource=snap.scan_mode_source,
             sourceId=snap.source_id,
-            attribution='NOAA NEXRAD Level III' if (snap.tiles or {}).get('variant')=='native' else snap.attribution,
-            attributionUrl='https://registry.opendata.aws/noaa-nexrad/' if (snap.tiles or {}).get('variant')=='native' else snap.attribution_url,
+            attribution='NOAA NEXRAD Level III' if _radar_is_native((snap.tiles or {}).get('variant')) else snap.attribution,
+            attributionUrl='https://registry.opendata.aws/noaa-nexrad/' if _radar_is_native((snap.tiles or {}).get('variant')) else snap.attribution_url,
             provider=snap.provider,cadenceSec=snap.cadence,frameSpacingSec=median(gaps) if gaps else None,
             historyGaps=any(g!=snap.cadence for g in gaps),historySpanSec=complete[-1]-complete[0] if complete else 0,
             completeFrameCount=len(complete),partialCoverage=snap.partial_coverage,center=snap.center,
-            smooth=(snap.tiles or {}).get('smooth',False),native=(snap.tiles or {}).get('variant')=='native',
+            smooth=(snap.tiles or {}).get('smooth',False),native=_radar_is_native((snap.tiles or {}).get('variant')),
             zoomAuto=snap.zoom_desired is None,zoomAutoLevel=snap.zoom_auto_level,
             zoomMin=RADAR_MIN_ZOOM,zoomMax=snap.max_zoom,
             zoomSource='MRMS' if snap.source_id=='iem-mrms-lcref' else 'NEXRAD' if snap.source_mode=='site' else 'RainViewer',

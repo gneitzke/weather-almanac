@@ -1971,7 +1971,8 @@ older than the displayed mosaic can still publish immediately.
 The quiet **SMOOTH** button beside zoom reset uses the existing control colours,
 `aria-pressed` and a 64×44px target. Default is **off**. Any controller with a
 valid page session sends `radarSmooth=on|off` on an explicit tap; exactly one
-value is accepted, independently of camera ownership. Duplicate, empty and
+value is accepted with the owning camera transaction. A tap claims camera
+ownership using the existing session/epoch/generation rules. Duplicate, empty and
 invalid values and non-controller callers cannot write it. Accepted durable preferences
 (`radar_smooth`, `radar_zoom`, `radar_center`) are staged in memory and
 written by one dedicated writer thread in serve.py, which atomically replaces each
@@ -1990,7 +1991,7 @@ including reloads while the emitter is still acquiring the selected variant.
 The emitter watches this marker even when an ordered `radar_intent` exists;
 changed preference supersedes in-flight work at the existing tile checkpoints.
 
-**Interpolation is in reflectivity, not colour.** Smooth converts each native
+**IEM image-tile interpolation is in reflectivity, not colour.** Smooth converts each source
 256×256 field to an engine-only 512×512 intermediate using pixel-centred bilinear weights in linear half-dBZ
 index space: N0B `i/2−33`, MRMS `i/2−32`. Verified palettes retain numeric indices;
 RGBA/RainViewer use the existing native inverse and ambiguity diagnostics.
@@ -2010,9 +2011,8 @@ field resample followed by area reduction, not a Gaussian convolution.
 
 The interpolated value is quantized to the existing discrete legend LUT. Every
 nontransparent **tile RGB** is a LUT entry; fractional edge alpha is coverage,
-not another intensity. The site clear-air floor and slate alpha remain 5 dBZ
-and 180; MRMS/RainViewer stay at 10 dBZ. The page enables bilinear echo scaling
-for Smooth frames, including fractional zoom and retained plate reprojection;
+not another intensity. The shared display floor is 15 dBZ. The page enables bilinear echo scaling
+for IEM Smooth frames, including fractional zoom and retained plate reprojection;
 off retains nearest-neighbour scaling. Browser scaling, alpha composition and
 temporal frame blends can mix display colours; their pixels are not additional
 dBZ samples. Geography colours, geometry, legend and camera policy are unchanged.
@@ -2051,9 +2051,9 @@ currently playing cycle and fence cancelled job completions by epoch/revision.
 `radar.tiles.tileSize` is always 256. `tiles.revision` has a distinct Smooth
 hash and `tiles.remapRevision` is `field-bilinear-2x-box-256-v61-1` when on. Frames retain
 that identity through asynchronous decode, source switches and retained playback.
-The server admits the two installed immutable revision trees, via
-`.tile-revision` and `.smooth-revision`. Both share **one disk-sized inventory and
-eviction budget** (8,000–12,000 files / 64–256 million bytes), with a variant
+The IEM variants use immutable revision trees advertised by
+`.tile-revision` and `.smooth-revision`. They and both native variants below
+share **one disk-sized inventory and eviction budget** (8,000–12,000 files / 64–256 million bytes), with a variant
 suffix on Smooth keys. Startup admits both trees in one global age order and
 within one shared entry budget. Native byte LRU
 identity is unchanged: toggling can remap cached native bytes without a provider
@@ -2126,7 +2126,8 @@ spherical disc/rectangle intersection rejects off-tile sites before projection;
 these sites never enter the cache. Each projection owns only the rectangular
 sampled footprint of its 230 km disc in the tile. uint16 bearing bins (0–3599)
 and gates (0–32767), the smallest integer dtypes that hold those domains, plus
-float32 beam heights cost eight bytes per retained sample. Cropped arrays own
+float32 beam heights cost eight bytes per retained sample (sixteen for
+Smooth, which also retains continuous bearing and range). Cropped arrays own
 their storage, with no full-tile backing arrays. Bearing bins are translated
 through each volume's actual radial table; radial rows are never reused across
 volumes. Gate boundaries are computed in float64 before integer compaction.
@@ -2138,16 +2139,17 @@ has 87.5% foreground hits including the cold first frame at z7–10. Retained
 projection bytes are respectively 34,131,024 / 19,467,888 / 23,231,248 / 25,165,824.
 
 Render allocation is charged from sample size `S` and candidate count `C`:
-`1 MiB + S² × max(96 + 12C, 16 + 26C)` bytes. The first term bounds a cold
-projection's float64 temporaries plus previous projections/samples; the second
+`1 MiB + S² × max(192 + 20C, 16 + 32C)` bytes. The first term bounds a cold
+projection and Smooth interpolation temporaries plus previous projections/samples; the second
 bounds ownership sorting, masks and indices. It includes cold projections even
 when they become retained cache entries. The public renderer accepts at most
 four candidates and at most 512×512 samples. Its worst-case charge is
-38,797,312 bytes, so slot count is `min(cpu_count, floor(80,000,000 / 38,797,312))`,
-at least one (two on a multicore host; total charged transient 77,594,624 bytes).
+72,351,744 bytes, so slot count is `min(cpu_count, floor(80,000,000 / 72,351,744))`,
+at least one (one slot, shared by both variants).
 Cold measured peaks on the local arm64 Mac are 26.62 MB at z7 and 6.90 MB at
 z8–10, including newly retained geometry, with Pillow imported before measuring.
-The separate retained geometry cap remains 48 MiB. Waiting for a slot observes
+These pre-Smooth baselines exclude interpolation; the separate retained geometry
+cap remains 48 MiB. Waiting for a slot observes
 the tile deadline. `tools/benchmark_radar_mosaic.py --viewport --background
 --zooms 7 8 9 10 --memory` reproduces the workload from local N0B/N0H files.
 z7 uses 2×2 maximum supersampling after selection; z8–10 use one sample.
@@ -2241,25 +2243,92 @@ are ignored and no longer linked by the launcher. The watched preferences are
 `radar_intent` and `radar_smooth`, plus `radar_zoom` and legacy `radar_center`
 when there is no ordered intent. `radar_intent` lives on tmpfs, so after a reboot
 the durable `radar_zoom` is what restores the zoom; that path is not dead code. Region retains MRMS. Smooth
-remains available for Region and automatic IEM fallback and is disabled while
-native frames draw.
+is available for native Level III, Region and automatic IEM fallback. The
+button is disabled only when the viewer cannot write the preference. Its
+pressed state follows the pending/acknowledged preference in both themes.
 
-**Render variant.** v2 is a third tile variant beside plain and Smooth:
-`_radar_variant(ctx, source)` is `'native'` for `iem-nexrad-n0b` when Level III
-is reachable, effective attention is live/warm/watch, and the ceiling is not paused.
-Otherwise it is the Smooth boolean. The variant has its own render revision directory
-(`_radar_render_revision('native')`, advertised in `radar/.native-revision` so
-the server serves it immutable), a disk key suffixed `('native',)`, and PNG
-metadata with `revision` = `level3-n0b-n0h-mosaic-v5` (`radar_level3.NATIVE_REVISION`).
-Gates are measurements, not matched colours, so `unmatchedPixels` and
-`ambiguousPixels` are 0 and `remapped` is true. The manifest adds
-`tiles.variant` (`false`, `true` or `"native"`); `tiles.smooth` stays a boolean,
-true only for Smooth, so the page never interpolates v2 pixels. The payload adds
-`radar.native` (the drawn variant). `radar.nativeFallback` contains `active`
-(true only when the published site frames are IEM tiles), `reason`
-(`level3-unreachable`, `level3-stalled`, `daily-limit`, or null), and `recovering` (true when IEM
-frames remain displayed after a validated N0B product fetch succeeds;
-an expired outage timer or half-open breaker alone is not recovery). There is no `renderPref`.
+**Native Smooth (2026-10-09).** Level III Smooth samples a bilinear dBZ
+field between adjacent range-gate centres and actual azimuth-ray centres.
+The bearing table defines ray widths, including nonuniform widths and the
+north seam; range never wraps. Interpolation occurs separately for each site,
+after existing despeckle and categorical HCA QC, before lowest-beam mosaic
+selection and the shared stepwise palette. The 15 dBZ floor is applied to the
+interpolated reflectivity; numeric measurements below 15 may contribute to a
+neighbour's interpolation, but no final value below 15 is displayed.
+
+Code 0 (below threshold or QC-suppressed biological) has no numeric dBZ;
+code 1 is missing/range folded (including HCA clutter rejection). Neither is
+an interpolation value. If the containing gate is either sentinel it stays
+unchanged. If any of the four corners is nonnumeric, outside range, or across
+a missing azimuth sector, retain the containing measured gate; never
+renormalize partial support or interpolate across the hole. Thus the measured
+pixel mask, `radarUncoveredPixels`, and `radarMeasuredGrid` are identical for
+both variants. Tile edges sample the source polar field, so adjacent tiles
+need neither overlap fetches nor independent edge clamping.
+
+HCA classes are categorical, so they are never averaged or inferred from
+interpolated intensity. QC excludes clutter/folding and suppresses biological
+returns before sampling. Existing filtered-clear versus unfiltered-echo
+ownership rules then operate on the interpolated reflectivity. Other classes
+retain their measured reflectivity; no precipitation-type palette or inferred
+rain/snow classification is introduced. Missing HCA retains the existing
+unfiltered-site annotation and identity. This preserves QC boundaries while
+letting intensity vary within measured precipitation. Native frames retain
+nearest-neighbour browser scaling even with Smooth on: colour interpolation
+is not a substitute for dBZ interpolation.
+
+**Render variants.** `_radar_variant(ctx, source)` returns `'native'` or
+`'native-smooth'` according to `radar_smooth` for eligible Level III N0B;
+otherwise it returns the existing IEM Smooth boolean. All four have separate
+revision directories, PNG metadata revisions and disk-key suffixes. Native
+Smooth uses `level3-n0b-n0h-mosaic-v7-dbz-bilinear-v1`, advertised by
+`.native-smooth-revision`; plain native retains `.native-revision` and v7.
+Frame mosaic keys and sidecar revisions include the selected render revision,
+including prefetch and restart recovery. Metadata cannot cross-serve variants.
+All four trees share the existing 8,000–12,000 file / 64–256 million byte
+inventory caps and oldest-first eviction; decoded source scans are reusable.
+Smooth geometry stores two extra float32 fields under the same 48 MiB LRU
+cap, with a distinct geometry key. The common render semaphore charges a
+conservative `1 MiB + size² × max(192 + 20×sites, 16 + 32×sites)` bytes,
+including cold projection/interpolation, within the existing 80 MB budget.
+
+`radar.native` is true for either native variant. `radar.smooth` and
+`tiles.smooth` are true for either smoothed variant. Tile size stays 256.
+Native unmatched/ambiguous counts remain zero and `remapped` true.
+`radar.nativeFallback` contains `active` (true only for published IEM site
+frames), `reason` (`level3-unreachable`, `level3-stalled`, `daily-limit`, or
+null), and `recovering` (true when IEM remains displayed after validated N0B
+acquisition; timeout expiry alone is not recovery). There is no `renderPref`.
+
+`tools/benchmark_radar_native_smooth.py` measures one/four sites at z8–10,
+warm/cold projection, render and PNG costs, and peak allocations, without
+networking. `tools/screenshot_radar_native_smooth.py --output <scratchpad>/smooth
+--prepare-only` prepares twelve map previews plus tiles/payloads. Run without
+`--prepare-only` outside the sandbox for twelve production-page Chromium
+screenshots (Smooth off/on, z8/9/10, paper/night). All browser requests are
+fulfilled locally by Playwright routes; no server or LAN access is needed.
+The default fixture is explicitly synthetic storm-shaped Level III geometry;
+`--n0b` and `--n0h` accept existing local observed products.
+
+Local arm64 macOS/Python 3.11 measurements (24 timed renders per case,
+2026-10-09, synthetic storm-shaped fixture; milliseconds per 256px tile):
+
+| Sites | Zoom | Warm off | Warm on | On p95 | On including PNG |
+|---|---|---|---|---|---|
+| 1 | 8 | 0.850 | 1.963 | 2.001 | 2.128 |
+| 1 | 9 | 0.830 | 2.490 | 2.697 | 2.752 |
+| 1 | 10 | 0.864 | 3.246 | 3.336 | 3.648 |
+| 4 | 8 | 3.816 | 8.407 | 9.089 | 8.744 |
+| 4 | 9 | 3.903 | 9.898 | 11.202 | 10.351 |
+| 4 | 10 | 3.961 | 12.353 | 13.044 | 12.873 |
+
+These are host measurements, **not Pi 4 timings**. No Pi was contacted.
+The benchmark emits cold timings and allocation peaks as JSON as well.
+Numeric support is compacted before interpolation; clear/missing samples do
+not allocate stencils. There are no extra products or provider requests,
+no additional samples above z7, and no Python loop per pixel. Target-hardware
+latency still requires running the same offline benchmark on a Pi 4.
+
 The page uses the drawn/staged manifest for captions, retaining the old loop
 until the replacement newest frame decodes. Native attribution reads `NOAA Level III`.
 `/health.radar.nativeFallback` retains the host diagnostics (`active`,

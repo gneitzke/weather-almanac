@@ -10,34 +10,86 @@ import os
 import re
 import time
 from collections import OrderedDict
-from threading import BoundedSemaphore, RLock
+from threading import Condition, RLock
 
 import numpy as np
 
 from lib.radar_level3 import (Scan, NATIVE_REVISION, EARTH_RADIUS_M,
-    EFFECTIVE_RADIUS_M, GATE_METERS, _tile_lonlat, colour_table, floor_code)
+    EFFECTIVE_RADIUS_M, GATE_METERS, _tile_lonlat, colour_table, floor_code, interpolate_codes)
 from lib.radar_palette import DISPLAY_FLOOR_DBZ
 from lib.radar_geometry import (circle_intersects_bounds, world_inverse,
                                 EARTH_RADIUS_METERS)
 
-# A render has one cold projection at a time (at most twelve float64
-# sample arrays, including ufunc temporaries), plus 12 bytes/sample/candidate
-# for preceding projections and sampled codes. Ownership sorting separately
-# needs 26 bytes/sample/candidate plus 16 bytes/sample for masks and indices.
-# Charge cold geometry
-# even if it will be admitted to the independent retained cache. The fixed MiB
-# covers the 256px indexed Pillow output, palette and small Python allocations.
+# Charge cold geometry even when it enters the separate retained LRU. The
+# non-Smooth renderer has one cold projection at a time (at most twelve
+# float64 sample arrays), plus 12 bytes/sample/contributor for earlier
+# projections and sampled codes. Sorting then needs 26 bytes/contributor plus
+# 16 bytes/sample. Smooth adds polar coordinates, a four-corner stencil and
+# float dBZ temporaries: 192 bytes/sample plus 20/contributor in that phase;
+# its sorting phase needs 32/contributor plus 16/sample. The fixed MiB covers
+# indexed Pillow output, palette and small Python allocations.
 RENDER_MAX_CANDIDATES = 4
 RENDER_TRANSIENT_BYTES = 80_000_000
+RENDER_FIXED_BYTES = 1024**2
 
 
-def render_peak_bytes(size, candidates):
-    return 1024**2 + size*size*max(96 + 12*candidates, 16 + 26*candidates)
+def render_peak_bytes(size, candidates, *, smooth=False):
+    """Conservative transient bound for this tile's actual contributors."""
+    if not 0 <= candidates <= RENDER_MAX_CANDIDATES:
+        raise ValueError('mosaic render supports at most four candidates')
+    # With no intersecting contributor, mosaic_codes only owns result and
+    # coverage. In particular, it cannot enter either per-site work phase.
+    if not candidates:
+        return RENDER_FIXED_BYTES + size*size*(5 if smooth else 2)
+    if smooth:
+        per_sample = max(192 + 20*candidates, 16 + 32*candidates)
+    else:
+        per_sample = max(96 + 12*candidates, 16 + 26*candidates)
+    return RENDER_FIXED_BYTES + size*size*per_sample
 
 
 RENDER_PEAK_BYTES = render_peak_bytes(512, RENDER_MAX_CANDIDATES)
-RENDER_SLOT_COUNT = max(1, min(os.cpu_count() or 1, RENDER_TRANSIENT_BYTES // RENDER_PEAK_BYTES))
-_RENDER_SLOTS = BoundedSemaphore(RENDER_SLOT_COUNT)
+# This remains the HEAD e084f78 full-size non-Smooth limit (two on a Pi 4).
+# Smaller tiles and Smooth/non-Smooth mixes are admitted by bytes below, up to
+# the available CPU workers, rather than being charged this global worst case.
+RENDER_WORKER_LIMIT = max(1, os.cpu_count() or 1)
+RENDER_SLOT_COUNT = max(1, min(RENDER_WORKER_LIMIT, RENDER_TRANSIENT_BYTES // RENDER_PEAK_BYTES))
+
+
+class _RenderAdmission:
+    """Bound aggregate render working sets, not merely render count."""
+    def __init__(self, budget, workers):
+        self.budget, self.workers = budget, workers
+        self.reserved = self.active = 0
+        self._condition = Condition()
+
+    def acquire(self, amount, timeout=None):
+        if amount > self.budget:
+            return False
+        end = None if timeout is None else time.monotonic() + timeout
+        with self._condition:
+            while self.active >= self.workers or self.reserved + amount > self.budget:
+                if end is None:
+                    self._condition.wait()
+                    continue
+                remaining = end - time.monotonic()
+                if remaining <= 0:
+                    return False
+                self._condition.wait(remaining)
+            self.reserved += amount
+            self.active += 1
+            return True
+
+    def release(self, amount):
+        with self._condition:
+            self.reserved -= amount
+            self.active -= 1
+            if self.reserved < 0 or self.active < 0:
+                raise RuntimeError('render admission underflow')
+            self._condition.notify_all()
+
+
+_RENDER_SLOTS = _RenderAdmission(RENDER_TRANSIENT_BYTES, RENDER_WORKER_LIMIT)
 GEOMETRY_MAX_BYTES = 48 * 1024 * 1024
 _GEOMETRY = OrderedDict()
 _GEOMETRY_LOCK = RLock()
@@ -115,14 +167,40 @@ def _intersects(scan, z, x, y, radius):
         dict(n=north, s=south, w=west, e=east))
 
 
-def _geometry(site, z, x, y, size, radius, cache_geometry=True):
+def render_admission_bytes(scans, z, x, y, radius=230000, *, smooth=False):
+    """Bound a render from its sampled tile size and contributing sites.
+
+    The intersection test is the same conservative test mosaic_codes uses
+    before allocating a projection. A scan outside the tile cannot reach a
+    per-site work phase, so it must not consume a site's reservation.
+    """
+    size = 512 if z < 8 else 256
+    contributors = sum(_intersects(scan, z, x, y, radius) for scan in scans)
+    return render_peak_bytes(size, contributors, smooth=smooth)
+
+
+def _acquire_render(amount, timeout):
+    """Keep the old semaphore seam usable by deadline tests."""
+    if isinstance(_RENDER_SLOTS, _RenderAdmission):
+        return _RENDER_SLOTS.acquire(amount, timeout)
+    return _RENDER_SLOTS.acquire(timeout=timeout)
+
+
+def _release_render(amount):
+    if isinstance(_RENDER_SLOTS, _RenderAdmission):
+        _RENDER_SLOTS.release(amount)
+    else:
+        _RENDER_SLOTS.release()
+
+
+def _geometry(site, z, x, y, size, radius, cache_geometry=True, smooth=False):
     """Volume-independent bearing bin, gate and beam height, byte-bounded LRU.
 
     Cache bearing bins, not radial rows: azimuth tables can differ by volume.
     Compute gate boundaries in float64 before compacting the integer result.
     """
     global _GEOMETRY_BYTES, _GEOMETRY_HITS, _GEOMETRY_MISSES
-    key = (*site, z, x, y, size, radius)
+    key = (*site, z, x, y, size, radius, smooth)
     with _GEOMETRY_LOCK:
         cached = _GEOMETRY.get(key)
         if cached is not None:
@@ -158,6 +236,8 @@ def _geometry(site, z, x, y, size, radius, cache_geometry=True):
     gates = np.clip(slant/GATE_METERS, 0, 32767).astype(np.uint16)
     bins = ((bearing*10).astype(np.uint16) % 3600)
     cached = (region, bins, gates, altitude.astype(np.float32))
+    if smooth:
+        cached += (bearing.astype(np.float32), (slant/GATE_METERS).astype(np.float32))
     for array in cached[1:]:
         array.flags.writeable = False
     length = sum(array.nbytes for array in cached[1:])
@@ -172,7 +252,7 @@ def _geometry(site, z, x, y, size, radius, cache_geometry=True):
 
 
 def mosaic_codes(scans, z, x, y, size=256, radius=230000, filtered=None, *, cache_geometry=True,
-                 with_coverage=False):
+                 with_coverage=False, smooth=False):
     """Lowest echo wins; lower filtered clear excludes higher unfiltered echo.
 
     Output code 0 means both "measured, below the display floor" and "no
@@ -181,7 +261,7 @@ def mosaic_codes(scans, z, x, y, size=256, radius=230000, filtered=None, *, cach
     scanned, and not a missing/range-folded gate (code 1, which QC also uses
     for removed clutter). Everything else is uncovered, never clear.
     """
-    result = np.zeros(size*size, np.uint8)
+    result = np.zeros(size*size, np.float32 if smooth else np.uint8)
     covered = np.zeros(size*size, bool)
     def done():
         codes = result.reshape(size, size)
@@ -196,14 +276,16 @@ def mosaic_codes(scans, z, x, y, size=256, radius=230000, filtered=None, *, cach
         if not _intersects(scan, z, x, y, radius):
             continue
         projection = _geometry((scan.lat, scan.lon, scan.height_m,
-            scan.elevation_deg), z, x, y, size, radius, cache_geometry)
+            scan.elevation_deg), z, x, y, size, radius, cache_geometry, smooth)
         if projection is None:
             continue
-        region, bins, gates, altitude = projection
+        region, bins, gates, altitude = projection[:4]
         rows = scan.bearing_index[bins]
         valid = (rows >= 0) & (gates < scan.gates) & np.isfinite(altitude)
-        codes = np.ones((size, size), np.uint8)
-        codes[region][valid] = scan.codes[rows[valid], gates[valid]]
+        codes = np.ones((size, size), np.float32 if smooth else np.uint8)
+        sampled = (interpolate_codes(scan, *projection[4:], containing=(rows, gates, bins)) if smooth else
+                   scan.codes[np.maximum(rows, 0), np.minimum(gates, scan.gates-1)])
+        codes[region][valid] = sampled[valid]
         height = np.full((size, size), np.inf, np.float32)
         height[region] = altitude
         values.append(codes.ravel())
@@ -226,34 +308,38 @@ def mosaic_codes(scans, z, x, y, size=256, radius=230000, filtered=None, *, cach
     return done()
 
 
-def render_mosaic(scans, z, x, y, palette, radius=230000, *, filtered=None, deadline=None, cache_geometry=True):
+def render_mosaic(scans, z, x, y, palette, radius=230000, *, filtered=None, deadline=None, cache_geometry=True, smooth=False):
     if not scans:
         raise ValueError('mosaic render requires scan inputs')
     if len(scans) > RENDER_MAX_CANDIDATES:
         raise ValueError('mosaic render supports at most four candidates')
+    reservation = render_admission_bytes(scans, z, x, y, radius, smooth=smooth)
     remaining = None if deadline is None else max(0, deadline-time.monotonic())
-    if not _RENDER_SLOTS.acquire(timeout=remaining):
+    if not _acquire_render(reservation, remaining):
         raise TimeoutError('mosaic render slot deadline')
     try:
         if deadline is not None and time.monotonic() >= deadline:
             raise TimeoutError('mosaic render deadline')
-        return _render_mosaic(scans, z, x, y, palette, radius, filtered, cache_geometry)
+        return _render_mosaic(scans, z, x, y, palette, radius, filtered, cache_geometry, smooth)
     finally:
-        _RENDER_SLOTS.release()
+        _release_render(reservation)
 
 
-def _render_mosaic(scans, z, x, y, palette, radius, filtered=None, cache_geometry=True):
+def _render_mosaic(scans, z, x, y, palette, radius, filtered=None, cache_geometry=True, smooth=False):
     from PIL import Image
     factor = 2 if z < 8 else 1
     codes, covered = mosaic_codes(scans, z, x, y, 256*factor, radius, filtered,
-                                  cache_geometry=cache_geometry, with_coverage=True)
+                                  cache_geometry=cache_geometry, with_coverage=True, smooth=smooth)
     if factor > 1:
         codes = codes.reshape(256, factor, 256, factor).max(axis=(1, 3))
         # A pixel is covered when any of its samples was measured, so every
         # visible pixel (some sample echoed) is a covered one.
         covered = covered.reshape(256, factor, 256, factor).any(axis=(1, 3))
     slots, colours = colour_table(palette)
-    pixels = slots[codes]
+    # Palette floors are half-dBZ aligned; truncate only AFTER interpolation
+    # and mosaic selection. This is exactly the stepwise dBZ palette, not
+    # rounding reflectivity up across the 15 dBZ floor.
+    pixels = slots[codes.astype(np.uint8)]
     image = Image.fromarray(pixels, 'P')
     flat = [v for colour in colours for v in colour[:3]]
     image.putpalette(flat + [0]*(768-len(flat)))

@@ -1,0 +1,465 @@
+{
+  "radar-health.json": {
+    "ambiguousFailures": 0,
+    "attention": {
+      "byteAccounting": "response bodies read; excludes headers and transport overhead",
+      "bytesByTier": {},
+      "forced": null,
+      "frameEcho": null,
+      "glances": {
+        "days": 0,
+        "expectedNow": false,
+        "ready": false,
+        "total": 0
+      },
+      "holds": {
+        "echo": 0,
+        "forecast": false,
+        "forecastSec": 0,
+        "lightning": 0,
+        "rain": 0
+      },
+      "knobs": {
+        "frames": 1,
+        "listing": 0,
+        "prefetch": false,
+        "sentinel": 0,
+        "tier": "watch",
+        "tiles": true
+      },
+      "mode": "shadow",
+      "reason": "startup: conditions unknown",
+      "sentinel": null,
+      "since": 1735732000,
+      "tier": "watch",
+      "transitions": [],
+      "unattended": false,
+      "wakeupTs": null,
+      "waking": false,
+      "weather": false
+    },
+    "breaker": "closed",
+    "cache": {
+      "bytes": 0,
+      "files": 0,
+      "initError": null,
+      "maxBytes": 256000000,
+      "maxFiles": 12000,
+      "ready": true,
+      "startup": {}
+    },
+    "classification": {
+      "ambiguousFailures": 0,
+      "breaker": "closed",
+      "discardedHedges": 0,
+      "hedgeSuspendedSec": 0,
+      "hedges": 0,
+      "hosts": {},
+      "lastError": null,
+      "lastQcError": null,
+      "lastSuccessTs": null,
+      "localFailures": 0,
+      "qcFailures": 0,
+      "retries": 0,
+      "stallHedges": 0,
+      "successRate60s": null
+    },
+    "discardedHedges": 0,
+    "discovery": {
+      "ageSec": null,
+      "backingOff": false,
+      "expectedReadyTs": null,
+      "fastPolls": 0,
+      "lastPollTs": null,
+      "nextPollTs": null
+    },
+    "enabled": true,
+    "hedgeSuspendedSec": 0,
+    "hedges": 0,
+    "hosts": {},
+    "lastError": null,
+    "lastSuccessTs": null,
+    "localFailures": 0,
+    "mosaic": {
+      "key": null,
+      "siteFailures": {},
+      "unfilteredSites": []
+    },
+    "native": {
+      "bytesToday": 0,
+      "ceilingState": "normal",
+      "day": "2025-01-02",
+      "ledgerState": "ok"
+    },
+    "nativeFallback": {
+      "active": false,
+      "breakerOpen": false,
+      "reason": null,
+      "retrySec": null,
+      "since": null
+    },
+    "pending": {},
+    "phases": [],
+    "requests": [],
+    "retries": 0,
+    "stallHedges": 0,
+    "successRate60s": null,
+    "summary": {
+      "attentionReason": "startup: conditions unknown",
+      "attentionTier": "watch",
+      "coverage": "unknown",
+      "fallbackReason": null,
+      "initError": null,
+      "lastSuccessTs": null,
+      "newestObservationAgeSec": null,
+      "newestObservationTs": null,
+      "nextAttemptTs": null,
+      "source": null,
+      "state": "starting"
+    },
+    "warnings": {
+      "attemptedTs": null,
+      "count": 0,
+      "coverage": null,
+      "error": null,
+      "failures": 0,
+      "fetchedTs": null,
+      "query": null
+    },
+    "writtenTs": 1735732000
+  },
+  "wx.json": {
+    "alertCount": 0,
+    "alerts": [],
+    "alertsAgeSec": 90,
+    "alertsAsOf": "03:45",
+    "alertsStale": false,
+    "aqi": 27,
+    "aqiAgeSec": 120,
+    "aqiCategory": "Good",
+    "aqiForecast": [
+      [
+        1735735600,
+        31
+      ]
+    ],
+    "aqiForecastCat": "Good",
+    "aqiPeak": 31,
+    "aqiPeakTime": "1 PM",
+    "aqiPm25": 6.2,
+    "aqiStale": false,
+    "aqiTrend": "steady",
+    "aqiTrendText": "Steady",
+    "carried": false,
+    "conditions": "Clear",
+    "conditionsNote": null,
+    "currentVersion": "v1.0",
+    "date": "Wed, 01 Jan 2025",
+    "dayStartTs": 1735718400,
+    "daylight": "8h 41m",
+    "dewPoint": null,
+    "drySpellDays": null,
+    "fcAgeSec": 60,
+    "fcDaily": [
+      {
+        "code": "clear",
+        "day": "2025-01-02",
+        "hi": 74,
+        "lo": 45,
+        "pp": 5,
+        "today": false
+      }
+    ],
+    "fcDailyPct": 10.0,
+    "fcHigh": 74.0,
+    "fcHour": "This afternoon",
+    "fcHourly": [
+      [
+        1735735600,
+        70
+      ]
+    ],
+    "fcLow": 45.0,
+    "fcPrecipPct": 5.0,
+    "fcStale": false,
+    "fcWind": "9 mph S",
+    "feelsDesc": null,
+    "feelsLike": null,
+    "humidity": 41.0,
+    "lastRainAmt": null,
+    "lastRainDate": null,
+    "latestVersion": "v1.0",
+    "lightning3hr": null,
+    "lightningActive": false,
+    "lightningDist": null,
+    "lightningDistNum": null,
+    "lightningDistUnit": null,
+    "lightningLast": null,
+    "lightningRate": null,
+    "lightningSinceSec": null,
+    "lightningToday": null,
+    "lightningTs": null,
+    "locationLine": "Fixture Station \u00b7 47.61\u00b0 N \u00b7 122.33\u00b0 W",
+    "moonIllum": 12.0,
+    "moonPhase": "Waxing Crescent",
+    "moonrise": "10:04",
+    "moonset": "20:11",
+    "nextFull": "2025-01-13",
+    "nextNew": null,
+    "obsAgeSec": 75,
+    "obsHigh": null,
+    "obsHighTime": null,
+    "obsLow": null,
+    "obsLowTime": null,
+    "obsTs": 1735731925,
+    "peakSun": null,
+    "radUnit": "W/m2",
+    "radar": {
+      "acquiredTs": null,
+      "advertisedTs": null,
+      "ageSec": null,
+      "attention": {
+        "frames": 1,
+        "mode": "shadow",
+        "reason": "startup: conditions unknown",
+        "since": 1735732000,
+        "tier": "watch",
+        "tiles": true,
+        "unattended": false,
+        "waiting": false,
+        "waking": false,
+        "weather": false
+      },
+      "attribution": "RainViewer",
+      "attributionUrl": "https://www.rainviewer.com/",
+      "available": false,
+      "cadenceSec": 600,
+      "camera": null,
+      "center": null,
+      "completeFrameCount": 0,
+      "fetchedAt": null,
+      "frameCount": 0,
+      "frameSpacingSec": null,
+      "geo": null,
+      "geometry": null,
+      "historyGaps": false,
+      "historySpanSec": 0,
+      "intent": {},
+      "latestOnly": false,
+      "legend": {
+        "bands": [
+          {
+            "end": "#43A05D",
+            "hi": 20,
+            "lo": 15,
+            "start": "#66A678"
+          },
+          {
+            "end": "#209143",
+            "hi": 25,
+            "lo": 20,
+            "start": "#43A05D"
+          },
+          {
+            "end": "#11672D",
+            "hi": 35,
+            "lo": 25,
+            "start": "#088A34"
+          },
+          {
+            "end": "#B0870D",
+            "hi": 40,
+            "lo": 35,
+            "start": "#C79C14"
+          },
+          {
+            "end": "#D2700F",
+            "hi": 45,
+            "lo": 40,
+            "start": "#E5871A"
+          },
+          {
+            "end": "#C94C0C",
+            "hi": 50,
+            "lo": 45,
+            "start": "#DE5C17"
+          },
+          {
+            "end": "#BC2A1A",
+            "hi": 60,
+            "lo": 50,
+            "start": "#DD4530"
+          },
+          {
+            "end": "#A9389B",
+            "hi": 70,
+            "lo": 60,
+            "start": "#CE4E88"
+          },
+          {
+            "end": "#8A46C2",
+            "hi": 75,
+            "lo": 70,
+            "start": "#8A46C2"
+          }
+        ],
+        "floorDbz": 15,
+        "id": "almanac-reflectivity-v3"
+      },
+      "loopFrames": null,
+      "native": false,
+      "nativeBudget": {
+        "bytesToday": 0,
+        "ceilingState": "normal",
+        "day": "2025-01-02",
+        "ledgerState": "ok"
+      },
+      "nativeFallback": {
+        "active": false,
+        "reason": null,
+        "recovering": false
+      },
+      "nexrad": null,
+      "observedAt": null,
+      "observedRange": null,
+      "observedTs": null,
+      "partialCoverage": false,
+      "pending": {},
+      "provider": "rainviewer",
+      "reason": "no data yet",
+      "refresh": {
+        "frameIndex": 0,
+        "frameTotal": 0,
+        "state": "idle"
+      },
+      "rings": [],
+      "scaleChoices": [
+        {
+          "label": "5 mi",
+          "meters": 8046.72
+        },
+        {
+          "label": "10 mi",
+          "meters": 16093.44
+        },
+        {
+          "label": "20 mi",
+          "meters": 32186.88
+        },
+        {
+          "label": "25 mi",
+          "meters": 40233.6
+        },
+        {
+          "label": "50 mi",
+          "meters": 80467.2
+        },
+        {
+          "label": "100 mi",
+          "meters": 160934.4
+        },
+        {
+          "label": "150 mi",
+          "meters": 241401.6
+        },
+        {
+          "label": "200 mi",
+          "meters": 321868.8
+        },
+        {
+          "label": "250 mi",
+          "meters": 402336.0
+        }
+      ],
+      "scanCadenceSec": null,
+      "scanLatencySec": null,
+      "scanMode": null,
+      "scanModeSource": null,
+      "scanningSlowly": false,
+      "siteId": null,
+      "sites": [],
+      "sitesConsidered": 0,
+      "sitesDrawn": 0,
+      "smooth": false,
+      "sourceId": "rainviewer",
+      "sourceMode": "mosaic",
+      "sources": [],
+      "stale": false,
+      "staleSec": 1200,
+      "starting": {
+        "cacheFiles": 0,
+        "phase": "acquire",
+        "sinceSec": 0
+      },
+      "switchDeadlineSec": 20,
+      "tiles": {
+        "frames": []
+      },
+      "units": "mi",
+      "updatedAt": null,
+      "warnings": {
+        "available": true,
+        "fetchedTs": null,
+        "items": [],
+        "refreshFailedAt": null,
+        "stale": true,
+        "staleAt": null
+      },
+      "zoomAuto": true,
+      "zoomAutoLevel": 7,
+      "zoomCapped": true,
+      "zoomDesired": null,
+      "zoomMax": 7,
+      "zoomMin": 4,
+      "zoomSource": "RainViewer"
+    },
+    "radiation": 450.0,
+    "rainMonth": null,
+    "rainRate": 0.0,
+    "rainRateInstMm": 0.0,
+    "rainRateMm": 0.0,
+    "rainStatus": "Dry",
+    "rainToday": null,
+    "rainUnit": "in",
+    "rainYear": null,
+    "rainYest": null,
+    "sagerCode": null,
+    "sagerIssued": "Morning",
+    "sagerPressure": null,
+    "sagerSky": null,
+    "sagerText": "Fair",
+    "sagerWind": null,
+    "slp": null,
+    "slp24High": null,
+    "slp24HighTime": null,
+    "slp24Low": null,
+    "slp24LowTime": null,
+    "slpOutlook": null,
+    "slpSeries": [],
+    "slpTrendDesc": null,
+    "slpTrendPerHr": null,
+    "slpUnit": null,
+    "station": "Fixture Station",
+    "sunFrac": 0.0,
+    "sunrise": "07:51",
+    "sunset": "16:32",
+    "temp": 72.0,
+    "temp24hDelta": null,
+    "tempTrendPerHr": null,
+    "tempUnit": "F",
+    "tillSunset": "12h 45m",
+    "time": "03:46",
+    "ts": 1735732000,
+    "updateAvailable": false,
+    "uvDesc": "High",
+    "uvIndex": 6.0,
+    "windAvg": null,
+    "windCardinal": "S",
+    "windDir": 180.0,
+    "windGust": null,
+    "windMax": null,
+    "windSpd": 8.0,
+    "windStatus": "Gentle Breeze",
+    "windUnit": "mph"
+  }
+}

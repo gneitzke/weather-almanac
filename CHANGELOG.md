@@ -7,6 +7,13 @@ to shared upstream code that the classic console benefits from too.
 ## 2026-10-09
 
 ### Radar
+- **Smooth works in native high-resolution radar.** Interpolates neighbouring
+  Level III gates in dBZ before colour mapping, after categorical HCA QC.
+  Missing/folded gates and coverage gaps remain intact; the display floor stays
+  15 dBZ. Native Smooth has a separate immutable tile/frame identity within
+  the existing shared cache caps. The button works in both themes through the
+  existing preference, camera ownership and debounce flow. Offline timing and
+  z8–10 comparison generators accompany synthetic-gate and integration tests.
 - **Warning-box review fixes.** Cancellation follows CAP references and segment
   UGC/geometry scope, including reference chains. Every reachable warning and
   polygon component is retained in local-first order; distant tornadoes cannot

@@ -1342,7 +1342,7 @@
             <span class="rad-zoom-mode" id="rad-zoom-mode" aria-live="polite">Auto</span></span>
           <button class="rad-step" id="rad-zoom-in" type="button" aria-label="Zoom in — closer">+</button>
           <button class="rad-reset" id="rad-zoom-reset" type="button" aria-label="Reset zoom to automatic" hidden>&#8635;</button>
-          <button class="rad-reset rad-smooth" id="rad-smooth" type="button" aria-label="Smooth reflectivity" title="Softens gate edges; tiles stay 256 px. At zoom 7 they display 1:1. Enlarged views add no measured detail." aria-pressed="false">SMOOTH</button>
+          <button class="rad-reset rad-smooth" id="rad-smooth" type="button" aria-label="Smooth reflectivity" title="Interpolates reflectivity before colouring native Level III or IEM tiles. Adds no measured detail." aria-pressed="false">SMOOTH</button>
           <button class="rad-reset rad-warn-toggle" id="rad-warnings" type="button" aria-label="Warning areas" title="NWS storm-based warning areas (tornado, severe thunderstorm, flash flood, marine, snow squall, extreme wind, dust storm)" aria-pressed="true" hidden><span class="rad-warn-toggle-k">Warning areas</span><span class="rad-warn-toggle-v" id="rad-warnings-count"></span></button>
         </div>
         <div id="rad-note" role="status" aria-live="polite" data-shown="false"></div>
@@ -3093,7 +3093,7 @@
     if(!pending){radarCancelJobs();radarCompositeJob=null;radarView.transition=(radarView.transition||0)+1;pending={frames:[],camera:{...radarCamera}};}
     var held=new Map(pending.frames.map(f=>[radarFrameKey(f),f]));
     pending.frames=(r.tiles.frames||[]).slice(-8).map(f=>{
-      var identity={...f,sourceId:r.sourceId,revision:r.tiles.revision,smooth:!!r.tiles.smooth,remapRevision:r.tiles.remapRevision};
+      var identity={...f,sourceId:r.sourceId,revision:r.tiles.revision,smooth:!!r.tiles.smooth,native:!!r.native,remapRevision:r.tiles.remapRevision};
       var key=radarFrameKey(identity),old=held.get(key);held.delete(key);return Object.assign(old||{},identity);
     });
     for(var f of held.values())if(f.bitmap){f.bitmap.close();delete f.bitmap;}
@@ -3227,19 +3227,19 @@
   function radarEchoPaint(f,ctx=$('rad-echo').getContext('2d')) {
     if(!f){ctx.clearRect(0,0,956,490);return;}
     if(f.bitmap&&JSON.stringify(f.camera)===JSON.stringify(radarCamera)){
-      ctx.clearRect(0,0,956,490);ctx.imageSmoothingEnabled=!!f.smooth;ctx.drawImage(f.bitmap,0,0);
+      ctx.clearRect(0,0,956,490);ctx.imageSmoothingEnabled=!!f.smooth&&!f.native;ctx.drawImage(f.bitmap,0,0);
       $('rad-plate').setAttribute('aria-label','Reflectivity radar'+(f.siteScans?.length?' · '+f.siteScans.map(s=>s.id).join(', '):''));
       radarView.clear=f.ready&&!f.hasEcho&&f.legend?.remapped!==false&&radarCovered(f)&&radarTileSet(radarCamera,radarLevel()).every(t=>radarExpected(f,t));return;
     }
     var z=radarLevel(),p=radarWorldPoint(radarCamera.lat,radarCamera.lon,z),s=2**(radarCamera.zoom-z),drawn=[],hasEcho=false,gaps=0;
-    ctx.clearRect(0,0,956,490);ctx.imageSmoothingEnabled=!!f.smooth;
+    ctx.clearRect(0,0,956,490);ctx.imageSmoothingEnabled=!!f.smooth&&!f.native;
     // A playing history scan has a measured plate bitmap, even after its tiles
     // leave the LRU. Reproject that retained region while missing tiles load.
     var retained=f.bitmap&&f.camera&&JSON.stringify(f.camera)!==JSON.stringify(radarCamera);
-    if(retained){hasEcho=f.hasEcho;var origin=radarWorldPoint(f.camera.lat,f.camera.lon,radarCamera.zoom),cp=radarWorldPoint(radarCamera.lat,radarCamera.lon,radarCamera.zoom),rs=2**(radarCamera.zoom-f.camera.zoom);ctx.imageSmoothingEnabled=!!f.smooth;ctx.drawImage(f.bitmap,Math.round(478+origin[0]-cp[0]-478*rs),Math.round(245+origin[1]-cp[1]-245*rs),Math.round(956*rs),Math.round(490*rs));ctx.save();ctx.beginPath();ctx.rect(0,0,956,490);ctx.rect(Math.round(478+origin[0]-cp[0]-478*rs),Math.round(245+origin[1]-cp[1]-245*rs),Math.round(956*rs),Math.round(490*rs));ctx.clip('evenodd');}
+    if(retained){hasEcho=f.hasEcho;var origin=radarWorldPoint(f.camera.lat,f.camera.lon,radarCamera.zoom),cp=radarWorldPoint(radarCamera.lat,radarCamera.lon,radarCamera.zoom),rs=2**(radarCamera.zoom-f.camera.zoom);ctx.imageSmoothingEnabled=!!f.smooth&&!f.native;ctx.drawImage(f.bitmap,Math.round(478+origin[0]-cp[0]-478*rs),Math.round(245+origin[1]-cp[1]-245*rs),Math.round(956*rs),Math.round(490*rs));ctx.save();ctx.beginPath();ctx.rect(0,0,956,490);ctx.rect(Math.round(478+origin[0]-cp[0]-478*rs),Math.round(245+origin[1]-cp[1]-245*rs),Math.round(956*rs),Math.round(490*rs));ctx.clip('evenodd');}
     var counts={opaquePixels:0,unmatchedPixels:0,ambiguousPixels:0};
     for(var t of radarTileSet(radarCamera,z)) {var x=Math.round(478+(t.x*256-p[0])*s),y=Math.round(245+(t.y*256-p[1])*s),right=Math.round(478+((t.x+1)*256-p[0])*s),bottom=Math.round(245+((t.y+1)*256-p[1])*s),found=radarFindTile(f,z,t.x,t.y);
-      if(found){ctx.imageSmoothingEnabled=!!f.smooth;ctx.drawImage(found.tile.bitmap,found.sx,found.sy,found.size,found.size,x,y,right-x,bottom-y);drawn.push(found.tile);hasEcho=hasEcho||found.tile.hasEcho;gaps+=radarGaps(found.tile.measured,found.sx,found.sy,found.size,x,y,right-x,bottom-y);}
+      if(found){ctx.imageSmoothingEnabled=!!f.smooth&&!f.native;ctx.drawImage(found.tile.bitmap,found.sx,found.sy,found.size,found.size,x,y,right-x,bottom-y);drawn.push(found.tile);hasEcho=hasEcho||found.tile.hasEcho;gaps+=radarGaps(found.tile.measured,found.sx,found.sy,found.size,x,y,right-x,bottom-y);}
     }
     if(retained)ctx.restore();
     var unique=new Set(drawn);for(var t of unique)for(var k of Object.keys(counts))counts[k]+=t.meta[k];
@@ -3261,7 +3261,7 @@
     if(!radarCompositeJob){var f=(pending?pending.frames:radarView.loaded).slice().reverse().find(f=>!f.bitmap&&performance.now()>=(f.compositeRetry||0)&&f.levels[String(z)]===true);if(!f)return;
       radarCompositeJob={f,progressAt:performance.now(),revision:radarCameraRevision,tiles:radarTileSet(radarCamera,z).filter(t=>radarExpected(f,t)),done:new Set(),sites:new Map(),hasEcho:false,uncovered:0,meta:{opaquePixels:0,unmatchedPixels:0,ambiguousPixels:0}};radarScratch.getContext('2d').clearRect(0,0,956,490);radarQueueTiles();}
     var job=radarCompositeJob,ctx=radarScratch.getContext('2d'),p=radarWorldPoint(radarCamera.lat,radarCamera.lon,z);
-    ctx.imageSmoothingEnabled=!!job.f.smooth;
+    ctx.imageSmoothingEnabled=!!job.f.smooth&&!job.f.native;
     for(var t of job.tiles){var id=t.x+'/'+t.y;if(job.done.has(id))continue;var tile=radarTiles.get(radarTileKey(job.f,z,t.x,t.y));if(!tile||tile.partial)continue;
       var scale=2**(radarCamera.zoom-z),tx=Math.round(478+(t.x*256-p[0])*scale),ty=Math.round(245+(t.y*256-p[1])*scale),side=Math.ceil(256*scale);ctx.drawImage(tile.bitmap,tx,ty,side,side);job.done.add(id);for(var site of tile.sites||[])job.sites.set(site.id,site);job.progressAt=performance.now();job.hasEcho=job.hasEcho||tile.hasEcho;job.uncovered+=radarGaps(tile.measured,0,0,256,tx,ty,side,side);for(var k of Object.keys(job.meta))job.meta[k]+=tile.meta[k];}
     if(job.done.size===job.tiles.length){if(!radarAdmit(RAD_PLATE_BYTES))return;try{job.f.bitmap=radarScratch.transferToImageBitmap();}finally{radarUnreserve(RAD_PLATE_BYTES);}job.f.camera={...radarCamera};job.f.ready=true;job.f.hasEcho=job.hasEcho;job.f.uncovered=job.uncovered;job.f.drawnSites=[...job.sites.values()];job.f.legend={remapped:job.meta.unmatchedPixels<=.02*job.meta.opaquePixels&&!job.meta.ambiguousPixels};radarCompositeJob=null;radarTrace('decoded',{stamp:job.f.stamp});radarRetirePassed();radarNoteRender();if(pending)radarAcceptSource();else{radarUpdateReady();radarLoopSync();}radarMemory();radarQueueTiles();}
@@ -3344,7 +3344,7 @@
     if(radarView.windowKey&&radarView.windowKey!==windowKey&&(!radarView.holdingWindow||radarView.good?.revision!==r.tiles.revision)){radarRetarget();}radarView.windowKey=windowKey;
     var incoming=r.tiles&&r.tiles.frames||[],frames=incoming.slice(-8),newest=r.observedTs??incoming.at(-1)?.ts??radarView.good?.ts,
       listed=new Set(incoming.map(f=>f.stamp)),have=new Map(radarView.loaded.map(f=>[radarFrameKey(f),f]));
-    radarView.loaded=frames.map(f=>{var identity={...f,sourceId:r.sourceId,revision:r.tiles.revision,smooth:!!r.tiles.smooth,remapRevision:r.tiles.remapRevision},key=radarFrameKey(identity),old=have.get(key);if(old){Object.assign(old,identity);have.delete(key);return old;}return {...identity,ready:false,hasEcho:false};});
+    radarView.loaded=frames.map(f=>{var identity={...f,sourceId:r.sourceId,revision:r.tiles.revision,smooth:!!r.tiles.smooth,native:!!r.native,remapRevision:r.tiles.remapRevision},key=radarFrameKey(identity),old=have.get(key);if(old){Object.assign(old,identity);have.delete(key);return old;}return {...identity,ready:false,hasEcho:false};});
     // An omitted scan is not a deletion. A truncated publish can arrive while
     // newest is pending; retain its decoded history until the hour expires.
     // Only decoded frames are held: an undecoded one the engine stopped listing
@@ -3708,10 +3708,9 @@
     radarIntent.timer=setTimeout(()=>{poll(immediate);},immediate?0:120);}
   // Smooth changes everyone's view, so it rides on a camera commit: the server
   // applies it only for the owner, and a tap claims ownership like a camera move.
-  $('rad-smooth').addEventListener('click',()=>{if(radarSmooth.writable===false||radarNativeActive())return;radarSmooth.value=radarSmooth.pending=!radarSmooth.value;radarZoomRender();radarIntent.edited=true;radarPostIntent(true);});
-  // v2 draws gates, not IEM colours: Smooth has nothing to soften there. Region has no single radar, so it stays v1.
+  $('rad-smooth').addEventListener('click',()=>{if(radarSmooth.writable===false)return;radarSmooth.value=radarSmooth.pending=!radarSmooth.value;radarZoomRender();radarIntent.edited=true;radarPostIntent(true);});
   function radarNativeActive(){return radarView.data?.native===true;}
-  function radarZoomRender(){var r=radarView.data,rail=$('rad-zoom');rail.hidden=!r;if(!r||!radarCamera)return;var native=radarNativeActive();$('rad-smooth').setAttribute('aria-pressed',String(!!radarSmooth.value&&!native));$('rad-smooth').setAttribute('aria-disabled',String(native));var z=Math.round(radarCamera.zoom);rail.dataset.mode=radarZoom.auto?'auto':'manual';rail.dataset.state='confirmed';rail.setAttribute('aria-busy','false');$('rad-zoom-mode').textContent=radarZoom.auto?'Auto':String(z);$('rad-zoom-reset').hidden=radarZoom.auto;$('rad-zoom-out').disabled=z<=r.zoomMin;$('rad-zoom-in').disabled=z>=10;radarView.zoomNote=r.sourceMode==='site'&&r.nativeBudget?.ledgerState==='retrying'?'Level III byte ledger retrying · bytes counted in memory':r.sourceMode==='site'&&r.nativeBudget?.ceilingState==='paused'&&!r.nativeFallback?.active?'Daily Level III limit reached':z>r.zoomMax?r.zoomSource+' reaches zoom '+r.zoomMax+' — scaled to this view.':'';radarNoteRender();}
+  function radarZoomRender(){var r=radarView.data,rail=$('rad-zoom');rail.hidden=!r;if(!r||!radarCamera)return;$('rad-smooth').setAttribute('aria-pressed',String(!!radarSmooth.value));$('rad-smooth').setAttribute('aria-disabled',String(radarSmooth.writable===false));var z=Math.round(radarCamera.zoom);rail.dataset.mode=radarZoom.auto?'auto':'manual';rail.dataset.state='confirmed';rail.setAttribute('aria-busy','false');$('rad-zoom-mode').textContent=radarZoom.auto?'Auto':String(z);$('rad-zoom-reset').hidden=radarZoom.auto;$('rad-zoom-out').disabled=z<=r.zoomMin;$('rad-zoom-in').disabled=z>=10;radarView.zoomNote=r.sourceMode==='site'&&r.nativeBudget?.ledgerState==='retrying'?'Level III byte ledger retrying · bytes counted in memory':r.sourceMode==='site'&&r.nativeBudget?.ceilingState==='paused'&&!r.nativeFallback?.active?'Daily Level III limit reached':z>r.zoomMax?r.zoomSource+' reaches zoom '+r.zoomMax+' — scaled to this view.':'';radarNoteRender();}
   // Retry epochs and their reference clock come from the same payload. A kiosk
   // wall clock can be wrong; elapsed UI/switch time is not a scheduled retry.
   function radarPendingRetry(){

@@ -137,7 +137,7 @@ class TileInventory:
         Directory discovery/cleanup must see the whole tree; MAX_ENTRIES bounds
         validation, not that metadata traversal. Only indexed files survive,
         including in a stamp where the budget expires. No symlinks are followed.
-        Both render revisions share one budget and one oldest-first eviction.
+        All render revisions share one budget and one oldest-first eviction.
 
         expire_before is a UTC stamp name ('%Y%m%d%H%M'). A stamp directory
         older than it can never be displayed again, so it is deleted with the
