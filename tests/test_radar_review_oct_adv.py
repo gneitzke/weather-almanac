@@ -17,6 +17,7 @@ import numpy as np
 import pytest
 
 from lib import almanac_emit as ae
+from lib import radar_engine
 from lib import radar_level3 as l3
 from lib import radar_mosaic as mosaic
 from lib.radar_level3 import Scan
@@ -45,7 +46,7 @@ def _drawn(frame, got):
 
 @pytest.fixture
 def three_sites(monkeypatch):
-    monkeypatch.setattr(ae, '_NEXRAD_SITES', SITES)
+    monkeypatch.setattr(radar_engine, '_NEXRAD_SITES', SITES)
 
 
 def test_a_failed_neighbour_listing_is_partial_coverage(three_sites):
@@ -53,60 +54,60 @@ def test_a_failed_neighbour_listing_is_partial_coverage(three_sites):
     sites = [dict(id='KNEA', reporting=True, reason=None),
              dict(id='KMID', reporting=None, reason='scan unavailable')]   # the listing failed
     ctx = _site_ctx(sites, {'KNEA': (T,), 'KMID': ()})
-    pairs = ae._radar_site_pairs(ctx, T, now=T+30)
+    pairs = radar_engine._radar_site_pairs(ctx, T, now=T+30)
     assert pairs == (('KNEA', T),)            # nothing to request from KMID ...
-    frame = _drawn(ae._radar_frame('iem-nexrad-n0b', T, ctx, pairs), pairs)
+    frame = _drawn(radar_engine._radar_frame('iem-nexrad-n0b', T, ctx, pairs), pairs)
     assert frame['expectedSites'] == ['KMID', 'KNEA']
     # ... and the view lies inside KNEA's range, yet KMID is missing.
-    assert ae._radar_partial_coverage('iem-nexrad-n0b', frame, ctx) is True
+    assert radar_engine._radar_partial_coverage('iem-nexrad-n0b', frame, ctx) is True
 
 
 def test_a_freshness_expired_neighbour_is_partial_coverage(three_sites):
     T = int(time.time()) // 60 * 60
     sites = [dict(id='KNEA', reporting=True, reason=None), dict(id='KMID', reporting=True, reason=None)]
     ctx = _site_ctx(sites, {'KNEA': (T-300, T), 'KMID': (T-1000,)})
-    pairs = ae._radar_site_pairs(ctx, T, now=T+30)
+    pairs = radar_engine._radar_site_pairs(ctx, T, now=T+30)
     assert pairs == (('KNEA', T),)
-    frame = _drawn(ae._radar_frame('iem-nexrad-n0b', T, ctx, pairs), pairs)
-    assert ae._radar_partial_coverage('iem-nexrad-n0b', frame, ctx) is True
+    frame = _drawn(radar_engine._radar_frame('iem-nexrad-n0b', T, ctx, pairs), pairs)
+    assert radar_engine._radar_partial_coverage('iem-nexrad-n0b', frame, ctx) is True
 
 
 def test_a_site_known_not_reporting_is_not_expected(three_sites):
     T = int(time.time()) // 60 * 60
     sites = [dict(id='KNEA', reporting=True, reason=None), dict(id='KFAR', reporting=False, reason='not reporting')]
     ctx = _site_ctx(sites, {'KNEA': (T,), 'KFAR': ()})
-    pairs = ae._radar_site_pairs(ctx, T, now=T+30)
-    frame = _drawn(ae._radar_frame('iem-nexrad-n0b', T, ctx, pairs), pairs)
+    pairs = radar_engine._radar_site_pairs(ctx, T, now=T+30)
+    frame = _drawn(radar_engine._radar_frame('iem-nexrad-n0b', T, ctx, pairs), pairs)
     assert frame['expectedSites'] == ['KNEA']
-    assert ae._radar_partial_coverage('iem-nexrad-n0b', frame, ctx) is False
+    assert radar_engine._radar_partial_coverage('iem-nexrad-n0b', frame, ctx) is False
     # A requested pair that was not acquired is still missing.
     frame = dict(frame, acquiredSites=[], siteScans=[dict(id='KNEA', ts=T-60)])
-    assert ae._radar_partial_coverage('iem-nexrad-n0b', frame, ctx) is True
+    assert radar_engine._radar_partial_coverage('iem-nexrad-n0b', frame, ctx) is True
 
 
 def test_listing_failure_end_to_end(make_emitter, hybrid, multisite):
     hybrid.view()
     e = make_emitter()
-    e._do_radar()
+    e.radar._acquire()
     r = e._build_payload()['radar']
     assert r['siteId'] == 'KNEA' and r['partialCoverage'] is False   # KFAR is not reporting: not expected
     newest = r['tiles']['frames'][-1]
     assert newest['expectedSites'] == ['KMID', 'KNEA']
 
-    listed = ae.RadarSession.open
+    listed = radar_engine.RadarSession.open
     def fetch(self, req, timeout):
         if 'operation=list' in req.full_url and parse_qs(urlsplit(req.full_url).query)['radar'] == ['MID']:
             raise urllib.error.HTTPError(req.full_url, 503, 'unavailable', {}, None)
         return listed(self, req, timeout)
-    ae.RadarSession.open = fetch
+    radar_engine.RadarSession.open = fetch
     try:
         hybrid.mono += 400
         hybrid.view()
         e = make_emitter()
-        e._do_radar()
+        e.radar._acquire()
         r = e._build_payload()['radar']
     finally:
-        ae.RadarSession.open = listed
+        radar_engine.RadarSession.open = listed
     assert r['available'] and r['siteId'] == 'KNEA'
     newest = r['tiles']['frames'][-1]
     assert [p['id'] for p in newest['siteScans']] == ['KNEA']
@@ -154,13 +155,13 @@ def test_native_tiles_carry_a_grid_from_the_validity_mask():
 
 def test_cached_tile_grid_must_agree_with_its_count(tmp_path, monkeypatch):
     from PIL.PngImagePlugin import PngInfo
-    monkeypatch.setattr(ae, 'RADAR_DIR', str(tmp_path/'radar'))
+    monkeypatch.setattr(radar_engine, 'RADAR_DIR', str(tmp_path/'radar'))
     x, y = tile_of(47.61, -122.33, 7)
     image, visible = mosaic.render_mosaic([flat_scan(0)], 7, x+1, y, source_palette('iem-nexrad-n0b'))
     good = dict(uncovered=str(image.info['radarUncoveredPixels']), grid=image.info['radarMeasuredGrid'])
     meta = dict(remapped=True, unmatchedColors=0, opaqueColors=0, unmatchedPixels=0, opaquePixels=visible,
                 ambiguousPixels=0, revision=l3.NATIVE_REVISION)
-    path = (Path(ae.RADAR_DIR)/'t'/ae._radar_render_revision('native')/'iem-nexrad-n0b'/('M'+'a'*24)/
+    path = (Path(radar_engine.RADAR_DIR)/'t'/radar_engine._radar_render_revision('native')/'iem-nexrad-n0b'/('M'+'a'*24)/
             '202609130000'/'7'/str(x+1)/f'{y}.png')
     path.parent.mkdir(parents=True)
     def save(uncovered, grid):
@@ -173,38 +174,38 @@ def test_cached_tile_grid_must_agree_with_its_count(tmp_path, monkeypatch):
             info.add_text('radarMeasuredGrid', grid)
         image.save(path, format='PNG', pnginfo=info)
     save(**good)
-    assert ae._radar_tile_metadata(path, 'iem-nexrad-n0b')['measuredGrid'] == good['grid']
+    assert radar_engine._radar_tile_metadata(path, 'iem-nexrad-n0b')['measuredGrid'] == good['grid']
     for bad in (dict(good, grid=None), dict(good, grid='f'*64), dict(good, grid='0'*63),
                 dict(uncovered='0', grid=good['grid'])):
         save(**bad)
         with pytest.raises((KeyError, ValueError)):
-            ae._radar_tile_metadata(path, 'iem-nexrad-n0b')
+            radar_engine._radar_tile_metadata(path, 'iem-nexrad-n0b')
 
 
 # ---------------------- should-fix: health coverage follows the tile grids, not sampling
 
 
 def _view_snapshot(lat, lon, zoom, frame):
-    _, _, bounds, _ = ae._radar_viewport(lat, lon, zoom, ae.RADAR_VIEWPORT_W, ae.RADAR_VIEWPORT_H)
-    return ae._RADAR_NONE._replace(available=True, reason=None, frames=(frame,), ts_frame=frame['ts'],
+    _, _, bounds, _ = radar_engine._radar_viewport(lat, lon, zoom, radar_engine.RADAR_VIEWPORT_W, radar_engine.RADAR_VIEWPORT_H)
+    return radar_engine._RADAR_NONE._replace(available=True, reason=None, frames=(frame,), ts_frame=frame['ts'],
         source_id='iem-nexrad-n0b', source_mode='site', zoom=zoom, bounds=bounds, partial_coverage=False)
 
 
 def _records(scans, lat, lon, zoom, key, stamp):
     records = {}
-    tiles, _, _, _ = ae._radar_viewport(lat, lon, zoom, ae.RADAR_VIEWPORT_W, ae.RADAR_VIEWPORT_H)
+    tiles, _, _, _ = radar_engine._radar_viewport(lat, lon, zoom, radar_engine.RADAR_VIEWPORT_W, radar_engine.RADAR_VIEWPORT_H)
     palette = source_palette('iem-nexrad-n0b')
     for x, y, _, _ in tiles:
         image, _ = mosaic.render_mosaic(scans, zoom, x, y, palette)
-        records[ae._radar_disk_key('iem-nexrad-n0b', key, stamp, zoom, x, y, 'native')] = (
+        records[radar_engine._radar_disk_key('iem-nexrad-n0b', key, stamp, zoom, x, y, 'native')] = (
             None, 0, dict(measuredGrid=image.info['radarMeasuredGrid'], uncoveredPixels=image.info['radarUncoveredPixels']))
     return records
 
 
 def _coverage(snap, records):
-    e = object.__new__(ae.AlmanacEmitter)
-    e._radar_disk_inventory = SimpleNamespace(records=records)
-    return e._radar_health_coverage(snap)
+    e = object.__new__(radar_engine.RadarEngine)
+    e._disk_inventory = SimpleNamespace(records=records)
+    return e._health_coverage(snap)
 
 
 def test_health_coverage_reads_measurement_holes(three_sites):
@@ -228,7 +229,7 @@ def test_health_coverage_sees_a_narrow_gap_between_discs(monkeypatch):
     # 17x9 sample grid can step over. The tiles' own masks cannot.
     lat, west = 40.0, -100.0
     east = west + math.degrees(470000 / (6371008.8 * math.cos(math.radians(lat))))
-    monkeypatch.setattr(ae, '_NEXRAD_SITES', {'KWWW': (lat, west, 'w'), 'KEEE': (lat, east, 'e')})
+    monkeypatch.setattr(radar_engine, '_NEXRAD_SITES', {'KWWW': (lat, west, 'w'), 'KEEE': (lat, east, 'e')})
     T, key, mid = 1789257600, 'M' + 'c'*24, (west + east) / 2
     frame = dict(ts=T, mosaicKey=key, siteScans=[dict(id='KWWW', ts=T), dict(id='KEEE', ts=T)],
                  requestedPairs=[['KEEE', T], ['KWWW', T]], expectedSites=['KEEE', 'KWWW'])
@@ -243,8 +244,8 @@ def test_iem_site_layers_use_their_range_discs(three_sites):
     assert _coverage(_view_snapshot(47.61, -122.33, 8, frame), {}) == 'full'
     assert _coverage(_view_snapshot(47.61, -119.6, 8, frame), {}) == 'partial'   # ~205 km east: the edge shows
     x, y = tile_of(47.61, -122.33, 8)
-    assert ae._radar_disc_grid('KNEA', 8, x, y) == 'f'*64
-    assert ae._radar_disc_grid('KZZZ', 8, x, y) == '0'*64
+    assert radar_engine._radar_disc_grid('KNEA', 8, x, y) == 'f'*64
+    assert radar_engine._radar_disc_grid('KZZZ', 8, x, y) == '0'*64
 
 
 # ----------------------------------- must-fix 3: radar health can never change /health

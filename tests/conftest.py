@@ -2,7 +2,7 @@ import os
 # The attention tiers change off-tab acquisition by tier and hour of day. The
 # existing suite pins the pre-tier behaviour, so it runs the policy in shadow
 # (decided and published, never applied); tests of the tiers opt in by
-# monkeypatching ae.RADAR_ATTENTION_MODE = 'active'.
+# monkeypatching radar_engine.RADAR_ATTENTION_MODE = 'active'.
 os.environ.setdefault('WFP_RADAR_ATTENTION', 'shadow')
 """ Test bootstrap for the almanac data pipeline.
 
@@ -147,11 +147,11 @@ def make_emitter(tmp_path, monkeypatch):
     to fixtures.config.make_config(); extra kwargs set instance attrs (e.g.
     _aqi=42) to stand in for the off-thread network results. """
     from lib.almanac_emit import AlmanacEmitter
-    from lib import almanac_emit
-    monkeypatch.setattr(almanac_emit, 'RADAR_DIR', str(tmp_path / 'radar'))
+    from lib import radar_engine
+    monkeypatch.setattr(radar_engine, 'RADAR_DIR', str(tmp_path / 'radar'))
     from tests.fixtures.config import make_config
 
-    def _make(scenario=None, config=None, api_data=None, **attrs):
+    def _make(scenario=None, config=None, api_data=None, output_path=None, running=False, **attrs):
         scenario = scenario or {}
         app = SimpleNamespace(
             config=make_config() if config is None else config,
@@ -162,7 +162,8 @@ def make_emitter(tmp_path, monkeypatch):
             Astro=scenario.get('Astro', {}), Sager=scenario.get('Sager', {}),
             app=app,
         )
-        emitter = AlmanacEmitter(screen, output_path=str(tmp_path / 'wx.json'), interval=2.0)
+        emitter = AlmanacEmitter(screen, output_path=output_path or str(tmp_path / 'wx.json'), interval=2.0)
+        emitter._runtime.running = running
         for key, value in attrs.items():
             setattr(emitter, key, value)
         return emitter

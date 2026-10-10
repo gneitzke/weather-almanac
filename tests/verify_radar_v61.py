@@ -54,7 +54,7 @@ def main():
         palette = types.ModuleType('baseline_palette'); palette.__file__ = rp.__file__
         exec(compile(subprocess.check_output(['git','show','7afbb3f:lib/radar_palette.py']), 'baseline_palette', 'exec'), palette.__dict__)
     results = []
-    with patch.object(smooth, 'rp', palette), patch.object(ae, 'SMOOTH_REVISION', palette.SMOOTH_REVISION), radar_server() as server, sync_playwright() as p:
+    with patch.object(smooth, 'rp', palette), patch.object(radar_engine, 'SMOOTH_REVISION', palette.SMOOTH_REVISION), radar_server() as server, sync_playwright() as p:
         if args.baseline:
             (server.root/'index.html').write_bytes(subprocess.check_output(['git','show','7afbb3f:design/almanac/console_live.html']))
         smooth.smooth_fixtures(server)

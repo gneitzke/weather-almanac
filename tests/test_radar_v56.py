@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from PIL import Image
 from lib import almanac_emit as ae, radar_palette as rp
+from lib import radar_engine
 from lib.radar_cache import TileInventory
 from tests.test_radar_hybrid import hybrid  # noqa: F401
 from tests.test_freshness_health import _load_serve, _payload
@@ -109,37 +110,37 @@ def test_durable_atomic_changed_only(monkeypatch,tmp_path):
 def test_engine_variants_reuse_native_bytes_and_restart(make_emitter,hybrid,tmp_path):
     image=gates('iem-mrms-lcref',[84,144]*32768,(256,256))
     out=io.BytesIO();image.save(out,'PNG');hybrid.tile=out.getvalue()
-    emitter=make_emitter();emitter._do_radar()
-    old=emitter._radar_result.tiles
+    emitter=make_emitter();emitter.radar._acquire()
+    old=emitter.radar._result.tiles
     assert old['smooth'] is False and old['tileSize']==256
     (tmp_path/'radar_smooth').write_text('on')
-    hybrid.calls.clear();emitter._do_radar()
-    new=emitter._radar_result.tiles
+    hybrid.calls.clear();emitter.radar._acquire()
+    new=emitter.radar._result.tiles
     assert new['smooth'] is True and new['tileSize']==256
     assert new['revision'] != old['revision']
     assert new['geometry']==old['geometry'] and emitter._build_payload()['radar']['smooth'] is True
     assert not any('/tile.py/' in c[2] for c in hybrid.calls)
-    assert any(len(k)==7 for k in emitter._radar_disk_inventory.records)
-    assert any(len(k)==6 for k in emitter._radar_disk_inventory.records)
-    for key,(path,_,_) in emitter._radar_disk_inventory.records.items():
-        ae._radar_tile_metadata(path,key[0])
-    hybrid.calls.clear();restart=make_emitter();restart._do_radar()
+    assert any(len(k)==7 for k in emitter.radar._disk_inventory.records)
+    assert any(len(k)==6 for k in emitter.radar._disk_inventory.records)
+    for key,(path,_,_) in emitter.radar._disk_inventory.records.items():
+        radar_engine._radar_tile_metadata(path,key[0])
+    hybrid.calls.clear();restart=make_emitter();restart.radar._acquire()
     assert not any('/tile.py/' in c[2] for c in hybrid.calls)
-    assert restart._radar_disk_inventory.startup['files']==len(emitter._radar_disk_inventory)
-    assert any(len(k)==7 for k in restart._radar_disk_inventory.records)
-    assert restart._radar_result.tiles['smooth'] is True
-    assert restart._radar_disk_inventory.bytes==emitter._radar_disk_inventory.bytes
-    (tmp_path/'radar_smooth').write_text('off');emitter._do_radar()
-    assert emitter._radar_result.tiles['revision']==old['revision']
+    assert restart.radar._disk_inventory.startup['files']==len(emitter.radar._disk_inventory)
+    assert any(len(k)==7 for k in restart.radar._disk_inventory.records)
+    assert restart.radar._result.tiles['smooth'] is True
+    assert restart.radar._disk_inventory.bytes==emitter.radar._disk_inventory.bytes
+    (tmp_path/'radar_smooth').write_text('off');emitter.radar._acquire()
+    assert emitter.radar._result.tiles['revision']==old['revision']
     assert TileInventory.MAX_BYTES==64_000_000 and TileInventory.MAX_FILES==8000
 
 
 def test_smooth_stamp_supersedes_ordered_camera(make_emitter,hybrid,tmp_path):
     import json
     (tmp_path/'radar_intent').write_text(json.dumps(dict(seq=1,zoom=8,source='mosaic',center='station')))
-    e=make_emitter();before=e._radar_preference_stamp()
+    e=make_emitter();before=e.radar._preference_stamp()
     (tmp_path/'radar_smooth').write_text('on')
-    assert before!=e._radar_preference_stamp()
+    assert before!=e.radar._preference_stamp()
 
 
 
@@ -157,8 +158,8 @@ def test_both_variants_share_one_eviction_budget(tmp_path):
 @pytest.mark.parametrize('raw', [None,'off','ON','yes','on'+(' '*128),'on\njunk'])
 def test_engine_invalid_or_absent_defaults_off(make_emitter,hybrid,tmp_path,raw):
     if raw is not None:(tmp_path/'radar_smooth').write_text(raw)
-    e=make_emitter();e._do_radar()
-    assert e._radar_result.tiles['smooth'] is False
+    e=make_emitter();e.radar._acquire()
+    assert e.radar._result.tiles['smooth'] is False
 
 
 def test_high_mrms_index_not_clipped_before_interpolation():

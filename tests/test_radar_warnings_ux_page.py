@@ -11,6 +11,7 @@ footer, a fresh strip is drawn at full strength, and the toggle keeps one
 footprint. The page is served from memory through request interception: no
 server, no network.
 """
+from lib import radar_engine
 import re
 from pathlib import Path
 
@@ -81,7 +82,7 @@ def test_casings_contrast_with_the_strongest_echo_colours():
     # one of the two casings must reach 3:1 against every reflectivity colour
     from lib import almanac_emit as ae
     dark, light = '#080B0D', '#FFFFFF'
-    for _, rgba in ae._RADAR_LUT:
+    for _, rgba in radar_engine._RADAR_LUT:
         if len(rgba) > 3 and rgba[3] == 0:
             continue
         colour = '#%02X%02X%02X' % tuple(rgba[:3])

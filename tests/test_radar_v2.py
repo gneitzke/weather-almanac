@@ -13,6 +13,7 @@ import pytest
 from PIL import Image
 
 from lib import almanac_emit as ae
+from lib import radar_engine
 from lib import radar_http as transport
 from lib import radar_basemap as bm
 from tests.test_radar_hybrid import hybrid, png  # noqa: F401
@@ -35,11 +36,11 @@ def test_session_reuses_one_connection_and_ipv4_dns(monkeypatch):
 
 
 def test_oversized_response_discards_socket(make_emitter, monkeypatch):
-    emitter=make_emitter(); emitter._radar_session=transport.RadarSession()
-    conn=Mock(); emitter._radar_session.connections[('radar.example',443)]=[conn]
-    monkeypatch.setattr(emitter._radar_session,'open',lambda *a,**k:io.BytesIO(b'x'*(2*1024*1024+1)))
+    emitter=make_emitter(); emitter.radar._session=transport.RadarSession()
+    conn=Mock(); emitter.radar._session.connections[('radar.example',443)]=[conn]
+    monkeypatch.setattr(emitter.radar._session,'open',lambda *a,**k:io.BytesIO(b'x'*(2*1024*1024+1)))
     with pytest.raises(ValueError,match='oversized'):
-        emitter._radar_request('iem-mrms-lcref','https://radar.example/tile',ae.time.monotonic()+10)
+        emitter.radar._request('iem-mrms-lcref','https://radar.example/tile',ae.time.monotonic()+10)
     conn.close.assert_called_once()
 
 
@@ -73,54 +74,54 @@ def test_newest_advertised_scan_and_bounded_failures(make_emitter,hybrid):
         if 'mrms::' in req.full_url:
             raise urllib.error.HTTPError(req.full_url,503,'rendering',{},None)
     hybrid.failure=fail
-    emitter=make_emitter(); emitter._do_radar()
+    emitter=make_emitter(); emitter.radar._acquire()
     gets=[c[2] for c in hybrid.calls if 'mrms::' in c[2]]
     assert gets
     stamps=[datetime.strptime(u.split('lcref-')[1].split('/')[0],'%Y%m%d%H%M').replace(tzinfo=timezone.utc).timestamp() for u in gets]
     assert stamps[0] == hybrid.latest  # no artificial five-minute readiness hold
     assert all(stamps.count(t)<=12 for t in set(stamps))  # six workers, at most two attempts
-    assert emitter._radar_result.source_id=='iem-mrms-lcref'
-    assert emitter._radar_transport_failures['iem-mrms-lcref'] == 1
+    assert emitter.radar._result.source_id=='iem-mrms-lcref'
+    assert emitter.radar._transport_failures['iem-mrms-lcref'] == 1
 
 
 def test_placeholder_fail_fast(make_emitter,hybrid):
     hybrid.tile=png((255,0,0,255))
-    emitter=make_emitter(); emitter._do_radar()
+    emitter=make_emitter(); emitter.radar._acquire()
     gets=[c[2].split('lcref-')[1].split('/')[0] for c in hybrid.calls if 'mrms::' in c[2]]
     assert gets and all(gets.count(t)<=12 for t in set(gets))  # six tiles, at most two attempts
-    assert not any(k[0] == 'iem-mrms-lcref' for k in emitter._radar_tiles)
+    assert not any(k[0] == 'iem-mrms-lcref' for k in emitter.radar._tiles)
 
 
 def test_stickiness_logs_failure_then_switch_and_recovery(make_emitter,hybrid,monkeypatch):
-    emitter=make_emitter(); emitter._do_radar(); first=emitter._radar_result
+    emitter=make_emitter(); emitter.radar._acquire(); first=emitter.radar._result
     warnings=[]; infos=[]
     monkeypatch.setattr(ae.Logger,'warning',warnings.append);monkeypatch.setattr(ae.Logger,'info',infos.append)
     def fail(req,_):
         if 'iastate.edu' in req.full_url: raise OSError('test source down')
-    hybrid.failure=fail;hybrid.calls.clear();emitter._do_radar()
-    assert emitter._radar_result is first and not any(c[0]=='rainviewer' for c in hybrid.calls)
+    hybrid.failure=fail;hybrid.calls.clear();emitter.radar._acquire()
+    assert emitter.radar._result is first and not any(c[0]=='rainviewer' for c in hybrid.calls)
     assert any('iem-mrms-lcref' in w and 'test source down' in w and 'suppressed=0' in w for w in warnings)
     assert any('radar pass outcome=failed' in line and 'elapsed=' in line for line in infos)
-    hybrid.mono=241;emitter._do_radar();emitter._do_radar()
-    assert emitter._radar_result.source_id=='rainviewer'
+    hybrid.mono=241;emitter.radar._acquire();emitter.radar._acquire()
+    assert emitter.radar._result.source_id=='rainviewer'
     assert any('SWITCH iem-mrms-lcref -> rainviewer' in m for m in infos)
-    hybrid.failure=None;hybrid.latest+=600;hybrid.mono+=301;emitter._do_radar()
-    assert emitter._radar_result.source_id=='iem-mrms-lcref'
+    hybrid.failure=None;hybrid.latest+=600;hybrid.mono+=301;emitter.radar._acquire()
+    assert emitter.radar._result.source_id=='iem-mrms-lcref'
     assert any('SWITCH rainviewer -> iem-mrms-lcref' in m for m in infos)
 
 
 def test_regressed_primary_retains_newest(make_emitter,hybrid):
-    emitter=make_emitter();emitter._do_radar();snap=emitter._radar_result
-    hybrid.latest-=120;emitter._do_radar()
-    assert emitter._radar_result is snap
+    emitter=make_emitter();emitter.radar._acquire();snap=emitter.radar._result
+    hybrid.latest-=120;emitter.radar._acquire()
+    assert emitter.radar._result is snap
 
 
 @pytest.mark.parametrize('mode,expected', [('site','iem-nexrad-n0b'),('mosaic','iem-mrms-lcref')])
 def test_site_actual_scans_and_restart(make_emitter,hybrid,tmp_path,monkeypatch,mode,expected):
     # This test owns an IEM ridge transport and asserts its per-site layers.
-    monkeypatch.setattr(ae.AlmanacEmitter, '_radar_level3_down', lambda self: True)
-    monkeypatch.setattr(ae, '_NEXRAD_SITES', {'KATX': ae._NEXRAD_SITES['KATX']})
-    original=ae.RadarSession.open
+    monkeypatch.setattr(radar_engine.RadarEngine, '_level3_down', lambda self: True)
+    monkeypatch.setattr(radar_engine, '_NEXRAD_SITES', {'KATX': radar_engine._NEXRAD_SITES['KATX']})
+    original=radar_engine.RadarSession.open
     scans=[hybrid.latest-1800,hybrid.latest-1200,hybrid.latest-600,hybrid.latest]
     def fetch(self,req,timeout):
         if 'operation=list' in req.full_url:
@@ -131,10 +132,10 @@ def test_site_actual_scans_and_restart(make_emitter,hybrid,tmp_path,monkeypatch,
             hybrid.calls.append(('site','GET',req.full_url,hybrid.mono,timeout))
             return io.BytesIO(png())
         return original(self,req,timeout)
-    monkeypatch.setattr(ae.RadarSession,'open',fetch)
+    monkeypatch.setattr(radar_engine.RadarSession,'open',fetch)
     hybrid.pin(mode);(tmp_path/'radar_zoom').write_text('7');hybrid.view()
     for _ in range(2):
-        emitter=make_emitter();emitter._do_radar();r=emitter._build_payload()['radar']
+        emitter=make_emitter();emitter.radar._acquire();r=emitter._build_payload()['radar']
         assert r['sourceId']==expected and r['sourceMode']==mode
         if mode=='site':
             assert [f['ts'] for f in r['tiles']['frames']]==scans
@@ -146,13 +147,13 @@ def test_site_actual_scans_and_restart(make_emitter,hybrid,tmp_path,monkeypatch,
 
 def test_site_failure_reports_disabled_and_falls_back(make_emitter,hybrid,tmp_path,monkeypatch):
     hybrid.pin('site')
-    original=ae.RadarSession.open
+    original=radar_engine.RadarSession.open
     def fetch(self,req,timeout):
         if 'operation=list' in req.full_url: return io.BytesIO(b'{"scans":[]}')
         return original(self,req,timeout)
-    monkeypatch.setattr(ae.RadarSession,'open',fetch)
+    monkeypatch.setattr(radar_engine.RadarSession,'open',fetch)
     emitter=make_emitter()
-    for _ in range(3): emitter._do_radar(intent_triggered=False)
+    for _ in range(3): emitter.radar._acquire(intent_triggered=False)
     r=emitter._build_payload()['radar']
     assert r['sourceMode']=='mosaic' and r['sourceId']=='iem-mrms-lcref'
     assert r['sources'][1]['reason']=='not reporting' and not r['sources'][1]['available']
@@ -163,15 +164,15 @@ def test_stale_uses_source_tuned_threshold_not_bare_cadence(make_emitter, hybrid
     # Stale is the source's own stale_sec, which sits ABOVE that source's freshest
     # possible frame — a bare 3*cadence would flag every healthy MRMS scan, since
     # the adapter skips frames younger than RADAR_IEM_READY_LAG_SEC (IEM 503s them).
-    settings = ae._RADAR_SOURCES[source]
+    settings = radar_engine._RADAR_SOURCES[source]
     ss = settings['stale_sec']
-    emitter = make_emitter(); emitter._do_radar()
-    snap = emitter._radar_result._replace(cadence=settings['cadence'], stale_sec=ss)
-    at = lambda age: ae.AlmanacEmitter._radar_payload(snap, snap.ts_frame + age, timezone.utc)
+    emitter = make_emitter(); emitter.radar._acquire()
+    snap = emitter.radar._result._replace(cadence=settings['cadence'], stale_sec=ss)
+    at = lambda age: radar_engine.RadarEngine._payload(snap, snap.ts_frame + age, timezone.utc)
     assert at(ss)['staleSec'] == ss
     assert not at(ss - 1)['stale'] and at(ss)['stale']
     if source.startswith('iem'):        # the freshest frame we ever show is not stale
-        assert not at(ae.RADAR_IEM_READY_LAG_SEC + settings['cadence'])['stale']
+        assert not at(radar_engine.RADAR_IEM_READY_LAG_SEC + settings['cadence'])['stale']
 
 
 @pytest.mark.skipif(os.environ.get('RADAR_NET_TEST')!='1',reason='opt in with RADAR_NET_TEST=1')

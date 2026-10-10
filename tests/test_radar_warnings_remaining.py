@@ -225,18 +225,18 @@ def test_output_byte_ceiling_reports_failed_refresh_instead_of_partial_success(m
     first = fx.feature(now, ring=fx.OVER_STATION)
     net.answers.append(FakeResp(json.dumps(fx.collection(first))))
     e = emitter(make_emitter)
-    reach, home, _, url = e._warnings_query()
-    e._do_warnings(url, reach, home)
-    good = e._warnings.payload(now)['items']
+    reach, home, _, url = e.radar._warnings_query()
+    e.radar._do_warnings(url, reach, home)
+    good = e.radar._warnings.payload(now)['items']
     monkeypatch.setattr(nw, 'MAX_PAYLOAD_BYTES', 1000)
     huge = fx.feature(now, n=2, ring=fx.NEARBY)
     huge['properties']['instruction'] = 'Official action text. ' * 500
     net.answers.append(FakeResp(json.dumps(fx.collection(first, huge))))
-    e._do_warnings(url, reach, home)
-    payload = e._warnings.payload(time.time())
+    e.radar._do_warnings(url, reach, home)
+    payload = e.radar._warnings.payload(time.time())
     assert payload['items'] == good
     assert payload['refreshFailedAt'] is not None
-    assert e._warnings.health(time.time())['failures'] == 1
+    assert e.radar._warnings.health(time.time())['failures'] == 1
 
 
 def test_complete_official_instruction_survives_parse_and_tracker():

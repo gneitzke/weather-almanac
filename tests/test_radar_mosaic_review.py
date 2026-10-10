@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 
 from lib import almanac_emit as ae, radar_level3 as l3, radar_mosaic as mosaic
+from lib import radar_engine
 from lib.radar_palette import DISPLAY_FLOOR_DBZ
 from tests.test_radar_hybrid import hybrid  # noqa: F401
 from tests.test_radar_v3 import multisite  # noqa: F401
@@ -18,10 +19,10 @@ from tests.test_radar_mosaic import classified, scan, classes, pixels, SOURCE  #
 
 
 def frame_context(emitter):
-    result = emitter._radar_result
+    result = emitter.radar._result
     grid = result.tiles['grid']
     return dict(native=True, attention='live', zoom=result.zoom, site_id=result.site_id,
-        inventory=emitter._radar_disk_inventory,
+        inventory=emitter.radar._disk_inventory,
         tiles=[(x, y, 0, 0) for y in range(grid['y0'], grid['y0']+grid['h'])
                for x in range(grid['x0'], grid['x0']+grid['w'])])
 
@@ -43,7 +44,7 @@ def test_four_stalled_classifications_share_one_frame_wait(make_emitter, hybrid,
     reflectivity = Barrier(4)
     requests = []
     # One shared wait, not four serial ones: serial would take >= 4 x .5 s.
-    monkeypatch.setattr(ae, 'RADAR_N0H_FRAME_BUDGET_SEC', .5)
+    monkeypatch.setattr(radar_engine, 'RADAR_N0H_FRAME_BUDGET_SEC', .5)
     def acquire(site, stamp, ctx, deadline, product='N0B', volume_ts=None):
         requests.append((site, product, deadline))
         if product == 'N0B':
@@ -52,10 +53,10 @@ def test_four_stalled_classifications_share_one_frame_wait(make_emitter, hybrid,
         started.wait(timeout=2)  # would fail with serial N0H
         assert release.wait(2)
         return classes(60, ts=volume_ts)
-    monkeypatch.setattr(emitter, '_radar_level3_scan', acquire)
+    monkeypatch.setattr(emitter.radar, '_level3_scan', acquire)
     start = time.perf_counter()
     try:
-        metadata, inputs = emitter._radar_mosaic_inputs([(s, hybrid.latest) for s in ('A','B','C','D')],
+        metadata, inputs = emitter.radar._mosaic_inputs([(s, hybrid.latest) for s in ('A','B','C','D')],
             hybrid.latest, {}, 100)
         elapsed = time.perf_counter()-start
         assert len(inputs) == 4 and metadata['unfilteredSites'] == ['A','B','C','D']
@@ -65,7 +66,7 @@ def test_four_stalled_classifications_share_one_frame_wait(make_emitter, hybrid,
         # the .5 s wait and may reuse their late successes on the next pass.
     finally:
         release.set()
-        emitter._radar_hca_pool.shutdown(wait=True)
+        emitter.radar._hca_pool.shutdown(wait=True)
 
 
 def test_hca_starts_while_other_reflectivity_is_pending(make_emitter, hybrid, monkeypatch):
@@ -77,8 +78,8 @@ def test_hca_starts_while_other_reflectivity_is_pending(make_emitter, hybrid, mo
         if site == 'B':
             assert hca_started.wait(2)
         return scan(ts=stamp+24)
-    monkeypatch.setattr(emitter, '_radar_level3_scan', acquire)
-    metadata, inputs = emitter._radar_mosaic_inputs([('A',hybrid.latest),('B',hybrid.latest)],hybrid.latest,{},100)
+    monkeypatch.setattr(emitter.radar, '_level3_scan', acquire)
+    metadata, inputs = emitter.radar._mosaic_inputs([('A',hybrid.latest),('B',hybrid.latest)],hybrid.latest,{},100)
     assert len(inputs) == 2 and not metadata['unfilteredSites']
 
 
@@ -86,47 +87,47 @@ def test_restart_reuses_entire_loop_without_level3_requests(make_emitter, hybrid
     stamps = [hybrid.latest-i*120 for i in range(8)]
     for site in multisite.scans:
         multisite.scans[site] = sorted(stamps)
-    emitter = make_emitter(); emitter._do_radar()
-    frames = emitter._radar_result.frames
+    emitter = make_emitter(); emitter.radar._acquire()
+    frames = emitter.radar._result.frames
     assert len(frames) == 8 and all(f['complete'] for f in frames)
     native.calls.clear(); classified.calls.clear()
     restart = make_emitter()
-    before = restart._radar_native_budget.snapshot()['bytesToday']
-    restart._do_radar()
-    assert len(restart._radar_result.frames) == 8
-    assert all(f['complete'] for f in restart._radar_result.frames)
+    before = restart.radar._native_budget.snapshot()['bytesToday']
+    restart.radar._acquire()
+    assert len(restart.radar._result.frames) == 8
+    assert all(f['complete'] for f in restart.radar._result.frames)
     assert not native.calls and not classified.calls
-    assert restart._radar_native_budget.snapshot()['bytesToday'] == before
+    assert restart.radar._native_budget.snapshot()['bytesToday'] == before
     ctx = frame_context(restart)
     for f in frames:
-        assert restart._radar_frame_request_cost(SOURCE, ctx, f['requestedPairs'], frame_ts=f['ts']) == 0
+        assert restart.radar._frame_request_cost(SOURCE, ctx, f['requestedPairs'], frame_ts=f['ts']) == 0
 
 
 @pytest.mark.parametrize('damage', ['key', 'volume', 'filtered', 'pairs', 'oversize'])
 def test_sidecar_is_validated_before_reuse(make_emitter, hybrid, multisite, classified, damage):
-    emitter = make_emitter(); emitter._do_radar()
-    frame = emitter._radar_result.frames[-1]
-    sidecar = next(Path(ae.RADAR_DIR).glob('t/*/%s/%s/*/frame.json' % (SOURCE,frame['mosaicKey'])))
+    emitter = make_emitter(); emitter.radar._acquire()
+    frame = emitter.radar._result.frames[-1]
+    sidecar = next(Path(radar_engine.RADAR_DIR).glob('t/*/%s/%s/*/frame.json' % (SOURCE,frame['mosaicKey'])))
     value = json.loads(sidecar.read_text())
     if damage == 'key': value['mosaicKey'] = 'M'+'0'*24
     elif damage == 'volume': value['siteScans'][0]['volumeTs'] += 60
     elif damage == 'filtered': value['siteScans'][0]['filtered'] = 'yes'
     elif damage == 'pairs': value['requestedPairs'][0][1] -= 60
     sidecar.write_text('x'*8193 if damage == 'oversize' else json.dumps(value))
-    assert emitter._radar_mosaic_cached(frame['requestedPairs'],frame['ts'],frame_context(emitter)) is None
+    assert emitter.radar._mosaic_cached(frame['requestedPairs'],frame['ts'],frame_context(emitter)) is None
 
 
 def test_missing_tile_costs_inputs_and_sidecar_prunes_with_last_tile(make_emitter, hybrid, multisite, classified):
-    emitter = make_emitter(); emitter._do_radar()
-    frame = emitter._radar_result.frames[-1]; ctx = frame_context(emitter)
-    key = next(k for k in emitter._radar_disk_inventory.records if k[1] == frame['mosaicKey'])
-    emitter._radar_invalidate_tile(key)
-    assert emitter._radar_mosaic_cached(frame['requestedPairs'],frame['ts'],ctx) is None
-    emitter._radar_level3_scans.clear(); emitter._radar_level3_listings.clear()
-    assert emitter._radar_frame_request_cost(SOURCE,ctx,frame['requestedPairs'],frame_ts=frame['ts']) == 4*len(frame['siteScans'])
-    emitter._radar_disk_inventory.MAX_FILES = 0
-    emitter._radar_disk_inventory.evict()
-    assert not list(Path(ae.RADAR_DIR).glob('t/*/%s/M*/*/frame.json' % SOURCE))
+    emitter = make_emitter(); emitter.radar._acquire()
+    frame = emitter.radar._result.frames[-1]; ctx = frame_context(emitter)
+    key = next(k for k in emitter.radar._disk_inventory.records if k[1] == frame['mosaicKey'])
+    emitter.radar._invalidate_tile(key)
+    assert emitter.radar._mosaic_cached(frame['requestedPairs'],frame['ts'],ctx) is None
+    emitter.radar._level3_scans.clear(); emitter.radar._level3_listings.clear()
+    assert emitter.radar._frame_request_cost(SOURCE,ctx,frame['requestedPairs'],frame_ts=frame['ts']) == 4*len(frame['siteScans'])
+    emitter.radar._disk_inventory.MAX_FILES = 0
+    emitter.radar._disk_inventory.evict()
+    assert not list(Path(radar_engine.RADAR_DIR).glob('t/*/%s/M*/*/frame.json' % SOURCE))
 
 
 @pytest.mark.parametrize('count,kept', [(22,False),(23,True),(44,True)])
@@ -180,28 +181,28 @@ def test_real_fixture_strong_bi_gates_preserved(capsys):
 
 def test_missing_hca_eventually_allows_unchanged_and_stops_listing(make_emitter, hybrid, multisite, classified, monkeypatch):
     classified.missing.add('KMID')
-    emitter = make_emitter(); emitter._do_radar()
+    emitter = make_emitter(); emitter.radar._acquire()
     requests = len(classified.calls); builds = []
-    original = emitter._radar_fill_frame
+    original = emitter.radar._fill_frame
     def fill(*args,**kwargs):
         builds.append(args[1]); return original(*args,**kwargs)
-    monkeypatch.setattr(emitter,'_radar_fill_frame',fill)
+    monkeypatch.setattr(emitter.radar,'_fill_frame',fill)
     for _ in range(5):
         hybrid.mono += 61
-        emitter._do_radar(discovery=True,intent_triggered=False)
+        emitter.radar._acquire(discovery=True,intent_triggered=False)
     assert not builds and len(classified.calls) == requests
 
 
 def test_negative_volume_stays_negative_after_window_but_new_volume_can_fetch(make_emitter, hybrid, multisite, classified):
-    classified.missing.add('KNEA'); emitter = make_emitter(); emitter._do_radar()
+    classified.missing.add('KNEA'); emitter = make_emitter(); emitter.radar._acquire()
     count = len(classified.calls); hybrid.mono += 61
     with pytest.raises(ValueError,match='not published'):
-        emitter._radar_level3_scan('KNEA',hybrid.latest,{},100,'N0H',hybrid.latest+24)
+        emitter.radar._level3_scan('KNEA',hybrid.latest,{},100,'N0H',hybrid.latest+24)
     assert len(classified.calls) == count
     with pytest.raises(ValueError,match='not published'):
-        emitter._radar_level3_scan('KNEA',hybrid.latest+60,{},100,'N0H',hybrid.latest+84)
+        emitter.radar._level3_scan('KNEA',hybrid.latest+60,{},100,'N0H',hybrid.latest+84)
     assert len(classified.calls) > count, 'negative knowledge belongs to one volume'
-    assert len(emitter._radar_level3_failed) <= 2*ae.RADAR_LEVEL3_SCAN_CACHE
+    assert len(emitter.radar._level3_failed) <= 2*radar_engine.RADAR_LEVEL3_SCAN_CACHE
 
 
 def test_mosaic_render_concurrency_is_bounded(monkeypatch):
@@ -226,12 +227,12 @@ def test_mosaic_render_concurrency_is_bounded(monkeypatch):
 def test_prefetch_classification_budget_refusal_is_control_flow(make_emitter, hybrid, monkeypatch):
     emitter = make_emitter()
     def acquire(site, stamp, ctx, deadline, product='N0B', volume_ts=None):
-        if product == 'N0H': raise ae._RadarBudget('no classification headroom')
+        if product == 'N0H': raise radar_engine._RadarBudget('no classification headroom')
         return scan(ts=stamp+24)
-    monkeypatch.setattr(emitter,'_radar_level3_scan',acquire)
-    with pytest.raises(ae._RadarBudget,match='headroom'):
-        emitter._radar_mosaic_inputs([('KNEA',hybrid.latest)],hybrid.latest,{'prefetch':True},100)
-    assert not emitter._radar_prefetched
+    monkeypatch.setattr(emitter.radar,'_level3_scan',acquire)
+    with pytest.raises(radar_engine._RadarBudget,match='headroom'):
+        emitter.radar._mosaic_inputs([('KNEA',hybrid.latest)],hybrid.latest,{'prefetch':True},100)
+    assert not emitter.radar._prefetched
 
 
 def test_late_hca_upgrades_all_eligible_retained_frames(make_emitter, hybrid, multisite, classified, monkeypatch):
@@ -239,28 +240,28 @@ def test_late_hca_upgrades_all_eligible_retained_frames(make_emitter, hybrid, mu
     hybrid.view()  # Keep this multi-site/backfill scenario attended after moving the clock.
     for site in multisite.scans: multisite.scans[site] = [hybrid.latest-60,hybrid.latest]
     classified.missing.add('KNEA')
-    emitter = make_emitter(); emitter._do_radar()
-    old = {f['ts']:f['mosaicKey'] for f in emitter._radar_result.frames}
-    assert len(old) == 2 and all(f['unfilteredSites'] for f in emitter._radar_result.frames)
+    emitter = make_emitter(); emitter.radar._acquire()
+    old = {f['ts']:f['mosaicKey'] for f in emitter.radar._result.frames}
+    assert len(old) == 2 and all(f['unfilteredSites'] for f in emitter.radar._result.frames)
     classified.missing.clear(); hybrid.mono += 21
-    emitter._do_radar(discovery=True,intent_triggered=False)
-    assert len(emitter._radar_result.frames) == 2
-    for f in emitter._radar_result.frames:
+    emitter.radar._acquire(discovery=True,intent_triggered=False)
+    assert len(emitter.radar._result.frames) == 2
+    for f in emitter.radar._result.frames:
         assert f['complete'] and not f['unfilteredSites'] and f['mosaicKey'] != old[f['ts']]
 
 
 def test_listing_eviction_keeps_current_hour_even_if_inserted_first(make_emitter, hybrid, multisite, classified):
-    emitter = make_emitter(); emitter._do_radar()
-    cap = ae.RADAR_LEVEL3_LISTING_CACHE
-    assert cap >= ae.RADAR_SITE_MAX_COUNT*len(ae.RADAR_LEVEL3_TRANSPORTS)*3
-    emitter._radar_level3_listings.clear(); emitter._radar_level3_scans.clear()
+    emitter = make_emitter(); emitter.radar._acquire()
+    cap = radar_engine.RADAR_LEVEL3_LISTING_CACHE
+    assert cap >= radar_engine.RADAR_SITE_MAX_COUNT*len(radar_engine.RADAR_LEVEL3_TRANSPORTS)*3
+    emitter.radar._level3_listings.clear(); emitter.radar._level3_scans.clear()
     current = ('KNEW','NEW_N0B_2026_09_13_00')
-    emitter._radar_level3_listings[current] = (0,())
+    emitter.radar._level3_listings[current] = (0,())
     for i in range(cap-1):
-        emitter._radar_level3_listings[('K%03d'%i,'%03d_N0B_2026_09_12_23'%i)] = (i+1,())
-    emitter._radar_level3_scan('KNEA',hybrid.latest,{},100)
-    assert len(emitter._radar_level3_listings) == cap and current in emitter._radar_level3_listings
-    assert ('K000','000_N0B_2026_09_12_23') not in emitter._radar_level3_listings
+        emitter.radar._level3_listings[('K%03d'%i,'%03d_N0B_2026_09_12_23'%i)] = (i+1,())
+    emitter.radar._level3_scan('KNEA',hybrid.latest,{},100)
+    assert len(emitter.radar._level3_listings) == cap and current in emitter.radar._level3_listings
+    assert ('K000','000_N0B_2026_09_12_23') not in emitter.radar._level3_listings
 
 
 def test_sidecar_atomic_replace_preserves_previous_identity(tmp_path, monkeypatch):
@@ -281,7 +282,7 @@ def test_sidecar_atomic_replace_preserves_previous_identity(tmp_path, monkeypatc
 def test_server_does_not_publish_private_frame_sidecars(monkeypatch, tmp_path):
     from tests.test_freshness_health import _load_serve, _payload
     module = _load_serve(monkeypatch,tmp_path,_payload())
-    revision = ae._radar_render_revision('native')
+    revision = radar_engine._radar_render_revision('native')
     path = tmp_path/'radar'/'t'/revision/SOURCE/('M'+'a'*24)/'202609251307'/'frame.json'
     path.parent.mkdir(parents=True); path.write_text('{}')
     (tmp_path/'radar'/'.native-revision').write_text(revision)
@@ -296,19 +297,19 @@ def test_missing_hca_only_in_backfill_arms_retry_and_upgrades(make_emitter, hybr
     hybrid.view()  # Keep this multi-site/backfill scenario attended after moving the clock.
     for site in multisite.scans: multisite.scans[site] = [hybrid.latest-60,hybrid.latest]
     emitter = make_emitter(); retry = []; pending = [True]
-    acquire = emitter._radar_level3_scan
+    acquire = emitter.radar._level3_scan
     def delayed(site, stamp, ctx, deadline, product='N0B', volume_ts=None):
         if product == 'N0H' and volume_ts == hybrid.latest-36 and pending[0]:
             raise ValueError('older HCA not published yet')
         return acquire(site,stamp,ctx,deadline,product,volume_ts)
-    monkeypatch.setattr(emitter,'_radar_level3_scan',delayed)
-    monkeypatch.setattr(emitter,'_schedule_retry',lambda key,callback,timeout,**kw: retry.append((key,timeout)))
-    emitter._do_radar()
-    old, newest = emitter._radar_result.frames
+    monkeypatch.setattr(emitter.radar,'_level3_scan',delayed)
+    monkeypatch.setattr(emitter.radar,'_schedule_retry',lambda key,callback,timeout,**kw: retry.append((key,timeout)))
+    emitter.radar._acquire()
+    old, newest = emitter.radar._result.frames
     assert old['unfilteredSites'] and not newest['unfilteredSites']
     assert ('radar',20) in retry
     pending[0] = False; hybrid.mono += 21
-    emitter._do_radar(discovery=True,intent_triggered=False)
-    assert all(f['complete'] and not f['unfilteredSites'] for f in emitter._radar_result.frames)
-    assert emitter._radar_result.frames[0]['mosaicKey'] != old['mosaicKey']
-    assert emitter._radar_result.frames[-1]['mosaicKey'] == newest['mosaicKey']
+    emitter.radar._acquire(discovery=True,intent_triggered=False)
+    assert all(f['complete'] and not f['unfilteredSites'] for f in emitter.radar._result.frames)
+    assert emitter.radar._result.frames[0]['mosaicKey'] != old['mosaicKey']
+    assert emitter.radar._result.frames[-1]['mosaicKey'] == newest['mosaicKey']

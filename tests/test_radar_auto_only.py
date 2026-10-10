@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from lib import almanac_emit as ae, radar_auto as auto
+from lib import radar_engine
 from tests.test_freshness_health import _load_serve
 from tests.test_radar_hybrid import hybrid  # noqa: F401
 from tests.test_radar_v3 import multisite  # noqa: F401
@@ -22,9 +23,9 @@ RETIRED_PAYLOAD = ('sourcePref', 'sitePreferred', 'sourceFallback', 'siteResumeZ
 def test_auto_picks_site_at_the_default_kiosk_zoom_with_a_reporting_site(make_emitter, hybrid, multisite, tmp_path):
     hybrid.pin(None)  # the real policy, no pinned verdict
     assert not any((tmp_path/name).exists() for name in ('radar_zoom', 'radar_intent', 'radar_source'))
-    emitter = make_emitter(); emitter._do_radar()
-    snap = emitter._radar_result
-    assert snap.zoom_desired is None and snap.zoom_auto_level == ae._radar_zoom_for(47.61) == auto.UP_ZOOM
+    emitter = make_emitter(); emitter.radar._acquire()
+    snap = emitter.radar._result
+    assert snap.zoom_desired is None and snap.zoom_auto_level == radar_engine._radar_zoom_for(47.61) == auto.UP_ZOOM
     assert snap.source_mode == 'site' and snap.site_id == 'KNEA'
     radar = emitter._build_payload()['radar']
     assert radar['sourceMode'] == 'site' and not set(RETIRED_PAYLOAD) & set(radar)
@@ -35,12 +36,12 @@ def test_auto_picks_site_at_the_default_kiosk_zoom_with_a_reporting_site(make_em
 def test_real_site_geometry_puts_the_default_view_on_site(lat, lon):
     """Numbers, not a retune: the latitude-auto zoom is UP_ZOOM and the nearest
     radar alone covers more than MIN_COVERAGE of the default viewport."""
-    zoom = ae._radar_zoom_for(lat)
+    zoom = radar_engine._radar_zoom_for(lat)
     assert zoom == auto.UP_ZOOM
-    _, _, bounds, _ = ae._radar_viewport(lat, lon, zoom, ae.RADAR_VIEWPORT_W, ae.RADAR_VIEWPORT_H)
-    nearest = ae._radar_nexrad(lat, lon, 'mi')
-    sites = [s for s in ae._radar_sites((lat, lon), bounds)[0] if s['id'] == nearest['id']]
-    coverage = auto.coverage_fraction(bounds, sites, ae.RADAR_SITE_RANGE_METERS)
+    _, _, bounds, _ = radar_engine._radar_viewport(lat, lon, zoom, radar_engine.RADAR_VIEWPORT_W, radar_engine.RADAR_VIEWPORT_H)
+    nearest = radar_engine._radar_nexrad(lat, lon, 'mi')
+    sites = [s for s in radar_engine._radar_sites((lat, lon), bounds)[0] if s['id'] == nearest['id']]
+    coverage = auto.coverage_fraction(bounds, sites, radar_engine.RADAR_SITE_RANGE_METERS)
     assert coverage >= auto.MIN_COVERAGE
     assert auto.choose(zoom, None, True, coverage) == 'site'
 
@@ -48,9 +49,9 @@ def test_real_site_geometry_puts_the_default_view_on_site(lat, lon):
 def test_a_pre_upgrade_intent_record_cannot_choose_the_source(make_emitter, hybrid, multisite, tmp_path):
     hybrid.pin(None)
     (tmp_path/'radar_intent').write_text(json.dumps(dict(seq=7, zoom=5, source='site', sourceAcceptedAt=1., center='station')))
-    emitter = make_emitter(); emitter._do_radar()
-    assert emitter._radar_read_intent()['zoom'] == 5
-    assert emitter._radar_result.source_mode == 'mosaic'  # zoom 5 is Region, whatever the old record says
+    emitter = make_emitter(); emitter.radar._acquire()
+    assert emitter.radar._read_intent()['zoom'] == 5
+    assert emitter.radar._result.source_mode == 'mosaic'  # zoom 5 is Region, whatever the old record says
 
 
 # --- old clients ---------------------------------------------------------------------
@@ -157,6 +158,6 @@ def test_no_manual_source_machinery_remains():
     serve = Path('design/almanac/kiosk/serve.py').read_text()
     for name in ('_write_radar_source', '_expire_radar_source', '_persist_runtime', "'radarSource'"):
         assert name not in serve, name
-    emitter = Path('lib/almanac_emit.py').read_text()
-    for name in ('source_pref', '_radar_refuse_dark_site', 'site-zoom-floor', 'site-not-reporting', *RETIRED_PAYLOAD):
+    emitter = Path('lib/almanac_emit.py').read_text() + Path('lib/radar_engine.py').read_text()
+    for name in ('source_pref', '_radar_refuse_dark_site', '_refuse_dark_site', 'site-zoom-floor', 'site-not-reporting', *RETIRED_PAYLOAD):
         assert name not in emitter, name

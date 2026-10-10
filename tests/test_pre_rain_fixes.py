@@ -16,6 +16,7 @@ from types import SimpleNamespace
 import pytest
 
 from lib import almanac_emit as ae, properties
+from lib import radar_engine
 from lib.radar_attention import Attention, Signals, UNATTENDED_SEC
 from tests.fixtures.config import make_config
 from tests.test_radar_attention_serve import server  # noqa: F401
@@ -53,11 +54,11 @@ def test_live_survives_a_slow_poll_and_ends_on_the_explicit_clear(make_emitter, 
     e = make_emitter(); now = ae.time.time()
     marker = tmp_path / 'radar_viewing'
     marker.write_text(json.dumps(dict(since=now - 100, last=now - 30)))     # 30 s since the last radar poll
-    assert e._radar_viewing_now(now)
-    marker.write_text(json.dumps(dict(since=now - 100, last=now - ae.RADAR_VIEWING_LAPSE_SEC - 1)))
-    assert not e._radar_viewing_now(now)
+    assert e.radar._viewing_now(now)
+    marker.write_text(json.dumps(dict(since=now - 100, last=now - radar_engine.RADAR_VIEWING_LAPSE_SEC - 1)))
+    assert not e.radar._viewing_now(now)
     marker.unlink()
-    assert not e._radar_viewing_now(now)
+    assert not e.radar._viewing_now(now)
 
 
 # ---- 2. unattended ---------------------------------------------------------
@@ -81,7 +82,7 @@ def test_an_open_tab_without_a_touch_for_30_min_stays_live_but_stops_prefetching
 
 
 def test_unattended_is_published(make_emitter, hybrid, tmp_path, monkeypatch):
-    monkeypatch.setattr(ae, 'RADAR_ATTENTION_MODE', 'active')
+    monkeypatch.setattr(radar_engine, 'RADAR_ATTENTION_MODE', 'active')
     e = make_emitter(); now = ae.time.time()
     (tmp_path / 'radar_viewing').write_text(json.dumps(dict(since=now, last=now)))
     a = e._build_payload()['radar']['attention']

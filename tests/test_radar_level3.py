@@ -15,6 +15,7 @@ import pytest
 from PIL import Image
 
 from lib import almanac_emit as ae, radar_palette as rp
+from lib import radar_engine
 from lib import radar_level3 as l3
 from tests.test_radar_hybrid import hybrid  # noqa: F401
 from tests.test_radar_v3 import multisite  # noqa: F401
@@ -176,17 +177,17 @@ def test_match_key_uses_the_iem_minute():
 def native(hybrid, multisite, monkeypatch, tmp_path):
     """S3 routes beside the IEM fixture: listings and products for each scan."""
     # Exercise the attended full mosaic; watch has separate primary/newest tests.
-    monkeypatch.setattr(ae, 'RADAR_ATTENTION_MODE', 'active')
+    monkeypatch.setattr(radar_engine, 'RADAR_ATTENTION_MODE', 'active')
     hybrid.view()
     (tmp_path / 'radar_viewing').write_text(json.dumps(dict(since=hybrid.now, last=hybrid.now)))
     state = type('S3', (), {})()
     state.calls, state.missing, state.bad = [], set(), set()
     codes = np.zeros((720, 1840), np.uint8)
     codes[:, 40:400] = gate_code(35)  # a 10-100 km ring of moderate rain
-    opened = ae.RadarSession.open
+    opened = radar_engine.RadarSession.open
     def fetch(self, req, timeout):
         url = req.full_url
-        if url.startswith(ae.RADAR_LEVEL3_BUCKET):
+        if url.startswith(radar_engine.RADAR_LEVEL3_BUCKET):
             if '?' in url:
                 prefix = parse_qs(urlsplit(url).query)['prefix'][0]
                 state.calls.append(('list', prefix))
@@ -200,58 +201,58 @@ def native(hybrid, multisite, monkeypatch, tmp_path):
             ts = l3.s3_key_time(key)
             if ts in state.bad:
                 return io.BytesIO(b'not a product' * 50)
-            lat, lon, _ = ae._NEXRAD_SITES[site]
+            lat, lon, _ = radar_engine._NEXRAD_SITES[site]
             return io.BytesIO(product(lat=lat, lon=lon, volume_ts=ts, codes=codes))
         return opened(self, req, timeout)
-    monkeypatch.setattr(ae.RadarSession, 'open', fetch)
-    monkeypatch.setattr(ae.AlmanacEmitter, '_radar_level3_down', hybrid.level3_down)
-    monkeypatch.setattr(ae.AlmanacEmitter, '_radar_primary_only', staticmethod(hybrid.primary_only))
+    monkeypatch.setattr(radar_engine.RadarSession, 'open', fetch)
+    monkeypatch.setattr(radar_engine.RadarEngine, '_level3_down', hybrid.level3_down)
+    monkeypatch.setattr(radar_engine.RadarEngine, '_primary_only', staticmethod(hybrid.primary_only))
     return state
 
 
 def test_v2_draws_site_scans_from_level3_once_per_scan(make_emitter, hybrid, multisite, native, tmp_path):
     hybrid.view()
-    emitter = make_emitter(); emitter._do_radar()
+    emitter = make_emitter(); emitter.radar._acquire()
     r = emitter._build_payload()['radar']
     assert r['available'] and r['siteId'] == 'KNEA' and r['native'] is True and r['smooth'] is False
     assert r['tiles']['variant'] == 'native' and r['tiles']['remapRevision'] == l3.NATIVE_REVISION
-    assert r['tiles']['revision'] == ae._radar_render_revision('native')
+    assert r['tiles']['revision'] == radar_engine._radar_render_revision('native')
     assert r['attribution'] == 'NOAA NEXRAD Level III'
     assert not [c for c in multisite.calls if c[0] == 'tile'], 'v2 never fetches IEM ridge tiles'
     gets = [c[1] for c in native.calls if c[0] == 'get']
     assert len(gets) == len(set(gets)), 'one download per scan, shared by every tile thread'
-    records = {k: v for k, v in emitter._radar_disk_inventory.records.items() if k[0] == 'iem-nexrad-n0b'}
+    records = {k: v for k, v in emitter.radar._disk_inventory.records.items() if k[0] == 'iem-nexrad-n0b'}
     assert records and all(k[-1] == 'native' and len(k) == 7 for k in records)
     # Region warming beside it stays v1: MRMS has no single radar to draw.
-    assert all(len(k) == 6 for k in emitter._radar_disk_inventory.records if k[0] == 'iem-mrms-lcref')
+    assert all(len(k) == 6 for k in emitter.radar._disk_inventory.records if k[0] == 'iem-mrms-lcref')
     for key, (path, _, meta) in records.items():
-        assert Path(path).parts[-7] == ae._radar_render_revision('native')
-        assert ae._radar_tile_metadata(Path(path), key[0])['revision'] == l3.NATIVE_REVISION
+        assert Path(path).parts[-7] == radar_engine._radar_render_revision('native')
+        assert radar_engine._radar_tile_metadata(Path(path), key[0])['revision'] == l3.NATIVE_REVISION
     assert any(meta['weatherPixels'] for _, _, meta in records.values())
     # The page asks for exactly these tiles; the server marks the directory immutable.
-    assert (Path(ae.RADAR_DIR) / '.native-revision').read_text() == r['tiles']['revision']
+    assert (Path(radar_engine.RADAR_DIR) / '.native-revision').read_text() == r['tiles']['revision']
 
-    native.calls.clear(); emitter._do_radar()
+    native.calls.clear(); emitter.radar._acquire()
     assert not [c for c in native.calls if c[0] == 'get'], 'cached tiles are reused'
 
-    restart = make_emitter(); restart._do_radar()
-    assert records.keys() <= restart._radar_disk_inventory.records.keys(), 'native tiles survive a restart'
+    restart = make_emitter(); restart.radar._acquire()
+    assert records.keys() <= restart.radar._disk_inventory.records.keys(), 'native tiles survive a restart'
 
-    emitter._radar_level3_fallback(ConnectionError('test outage')); emitter._do_radar()
+    emitter.radar._level3_fallback(ConnectionError('test outage')); emitter.radar._acquire()
     assert emitter._build_payload()['radar']['native'] is False
-    assert emitter._radar_result.tiles['variant'] is False
+    assert emitter.radar._result.tiles['variant'] is False
     assert [c for c in multisite.calls if c[0] == 'tile']
 
 
 def test_v2_leaves_region_unchanged(make_emitter, hybrid, multisite, native, tmp_path):
     hybrid.pin('mosaic')
     hybrid.view()
-    emitter = make_emitter(); emitter._do_radar()
+    emitter = make_emitter(); emitter.radar._acquire()
     r = emitter._build_payload()['radar']
     assert r['sourceId'] == 'iem-mrms-lcref' and r['native'] is False and r['tiles']['variant'] is False
     assert r['attribution'] == 'IEM / NOAA MRMS'
     # Warming the site view for an instant switch warms what the switch will show.
-    records = emitter._radar_disk_inventory.records
+    records = emitter.radar._disk_inventory.records
     assert all(k[-1] == 'native' for k in records if k[0] == 'iem-nexrad-n0b')
     assert all(len(k) == 6 for k in records if k[0] == 'iem-mrms-lcref')
 
@@ -260,15 +261,15 @@ def test_v2_leaves_region_unchanged(make_emitter, hybrid, multisite, native, tmp
 def test_a_missing_scan_is_not_requested_per_tile(make_emitter, hybrid, multisite, native, failure):
     (native.missing if failure == 'unpublished' else native.bad).add(hybrid.latest + 24 if failure == 'corrupt' else hybrid.latest)
     hybrid.view()
-    emitter = make_emitter(); emitter._do_radar()
+    emitter = make_emitter(); emitter.radar._acquire()
     newest = [c for c in native.calls if c[1].endswith(datetime.fromtimestamp(hybrid.latest + 24, timezone.utc).strftime('%H_%M_%S'))]
     listings = [c[1] for c in native.calls if c[0] == 'list']
     # Two products, two reporting sites, and the midnight hour boundary.
     assert len(listings) <= 8 and len(listings) == len(set(listings))
     assert len(newest) <= 1
-    failed = emitter._radar_level3_failed[('KNEA', hybrid.latest)]
+    failed = emitter.radar._level3_failed[('KNEA', hybrid.latest)]
     assert failed[0] > ae.time.monotonic()
-    assert not emitter._radar_level3_flights
+    assert not emitter.radar._level3_flights
 
 
 def test_native_tiles_are_immutable():

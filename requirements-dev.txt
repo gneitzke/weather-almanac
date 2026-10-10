@@ -6,7 +6,7 @@ ephem==4.2
 packaging==25.0
 requests==2.32.3
 tzlocal==5.3.1    # lib/config.py imports get_localzone; matches wfpiconsole.sh's runtime pin
-Pillow==11.0.0    # radar tile compositing (lib/almanac_emit._do_radar); the emitter degrades gracefully if absent, but the radar tests need it
+Pillow==11.0.0    # radar tile compositing (lib/radar_engine.py); the engine degrades gracefully if absent, but the radar tests need it
 websocket-client==1.8.0   # tools/benchmark_radar_kiosk.py drives the live kiosk over Chromium's DevTools protocol; the test suite imports the tool's summary helpers
 websockets==15.0.1  # service/websocket.py, matches wfpiconsole.sh's runtime pin; the transport tests import the real module
 certifi==2025.8.3   # service/websocket.py's TLS context; the version the Pi runs

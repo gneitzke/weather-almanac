@@ -8,6 +8,7 @@ import pytest
 from PIL import Image
 
 from lib import almanac_emit as ae
+from lib import radar_engine
 from lib.radar_geometry import MAX_LAT, world_point, world_inverse
 from tests.test_radar_hybrid import hybrid  # noqa: F401
 from tests.test_freshness_health import _load_serve, _payload, _get, serve_at  # noqa: F401
@@ -108,7 +109,7 @@ def test_runtime_recreation_keeps_zoom_only(monkeypatch, tmp_path):
 def test_invalid_or_absent_center_is_station(make_emitter, hybrid, tmp_path, raw):
     if raw is not None:
         (tmp_path / 'radar_center').write_bytes(raw if isinstance(raw, bytes) else raw.encode())
-    emitter = make_emitter(); emitter._do_radar()
+    emitter = make_emitter(); emitter.radar._acquire()
     r = emitter._build_payload()['radar']
     assert r['available'] and 'centered' not in r
     assert r['center'] == dict(lat=47.61, lon=-122.33) and 'marker' not in r
@@ -116,37 +117,37 @@ def test_invalid_or_absent_center_is_station(make_emitter, hybrid, tmp_path, raw
 
 @pytest.mark.parametrize('center', [(47.61, -122.6), (48.1, -122.33), (47.61, -122.33)])
 def test_report_changes_tile_grid_without_changing_station_or_tile_bytes(make_emitter, hybrid, tmp_path, center):
-    emitter=make_emitter();emitter._do_radar();before=emitter._radar_result
-    old={p:p.read_bytes() for p in Path(ae.RADAR_DIR).glob('t/*/*/*/8/*/*.png')}
+    emitter=make_emitter();emitter.radar._acquire();before=emitter.radar._result
+    old={p:p.read_bytes() for p in Path(radar_engine.RADAR_DIR).glob('t/*/*/*/8/*/*.png')}
     hybrid.mono+=60;(tmp_path/'radar_center').write_text(','.join(map(str,center)))
-    emitter._do_radar();after=emitter._radar_result;r=emitter._build_payload()['radar']
+    emitter.radar._acquire();after=emitter.radar._result;r=emitter._build_payload()['radar']
     assert r['center']==dict(lat=47.61,lon=-122.33) and 'marker' not in r
-    _,mpp,bounds,_=ae._radar_viewport(*center,before.zoom,956,490)
+    _,mpp,bounds,_=radar_engine._radar_viewport(*center,before.zoom,956,490)
     assert after.bounds==bounds and after.mpp==mpp and after.nexrad==before.nexrad
     assert all(p.read_bytes()==raw for p,raw in old.items())
-    (tmp_path/'radar_center').write_text('station');emitter._do_radar()
-    assert emitter._radar_result.center==before.center
+    (tmp_path/'radar_center').write_text('station');emitter.radar._acquire()
+    assert emitter.radar._result.center==before.center
 
 
 def test_pan_failure_keeps_entire_previous_snapshot(make_emitter, hybrid, tmp_path):
-    emitter = make_emitter(); emitter._do_radar(); previous = emitter._radar_result
+    emitter = make_emitter(); emitter.radar._acquire(); previous = emitter.radar._result
     (tmp_path / 'radar_center').write_text('48,-122')
     hybrid.failure = lambda *_: (_ for _ in ()).throw(urllib.error.URLError('offline'))
-    emitter._do_radar()
-    assert emitter._radar_result.ts_frame==previous.ts_frame
-    assert emitter._radar_result.ts_fetch==previous.ts_fetch
+    emitter.radar._acquire()
+    assert emitter.radar._result.ts_frame==previous.ts_frame
+    assert emitter.radar._result.ts_fetch==previous.ts_fetch
 
 
 def test_center_wakes_same_single_flight_worker(make_emitter, tmp_path, monkeypatch):
-    emitter = make_emitter(); emitter._running = True
-    seen = []; monkeypatch.setattr(emitter, '_spawn', lambda key, worker: seen.append(True))
-    emitter._radar_zoom_stamp = emitter._radar_preference_stamp()
-    emitter._inflight.add('radar')
-    marker = tmp_path / 'radar_center'; marker.write_text('1,2'); emitter._check_radar_zoom()
-    marker.write_text('3,4'); emitter._check_radar_zoom(); assert not seen
-    emitter._inflight.clear(); emitter._check_radar_zoom(); emitter._check_radar_zoom()
+    emitter = make_emitter(); emitter._runtime.running = True
+    seen = []; monkeypatch.setattr(emitter.radar, '_spawn', lambda key, worker: seen.append(True))
+    emitter.radar._zoom_stamp = emitter.radar._preference_stamp()
+    emitter._runtime.inflight.add('radar')
+    marker = tmp_path / 'radar_center'; marker.write_text('1,2'); emitter.radar._check_zoom()
+    marker.write_text('3,4'); emitter.radar._check_zoom(); assert not seen
+    emitter._runtime.inflight.clear(); emitter.radar._check_zoom(); emitter.radar._check_zoom()
     assert seen == [True]
-    marker.unlink(); emitter._check_radar_zoom(); assert len(seen) == 2
+    marker.unlink(); emitter.radar._check_zoom(); assert len(seen) == 2
 
 
 @pytest.mark.parametrize('zoom', [4, 7, 10])
@@ -159,22 +160,22 @@ def test_small_decimal_center_survives_writer_and_emitter(make_emitter, hybrid, 
     module = _load_serve(monkeypatch, tmp_path, _payload())
     module._write_radar_center(['0.0000000001,-0.000000001']); module._flush_preferences()  # preference writer thread: wait for the durable write
     assert (tmp_path / 'radar_center').read_text() == '0.0000000001,-0.000000001\n'
-    emitter = make_emitter(); emitter._do_radar()
-    assert emitter._radar_result.center == dict(lat=47.61,lon=-122.33)
-    assert emitter._radar_result.bounds==ae._radar_viewport(1e-10,-1e-9,8,956,490)[2]
+    emitter = make_emitter(); emitter.radar._acquire()
+    assert emitter.radar._result.center == dict(lat=47.61,lon=-122.33)
+    assert emitter.radar._result.bounds==radar_engine._radar_viewport(1e-10,-1e-9,8,956,490)[2]
 
 
 def test_site_pan_beyond_all_range_circles_falls_back(make_emitter, hybrid, tmp_path, monkeypatch):
     # v3 queries only circles intersecting the viewport. Far offshore there is
     # no reporting site to drive a timeline, so the existing mosaic fallback applies.
-    original = ae.RadarSession.open
+    original = radar_engine.RadarSession.open
     def fetch(self, req, timeout):
         assert 'operation=list' not in req.full_url and 'ridge::' not in req.full_url
         return original(self, req, timeout)
-    monkeypatch.setattr(ae.RadarSession, 'open', fetch)
+    monkeypatch.setattr(radar_engine.RadarSession, 'open', fetch)
     hybrid.pin('site')
     (tmp_path / 'radar_center').write_text('47.61,-130')
-    emitter = make_emitter(); emitter._do_radar(); r = emitter._build_payload()['radar']
+    emitter = make_emitter(); emitter.radar._acquire(); r = emitter._build_payload()['radar']
     assert r['available'] and r['sourceMode'] == 'mosaic'
     assert r['sitesConsidered'] == r['sitesDrawn'] == 0 and r['sites'] == []
     assert r['sources'][1]['reason'] == 'out of view'

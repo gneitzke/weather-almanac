@@ -9,6 +9,7 @@ from unittest.mock import Mock
 import pytest
 
 from lib import almanac_emit as ae, radar_http as http
+from lib import radar_engine
 from tests.test_radar_keepalive import origin, get  # noqa: F401
 
 
@@ -58,33 +59,33 @@ def test_fresh_hang_and_hanging_retry_never_replayed(origin, reused):
 @pytest.mark.parametrize('fresh_hangs', [False, True])
 def test_six_hanging_reused_workers_share_deadline(make_emitter, origin, monkeypatch, tmp_path, fresh_hangs):
     emitter = make_emitter()
-    monkeypatch.setattr(ae, 'RADAR_DIR', str(tmp_path/'radar'))
+    monkeypatch.setattr(radar_engine, 'RADAR_DIR', str(tmp_path/'radar'))
     # This measures the shared deadline and retry accounting. A hedge is legal
     # here whenever one worker's retry frees a warm socket before another has
     # waited RADAR_HEDGE_SEC; the six hang in lockstep only on an idle machine
     # (a loaded CI runner staggered them and hedged once, 2026-09-25). Hedging
     # has its own tests; keep it out of this timeline.
-    monkeypatch.setattr(ae, 'RADAR_HEDGE_SEC', 60)
+    monkeypatch.setattr(radar_engine, 'RADAR_HEDGE_SEC', 60)
     infos = []
     monkeypatch.setattr(ae.Logger, 'info', infos.append)
     source = 'iem-mrms-lcref'
-    session = http.RadarSession(on_retry=lambda end, **kw: emitter._radar_transport_retry(source, end, **kw))
-    emitter._radar_session = session
+    session = http.RadarSession(on_retry=lambda end, **kw: emitter.radar._transport_retry(source, end, **kw))
+    emitter.radar._session = session
     try:
         origin.hang_ids = prime(session, origin)
         # Priming through the raw session bypasses emitter health; account for
         # those six real successful requests as production admission does.
         for _ in origin.hang_ids:
-            emitter._radar_health.record(source, origin.url, True)
+            emitter.radar._health.record(source, origin.url, True)
         origin.hang = fresh_hangs
         ctx = dict(zoom=8, tiles=[(i, 1, 0, 0) for i in range(12)], tile_workers=6)
         start = time.monotonic()
         deadline = start + 3.7
         session.begin_pass(deadline)
-        result = lambda: list(emitter._radar_tile_batch(source, 1, ctx, deadline,
+        result = lambda: list(emitter.radar._tile_batch(source, 1, ctx, deadline,
                               lambda x, y: origin.url+f'/tile/{x}', None))
         if fresh_hangs:
-            with pytest.raises((socket.timeout, ae._RadarBudget)):
+            with pytest.raises((socket.timeout, radar_engine._RadarBudget)):
                 result()
         else:
             assert len(result()) == 12
@@ -92,8 +93,8 @@ def test_six_hanging_reused_workers_share_deadline(make_emitter, origin, monkeyp
         print(f'six reused TLS sockets, fresh_hangs={fresh_hangs}: {elapsed:.3f}s')
         assert (3.5 if fresh_hangs else 3) <= elapsed < 4.2
         assert session.retries == session.stale_first_byte_retries == 0
-        assert emitter._radar_health.hedges == 0
-        assert emitter._radar_health.retries == 6
+        assert emitter.radar._health.hedges == 0
+        assert emitter.radar._health.retries == 6
         assert not infos  # tiles use the v4.9 race; pass logging lives in _do_radar
         assert not session._busy  # executor drained, no abandoned socket workers
         assert all(ident > 6 for ident, _, _ in origin.requests[12:])
@@ -209,24 +210,24 @@ def test_linux_keepalive_options_and_unsupported_platforms(monkeypatch):
 
 def test_retried_pass_succeeds_without_failure_note(make_emitter, origin, monkeypatch, tmp_path):
     # Region transport; Auto would also list sites.
-    monkeypatch.setattr(ae.AlmanacEmitter, '_radar_auto_source', lambda self, ctx, site_ok: 'mosaic')
+    monkeypatch.setattr(radar_engine.RadarEngine, '_auto_source', lambda self, ctx, site_ok: 'mosaic')
     emitter = make_emitter()
     session = http.RadarSession(first_byte_timeout=.12)
-    emitter._radar_session, emitter._radar_provider = session, ae._RADAR_SOURCES['iem-mrms-lcref']['provider']
-    monkeypatch.setattr(ae, 'RADAR_DIR', str(tmp_path/'radar'))
-    monkeypatch.setattr(ae, 'RADAR_IEM_METADATA_URL', origin.url+'/metadata')
-    monkeypatch.setattr(ae, 'RADAR_IEM_ARCHIVE_TEMPLATE', origin.url+'/archive/%Y%m%d%H%M')
-    monkeypatch.setattr(ae, 'RADAR_IEM_TILE_TEMPLATE', origin.url+'/tile/{stamp}/{z}/{x}/{y}')
+    emitter.radar._session, emitter.radar._provider = session, radar_engine._RADAR_SOURCES['iem-mrms-lcref']['provider']
+    monkeypatch.setattr(radar_engine, 'RADAR_DIR', str(tmp_path/'radar'))
+    monkeypatch.setattr(radar_engine, 'RADAR_IEM_METADATA_URL', origin.url+'/metadata')
+    monkeypatch.setattr(radar_engine, 'RADAR_IEM_ARCHIVE_TEMPLATE', origin.url+'/archive/%Y%m%d%H%M')
+    monkeypatch.setattr(radar_engine, 'RADAR_IEM_TILE_TEMPLATE', origin.url+'/tile/{stamp}/{z}/{x}/{y}')
     warnings, infos = [], []
     monkeypatch.setattr(ae.Logger, 'warning', warnings.append)
     monkeypatch.setattr(ae.Logger, 'info', infos.append)
     try:
         origin.hang_ids = prime(session, origin, 1)
-        emitter._do_radar()
-        assert emitter._radar_result.ts_frame is not None
-        assert emitter._radar_refresh['state'] == 'idle'
-        assert not warnings and not emitter._radar_transport_failures
-        assert session.retries == emitter._radar_stale_first_byte_retries == 1
+        emitter.radar._acquire()
+        assert emitter.radar._result.ts_frame is not None
+        assert emitter.radar._refresh['state'] == 'idle'
+        assert not warnings and not emitter.radar._transport_failures
+        assert session.retries == emitter.radar._stale_first_byte_retries == 1
         assert len(infos) == 2 and 'stale_first_byte_retries=1' in infos[0]
         assert 'radar pass' in infos[1]
     finally:
@@ -235,38 +236,38 @@ def test_retried_pass_succeeds_without_failure_note(make_emitter, origin, monkey
 
 @pytest.mark.parametrize('budget', [.8, 25])
 def test_full_engine_pass_deadline_includes_all_tile_workers(make_emitter, origin, monkeypatch, tmp_path, budget):
-    assert ae.RADAR_BUILD_DEADLINE_SEC == ae.RADAR_PRIMARY_DEADLINE_SEC == 25
+    assert radar_engine.RADAR_BUILD_DEADLINE_SEC == radar_engine.RADAR_PRIMARY_DEADLINE_SEC == 25
     emitter = make_emitter()
-    monkeypatch.setattr(ae, 'RADAR_DIR', str(tmp_path/'radar'))
-    monkeypatch.setattr(ae, 'RADAR_IEM_METADATA_URL', origin.url+'/metadata')
-    monkeypatch.setattr(ae, 'RADAR_IEM_ARCHIVE_TEMPLATE', origin.url+'/archive/%Y%m%d%H%M')
-    monkeypatch.setattr(ae, 'RADAR_IEM_TILE_TEMPLATE', origin.url+'/tile/{stamp}/{z}/{x}/{y}')
+    monkeypatch.setattr(radar_engine, 'RADAR_DIR', str(tmp_path/'radar'))
+    monkeypatch.setattr(radar_engine, 'RADAR_IEM_METADATA_URL', origin.url+'/metadata')
+    monkeypatch.setattr(radar_engine, 'RADAR_IEM_ARCHIVE_TEMPLATE', origin.url+'/archive/%Y%m%d%H%M')
+    monkeypatch.setattr(radar_engine, 'RADAR_IEM_TILE_TEMPLATE', origin.url+'/tile/{stamp}/{z}/{x}/{y}')
     # Exercise both a shortened and the real 25-second pass budget. A larger
     # request cap must never escape it. Metadata and HEAD remain normal.
-    monkeypatch.setattr(ae, 'RADAR_BUILD_DEADLINE_SEC', budget)
-    monkeypatch.setattr(ae, 'RADAR_PRIMARY_DEADLINE_SEC', budget)
-    monkeypatch.setattr(ae, 'RADAR_HTTP_TIMEOUT_SEC', 60)
-    monkeypatch.setattr(ae, 'RADAR_RAINVIEWER_MANIFEST_URL', origin.url+'/unavailable-fallback')
+    monkeypatch.setattr(radar_engine, 'RADAR_BUILD_DEADLINE_SEC', budget)
+    monkeypatch.setattr(radar_engine, 'RADAR_PRIMARY_DEADLINE_SEC', budget)
+    monkeypatch.setattr(radar_engine, 'RADAR_HTTP_TIMEOUT_SEC', 60)
+    monkeypatch.setattr(radar_engine, 'RADAR_RAINVIEWER_MANIFEST_URL', origin.url+'/unavailable-fallback')
     # The default view is in site range, so Auto lists the nearest site's scans.
     # Hermetic: that listing (and anything it could lead to) is the local origin,
     # answering that the site has no recent scans, so the pass stays on Region.
-    monkeypatch.setattr(ae, 'RADAR_SITE_LIST_URL', origin.url+'/listing')
-    monkeypatch.setattr(ae, 'RADAR_SITE_TILE_TEMPLATE', origin.url+'/site/{site}/{stamp}/{z}/{x}/{y}')
-    monkeypatch.setattr(ae, 'RADAR_LEVEL3_BUCKET', origin.url+'/level3/')
+    monkeypatch.setattr(radar_engine, 'RADAR_SITE_LIST_URL', origin.url+'/listing')
+    monkeypatch.setattr(radar_engine, 'RADAR_SITE_TILE_TEMPLATE', origin.url+'/site/{site}/{stamp}/{z}/{x}/{y}')
+    monkeypatch.setattr(radar_engine, 'RADAR_LEVEL3_BUCKET', origin.url+'/level3/')
     origin.response = lambda path, raw: b'{"scans":[]}' if path.startswith('/listing') else raw
     origin.hang_path = '/tile/'
     start = time.monotonic()
     try:
-        emitter._do_radar()
+        emitter.radar._acquire()
         elapsed = time.monotonic()-start
         print(f'full engine pass, six hanging tile reads: {elapsed:.3f}s (budget {budget}s)')
         assert elapsed < budget+.4
         if budget == 25:
-            assert elapsed < ae.RADAR_SOURCE_DEADLINE_SEC+.4  # no rescue handshakes at a deadline
-        retries = emitter._radar_stale_first_byte_retries
+            assert elapsed < radar_engine.RADAR_SOURCE_DEADLINE_SEC+.4  # no rescue handshakes at a deadline
+        retries = emitter.radar._stale_first_byte_retries
         assert 6 <= sum(path.startswith('/tile/') for _, _, path in origin.requests) <= 24
         assert any(path.startswith('/listing?') for _, _, path in origin.requests), 'the site listing escaped the origin'
-        assert emitter._radar_session is None or not emitter._radar_session._busy
+        assert emitter.radar._session is None or not emitter.radar._session._busy
     finally:
-        if emitter._radar_session:
-            emitter._radar_session.close()
+        if emitter.radar._session:
+            emitter.radar._session.close()

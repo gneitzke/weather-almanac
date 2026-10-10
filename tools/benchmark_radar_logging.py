@@ -16,10 +16,13 @@ from unittest.mock import patch
 
 from tests import conftest  # noqa: F401; headless Kivy stubs
 from tests.fixtures.config import make_config
-from lib import almanac_emit
+from lib import almanac_emit, radar_engine
 
 
 def simulate(ae, mode, passes=1800):
+    # --revision can load the pre-extraction emitter. Keep that compatibility
+    # confined to this benchmark; current callers target the engine directly.
+    radar_module = radar_engine if hasattr(ae, 'RadarEngine') else ae
     clock = SimpleNamespace(now=1800000000., mono=1000.)
     stats = dict(passes=passes, lines=0, bytes=0, passLines=0, maxPassBytes=0, requests=0)
 
@@ -36,7 +39,7 @@ def simulate(ae, mode, passes=1800):
         stats['requests'] += 1
         if mode == 'Site':
             raise socket.gaierror(-2, 'Name or service not known')
-        raise ae.LocalTransportError('radar connection/TLS setup timed out')
+        raise radar_module.LocalTransportError('radar connection/TLS setup timed out')
 
     def forbidden(*a, **kw):
         raise AssertionError('simulation must not use network or sleep')
@@ -45,8 +48,15 @@ def simulate(ae, mode, passes=1800):
         app = SimpleNamespace(config=make_config(), obsParser=SimpleNamespace(api_data={}))
         e = ae.AlmanacEmitter(SimpleNamespace(app=app, Obs={}, Met={}, Astro={}, Sager={}),
                               output_path=str(Path(root)/'wx.json'))
-        e._radar_cache_ready.set()
-        e._running = True
+        radar = getattr(e, 'radar', e)
+        def member(name):
+            return '_radar' + name if radar is e else name
+        getattr(radar, member('_cache_ready')).set()
+        if radar is e:
+            e._running = True
+        else:
+            e._runtime.running = True
+        acquire = getattr(radar, '_do_radar' if radar is e else '_acquire')
         with patch.object(ae.time, 'time', lambda: clock.now), \
              patch.object(ae.time, 'monotonic', lambda: clock.mono), \
              patch.object(ae.time, 'process_time', lambda: 0.), \
@@ -54,20 +64,21 @@ def simulate(ae, mode, passes=1800):
              patch.object(ae.time, 'sleep', forbidden), \
              patch.object(socket, 'getaddrinfo', forbidden), \
              patch.object(socket.socket, 'connect', forbidden), \
-             patch.object(ae.RadarSession, 'open', unreachable), \
-             patch.object(e, '_radar_start_inventory', lambda: None), \
-             patch.object(e, '_radar_auto_source',  # Auto's verdict, pinned per mode
+             patch.object(radar_module.RadarSession, 'open', unreachable), \
+             patch.object(radar, member('_start_inventory'), lambda: None), \
+             patch.object(radar, member('_auto_source'),  # Auto's verdict, pinned per mode
                           lambda ctx, site_ok: 'site' if mode == 'Site' else 'mosaic'), \
              patch.object(ae.Logger, 'info', log), \
              patch.object(ae.Logger, 'warning', log):
             for _ in range(passes):
-                e._do_radar(intent_triggered=False)
+                acquire(intent_triggered=False)
                 clock.now += 2
                 clock.mono += 2
-        if e._radar_session is not None:
-            e._radar_session.close()
-        stats['requestHistory'] = len(e._radar_request_metrics)
-        stats['phaseHistory'] = len(e._radar_phase_metrics)
+        session = getattr(radar, member('_session'))
+        if session is not None:
+            session.close()
+        stats['requestHistory'] = len(getattr(radar, member('_request_metrics')))
+        stats['phaseHistory'] = len(getattr(radar, member('_phase_metrics')))
     return stats
 
 

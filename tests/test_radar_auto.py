@@ -4,6 +4,7 @@ import json
 import pytest
 
 from lib import almanac_emit as ae, radar_auto as auto
+from lib import radar_engine
 from tests.test_radar_hybrid import hybrid  # noqa: F401
 from tests.test_radar_v3 import multisite  # noqa: F401
 from tests.test_freshness_health import _load_serve
@@ -68,60 +69,60 @@ def test_default_auto_uses_settled_intent_not_moving_activity(make_emitter, hybr
     monkeypatch.setattr(auto, 'coverage_fraction', lambda *args: 1.)
     intent(tmp_path, 7)
     (tmp_path/'radar_activity').write_text(json.dumps(dict(zoom=10, moving=True, at=hybrid.now)))
-    emitter = make_emitter(); emitter._do_radar()
-    assert emitter._radar_result.source_mode == 'mosaic'
+    emitter = make_emitter(); emitter.radar._acquire()
+    assert emitter.radar._result.source_mode == 'mosaic'
     assert 'sourcePref' not in emitter._build_payload()['radar']
     intent(tmp_path, 8, seq=2)
-    emitter._do_radar()
-    assert emitter._radar_result.source_mode == 'site'
-    assert emitter._radar_result.tiles['camera']['zoom'] == 8
-    assert 'source' not in emitter._radar_result.tiles['intent']
+    emitter.radar._acquire()
+    assert emitter.radar._result.source_mode == 'site'
+    assert emitter.radar._result.tiles['camera']['zoom'] == 8
+    assert 'source' not in emitter.radar._result.tiles['intent']
     intent(tmp_path, 7, seq=3)
     hybrid.mono += 11
-    emitter._do_radar()
-    assert emitter._radar_result.source_mode == 'site'
+    emitter.radar._acquire()
+    assert emitter.radar._result.source_mode == 'site'
     intent(tmp_path, 6, seq=4)
-    emitter._do_radar()
-    assert emitter._radar_result.source_mode == 'mosaic'
+    emitter.radar._acquire()
+    assert emitter.radar._result.source_mode == 'mosaic'
     intent(tmp_path, 10, seq=5)
-    emitter._do_radar()
-    assert emitter._radar_result.source_mode == 'site'
+    emitter.radar._acquire()
+    assert emitter.radar._result.source_mode == 'site'
 
 
 @pytest.mark.parametrize('problem', ['dark', 'stale', 'refused', 'coverage'])
 def test_auto_refuses_unsafe_site(make_emitter, hybrid, multisite, monkeypatch, tmp_path, problem):
     intent(tmp_path, 8)
     if problem == 'dark': multisite.scans['KNEA'] = []
-    if problem == 'stale': multisite.scans['KNEA'] = [hybrid.now-ae.RADAR_SITE_MAX_AGE_SEC]
+    if problem == 'stale': multisite.scans['KNEA'] = [hybrid.now-radar_engine.RADAR_SITE_MAX_AGE_SEC]
     if problem == 'coverage': monkeypatch.setattr(auto, 'coverage_fraction', lambda *args: .84)
     emitter = make_emitter()
     if problem == 'refused':
-        original = emitter._radar_site_listing
+        original = emitter.radar._site_listing
         def listing(ctx, site):
             if site['id'] == 'KNEA':
                 site.update(reporting=False, reason='scan unavailable', newestTs=None)
                 return site['id'], (), False
             return original(ctx, site)
-        monkeypatch.setattr(emitter, '_radar_site_listing', listing)
-    emitter._do_radar()
-    assert emitter._radar_result.source_mode == 'mosaic'
+        monkeypatch.setattr(emitter.radar, '_site_listing', listing)
+    emitter.radar._acquire()
+    assert emitter.radar._result.source_mode == 'mosaic'
     assert not [c for c in multisite.calls if c[0] == 'tile']
 
 
 def test_failed_auto_candidate_retains_published_frames(make_emitter, hybrid, multisite, monkeypatch, tmp_path):
     intent(tmp_path, 6)
-    emitter = make_emitter(); emitter._do_radar()
-    before = emitter._radar_result
+    emitter = make_emitter(); emitter.radar._acquire()
+    before = emitter.radar._result
     intent(tmp_path, 8, seq=2)
     def fail(ctx):
         assert ctx['staging_source'] == 'iem-nexrad-n0b'
-        assert emitter._radar_result.frames == before.frames
+        assert emitter.radar._result.frames == before.frames
         raise TimeoutError('candidate newest unavailable')
-    monkeypatch.setattr(emitter, '_radar_site_frames', fail)
-    emitter._do_radar()
-    assert emitter._radar_result.frames == before.frames
-    assert emitter._radar_result.source_mode == 'mosaic'
-    assert emitter._radar_auto_switch is None  # failed attempts never reset dwell
+    monkeypatch.setattr(emitter.radar, '_site_frames', fail)
+    emitter.radar._acquire()
+    assert emitter.radar._result.frames == before.frames
+    assert emitter.radar._result.source_mode == 'mosaic'
+    assert emitter.radar._auto_switch is None  # failed attempts never reset dwell
 
 
 def test_moving_or_duplicate_camera_reports_cannot_write(tmp_path, monkeypatch):
@@ -140,26 +141,26 @@ def test_moving_or_duplicate_camera_reports_cannot_write(tmp_path, monkeypatch):
 
 
 def test_guard_deadline_wakes_existing_watcher(make_emitter, monkeypatch, tmp_path):
-    emitter = make_emitter(); emitter._running = True
-    emitter._radar_zoom_stamp = emitter._radar_preference_stamp()
+    emitter = make_emitter(); emitter._runtime.running = True
+    emitter.radar._zoom_stamp = emitter.radar._preference_stamp()
     scheduled = []
-    monkeypatch.setattr(emitter, '_spawn', lambda key, work: scheduled.append(key))
-    emitter._check_radar_zoom()
+    monkeypatch.setattr(emitter.radar, '_spawn', lambda key, work: scheduled.append(key))
+    emitter.radar._check_zoom()
     assert scheduled == []
-    emitter._radar_auto_due = ae.time.monotonic()-1
-    emitter._check_radar_zoom()
-    assert scheduled == ['radar'] and emitter._radar_auto_due is None
+    emitter.radar._auto_due = ae.time.monotonic()-1
+    emitter.radar._check_zoom()
+    assert scheduled == ['radar'] and emitter.radar._auto_due is None
 
 
 def test_failed_closest_site_is_not_retried_per_auto_pass(make_emitter, hybrid, multisite, tmp_path):
     intent(tmp_path, 8)
     multisite.scans['KNEA'] = []
-    emitter = make_emitter(); emitter._do_radar()
+    emitter = make_emitter(); emitter.radar._acquire()
     multisite.calls.clear()
-    emitter._do_radar()
+    emitter.radar._acquire()
     assert not [call for call in multisite.calls if call[0] == 'list']
     # Discovery after a scan cadence refreshes evidence and permits recovery.
-    hybrid.mono += ae._RADAR_SOURCES['iem-nexrad-n0b']['cadence']
+    hybrid.mono += radar_engine._RADAR_SOURCES['iem-nexrad-n0b']['cadence']
     multisite.scans['KNEA'] = [hybrid.latest]
-    emitter._do_radar(discovery=True, intent_triggered=False)
-    assert emitter._radar_result.source_mode == 'site'
+    emitter.radar._acquire(discovery=True, intent_triggered=False)
+    assert emitter.radar._result.source_mode == 'site'

@@ -8,6 +8,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from lib import almanac_emit as ae, radar_palette as rp
+from lib import radar_engine
 from tests.test_radar_v32 import contrast, luminance, indexed, TRANSLUCENT_PALETTE
 from tests.test_radar_hybrid import hybrid, png  # noqa: F401
 
@@ -59,11 +60,11 @@ CADENCES = [([4,4,4],'precipitation',4,False),([4,9,4],'precipitation',4,False),
 
 @pytest.mark.parametrize('gaps,mode,minutes,slow', CADENCES)
 def test_n5_cadence(gaps,mode,minutes,slow):
-    inferred = ae._radar_scan_cadence(stamps(gaps))
+    inferred = radar_engine._radar_scan_cadence(stamps(gaps))
     assert inferred == dict(scan_cadence_sec=minutes*60 if minutes else None,
         scan_mode=mode,scan_mode_source='cadence' if mode else None,scanning_slowly=slow)
-    snap=ae._RADAR_NONE._replace(**inferred)
-    payload=ae.AlmanacEmitter._radar_payload(snap,1800000000,timezone.utc)
+    snap=radar_engine._RADAR_NONE._replace(**inferred)
+    payload=radar_engine.RadarEngine._payload(snap,1800000000,timezone.utc)
     assert payload['scanCadenceSec']==inferred['scan_cadence_sec']
     assert payload['scanMode']==mode and payload['scanningSlowly']==slow
     assert payload['scanModeSource']==('cadence' if mode else None)
@@ -73,20 +74,20 @@ def test_n5_cadence(gaps,mode,minutes,slow):
 @pytest.mark.parametrize('seconds,mode,slow',[(390,'precipitation',False),(391,None,False),
     (539,None,False),(540,'clear-air',False),(900,'clear-air',False),(901,None,True)])
 def test_cadence_threshold_boundaries(seconds,mode,slow):
-    got=ae._radar_scan_cadence([0,seconds,2*seconds,3*seconds])
+    got=radar_engine._radar_scan_cadence([0,seconds,2*seconds,3*seconds])
     assert (got['scan_mode'],got['scanning_slowly'])==(mode,slow)
-    assert ae._radar_scan_cadence([0,10000,10240,10480,10720])['scan_cadence_sec']==240
+    assert radar_engine._radar_scan_cadence([0,10000,10240,10480,10720])['scan_cadence_sec']==240
 
 
 @pytest.mark.parametrize('primary', ['KATX','KLGX'])
 def test_n6_primary_listing_controls_mode(make_emitter,hybrid,tmp_path,monkeypatch,primary):
     # This local transport models IEM ridge layers, not Level III products.
-    monkeypatch.setattr(ae.AlmanacEmitter, '_radar_level3_down', lambda self: True)
+    monkeypatch.setattr(radar_engine.RadarEngine, '_level3_down', lambda self: True)
     # Exchange geographic positions; both listings/tiles remain available.
-    sites={i:ae._NEXRAD_SITES[i] for i in ('KATX','KLGX')}
+    sites={i:radar_engine._NEXRAD_SITES[i] for i in ('KATX','KLGX')}
     if primary=='KLGX': sites['KATX'],sites['KLGX']=sites['KLGX'],sites['KATX']
-    monkeypatch.setattr(ae,'_NEXRAD_SITES',sites)
-    original=ae.RadarSession.open
+    monkeypatch.setattr(radar_engine,'_NEXRAD_SITES',sites)
+    original=radar_engine.RadarSession.open
     def fetch(self,req,timeout):
         if 'operation=list' in req.full_url:
             site=parse_qs(urlsplit(req.full_url).query)['radar'][0]
@@ -94,55 +95,55 @@ def test_n6_primary_listing_controls_mode(make_emitter,hybrid,tmp_path,monkeypat
             return io.BytesIO(json.dumps(dict(scans=[dict(ts=datetime.fromtimestamp(t,timezone.utc).isoformat()) for t in times])).encode())
         if 'ridge::' in req.full_url: return io.BytesIO(png())
         return original(self,req,timeout)
-    monkeypatch.setattr(ae.RadarSession,'open',fetch)
+    monkeypatch.setattr(radar_engine.RadarSession,'open',fetch)
     hybrid.pin('site');(tmp_path/'radar_zoom').write_text('7')
-    e=make_emitter();e._do_radar();r=e._build_payload()['radar']
+    e=make_emitter();e.radar._acquire();r=e._build_payload()['radar']
     assert r['siteId']==primary
     assert r['scanMode']==('precipitation' if primary=='KATX' else 'clear-air')
     assert r['scanCadenceSec']==(240 if primary=='KATX' else 600)
     assert r['frameCount']==4
     # A partially acquired history must not change listing-derived cadence.
-    snap=e._radar_result._replace(frames=e._radar_result.frames[-1:])
-    partial=e._radar_payload(snap,hybrid.now,timezone.utc)
+    snap=e.radar._result._replace(frames=e.radar._result.frames[-1:])
+    partial=e.radar._payload(snap,hybrid.now,timezone.utc)
     assert partial['scanCadenceSec']==r['scanCadenceSec'] and partial['scanMode']==r['scanMode']
 
 
 def test_old_palette_tiles_cannot_enter_current_inventory(make_emitter,monkeypatch):
-    current=ae._radar_render_revision()
+    current=radar_engine._radar_render_revision()
     old=copy.deepcopy(rp._RADAR_RAMP)
     old['id']='almanac-reflectivity-v1'
     for band,(a,b) in zip(old['bands'],[('#8AA3C6','#4E79B4'),('#2E93A8','#227F92'),('#3FA65E','#2A8448')]):
         band.update(start=a,end=b)
     with monkeypatch.context() as m:
-        m.setattr(ae,'_RADAR_RAMP',old)
-        ae._radar_revision_digest.cache_clear()
+        m.setattr(radar_engine,'_RADAR_RAMP',old)
+        radar_engine._radar_revision_digest.cache_clear()
         # Same remap revision: prove the ramp itself changes the tile identity.
-        prior=ae._radar_render_revision()
+        prior=radar_engine._radar_render_revision()
         assert prior!=current
-        path=ae._radar_tile_path('iem-mrms-lcref',None,1800000000,8,40,89)
+        path=radar_engine._radar_tile_path('iem-mrms-lcref',None,1800000000,8,40,89)
         path.parent.mkdir(parents=True);path.write_bytes(png())
-    ae._radar_revision_digest.cache_clear()
-    assert ae._radar_render_revision()==current
-    assert ae._radar_tile_path('iem-mrms-lcref',None,1800000000,8,40,89)!=path
-    e=make_emitter();e._radar_start_inventory();assert e._radar_cache_ready.wait(5)
-    assert not e._radar_disk_inventory
+    radar_engine._radar_revision_digest.cache_clear()
+    assert radar_engine._radar_render_revision()==current
+    assert radar_engine._radar_tile_path('iem-mrms-lcref',None,1800000000,8,40,89)!=path
+    e=make_emitter();e.radar._start_inventory();assert e.radar._cache_ready.wait(5)
+    assert not e.radar._disk_inventory
 
 
 @pytest.mark.parametrize('gaps', [[],[4]])
 def test_short_primary_listing_payload(make_emitter,hybrid,tmp_path,monkeypatch,gaps):
     # This local transport models IEM ridge layers, not Level III products.
-    monkeypatch.setattr(ae.AlmanacEmitter, '_radar_level3_down', lambda self: True)
-    monkeypatch.setattr(ae,'_NEXRAD_SITES',{'KATX':ae._NEXRAD_SITES['KATX']})
-    original=ae.RadarSession.open
+    monkeypatch.setattr(radar_engine.RadarEngine, '_level3_down', lambda self: True)
+    monkeypatch.setattr(radar_engine,'_NEXRAD_SITES',{'KATX':radar_engine._NEXRAD_SITES['KATX']})
+    original=radar_engine.RadarSession.open
     def fetch(self,req,timeout):
         if 'operation=list' in req.full_url:
             return io.BytesIO(json.dumps(dict(scans=[dict(ts=datetime.fromtimestamp(t,timezone.utc).isoformat())
                 for t in stamps(gaps,hybrid.latest)])).encode())
         if 'ridge::' in req.full_url: return io.BytesIO(png())
         return original(self,req,timeout)
-    monkeypatch.setattr(ae.RadarSession,'open',fetch)
+    monkeypatch.setattr(radar_engine.RadarSession,'open',fetch)
     hybrid.pin('site')
-    e=make_emitter();e._do_radar();r=e._build_payload()['radar']
+    e=make_emitter();e.radar._acquire();r=e._build_payload()['radar']
     assert r['sourceMode']=='site'
     assert r['scanCadenceSec']==(240 if gaps else None)
     assert r['scanMode'] is r['scanModeSource'] is None

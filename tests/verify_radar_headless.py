@@ -19,6 +19,7 @@ from playwright.sync_api import sync_playwright
 from tests import conftest  # noqa: F401
 from tests.fixtures.config import make_config
 from lib import almanac_emit as ae, radar_basemap as bm
+from lib import radar_engine
 
 
 # Independent observed graphics allocations. This excludes implementation counters
@@ -63,15 +64,15 @@ def payload():
     app=SimpleNamespace(config=make_config(),obsParser=SimpleNamespace(api_data={}))
     e=ae.AlmanacEmitter(SimpleNamespace(app=app,Obs={},Met={},Astro={},Sager={}))
     data=e._build_payload(); now=int(time.time())//120*120-360
-    r=ae.AlmanacEmitter._radar_payload(ae._RADAR_NONE._replace(available=True,reason=None,
+    r=radar_engine.RadarEngine._payload(radar_engine._RADAR_NONE._replace(available=True,reason=None,
         center=dict(lat=47.61,lon=-122.33),zoom=8,zoom_auto_level=8,max_zoom=9,source_id='iem-mrms-lcref',
-        provider='iem',cadence=120,stale_sec=600,legend=ae._RADAR_RAMP,ts_frame=now,ts_fetch=now+300,
+        provider='iem',cadence=120,stale_sec=600,legend=radar_engine._RADAR_RAMP,ts_frame=now,ts_fetch=now+300,
         sources=(dict(mode='mosaic',available=True),dict(mode='site',siteId='KATX',available=True))),time.time(),timezone.utc)
-    r.update(nexrad=dict(id='KATX',name='Camano Island',distanceDisp='39 mi',bearing='NE'),geo=dict(version=bm.version(),base='radar/geo/',sites='radar/sites-'+ae._radar_sites_revision()+'.json'),
+    r.update(nexrad=dict(id='KATX',name='Camano Island',distanceDisp='39 mi',bearing='NE'),geo=dict(version=bm.version(),base='radar/geo/',sites='radar/sites-'+radar_engine._radar_sites_revision()+'.json'),
         rings=[dict(meters=40233.6,label='25 mi'),dict(meters=80467.2,label='50 mi')])
     frames=[dict(ts=now-offset,at=datetime.fromtimestamp(now-offset,timezone.utc).strftime('%H:%M'),
                  stamp=datetime.fromtimestamp(now-offset,timezone.utc).strftime('%Y%m%d%H%M'),siteScans=[],levels={'7':True,'8':True,'9':True}) for offset in range(840,-1,-120)]
-    r['tiles']=dict(base='radar/t/',revision=ae._radar_render_revision(),remapRevision=ae.REMAP_REVISION,source=r['sourceId'],site='-',z=8,levels=[7,8,9],grid=dict(x0=38,y0=86,w=7,h=5),newest=dict(stamp=frames[-1]['stamp'],mask='7ffffffff',expectedMask='7ffffffff'),frames=frames)
+    r['tiles']=dict(base='radar/t/',revision=radar_engine._radar_render_revision(),remapRevision=radar_engine.REMAP_REVISION,source=r['sourceId'],site='-',z=8,levels=[7,8,9],grid=dict(x0=38,y0=86,w=7,h=5),newest=dict(stamp=frames[-1]['stamp'],mask='7ffffffff',expectedMask='7ffffffff'),frames=frames)
     r.update(frameCount=8,completeFrameCount=8,historySpanSec=840);data['radar']=r;return data
 
 
@@ -79,7 +80,7 @@ def tile_png(color=(118,163,138,255)):
     image=Image.new('RGBA',(256,256));d=ImageDraw.Draw(image)
     d.ellipse((35,15,200,150),fill=color);d.polygon([(110,90),(230,160),(200,220),(90,160)],fill=color)
     info=PngInfo();info.add_text('radarRemap',json.dumps(dict(remapped=True,unmatchedColors=0,opaqueColors=1,
-        unmatchedPixels=0,opaquePixels=sum(p[3]>0 for p in image.getdata()),ambiguousPixels=0,revision=ae.REMAP_REVISION)))
+        unmatchedPixels=0,opaquePixels=sum(p[3]>0 for p in image.getdata()),ambiguousPixels=0,revision=radar_engine.REMAP_REVISION)))
     info.add_text('radarVisiblePixels',str(sum(p[3]>0 for p in image.getdata())))
     stream=io.BytesIO();image.save(stream,'PNG',pnginfo=info);return stream.getvalue()
 
@@ -92,18 +93,18 @@ def radar_server():
         root=Path(temp);radar=root/'radar';radar.mkdir();data=payload();(root/'index.html').write_text(Path('design/almanac/console_live.html').read_text());(root/'wx.json').write_text(json.dumps(data))
         bm.warm(radar,(47.61,-122.33),data['radar']['center'],8,limit=490)
         (radar/'.geo-revision').write_text(bm.version())
-        (radar/'.tile-revision').write_text(ae._radar_render_revision())
-        (radar/'.sites-revision').write_text(ae._radar_sites_revision())
-        (radar/('sites-'+ae._radar_sites_revision()+'.json')).write_text(json.dumps([dict(id=i,lat=a,lon=b,name=name) for i,(a,b,name) in ae._NEXRAD_SITES.items()]))
+        (radar/'.tile-revision').write_text(radar_engine._radar_render_revision())
+        (radar/'.sites-revision').write_text(radar_engine._radar_sites_revision())
+        (radar/('sites-'+radar_engine._radar_sites_revision()+'.json')).write_text(json.dumps([dict(id=i,lat=a,lon=b,name=name) for i,(a,b,name) in radar_engine._NEXRAD_SITES.items()]))
         # All fixture tiles are genuine 256-pixel immutable PNGs, not fetch shims.
         for z in (6,7,8,9,10):
-            center=ae.world_point(47.61,-122.33,z);cx,cy=int(center[0]//256),int(center[1]//256)
+            center=radar_engine.world_point(47.61,-122.33,z);cx,cy=int(center[0]//256),int(center[1]//256)
             for n,frame in enumerate(data['radar']['tiles']['frames']):
-                raw=tile_png(ae._RADAR_LUT[n*3][1])
+                raw=tile_png(radar_engine._RADAR_LUT[n*3][1])
                 for y in range(cy-4,cy+5):
                     for x in range(cx-5,cx+6):
-                        p=radar/'t'/ae._radar_render_revision()/'iem-mrms-lcref'/'-'/frame['stamp']/str(z)/str(x)/f'{y}.png';p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(raw)
-                        site=radar/'t'/ae._radar_render_revision()/'iem-nexrad-n0b'/'KATX'/frame['stamp']/str(z)/str(x)/f'{y}.png';site.parent.mkdir(parents=True,exist_ok=True);site.hardlink_to(p)
+                        p=radar/'t'/radar_engine._radar_render_revision()/'iem-mrms-lcref'/'-'/frame['stamp']/str(z)/str(x)/f'{y}.png';p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(raw)
+                        site=radar/'t'/radar_engine._radar_render_revision()/'iem-nexrad-n0b'/'KATX'/frame['stamp']/str(z)/str(x)/f'{y}.png';site.parent.mkdir(parents=True,exist_ok=True);site.hardlink_to(p)
         requests=[];request_times=[]
         class Handler(server_module.Handler):
             def do_GET(self):
@@ -301,7 +302,7 @@ def extended(page,server,theme,output):
     page.wait_for_function('radarReady().length===8')
     initial=copy.deepcopy(server.data);site=copy.deepcopy(initial);r=site['radar']
     r.update(sourceId='iem-nexrad-n0b',sourceMode='site',siteId='KATX',
-             legend=dict(ae._RADAR_DISPLAY_RAMP,remapped=True),cadenceSec=300,staleSec=1200,
+             legend=dict(radar_engine._RADAR_DISPLAY_RAMP,remapped=True),cadenceSec=300,staleSec=1200,
              sites=[dict(id='KATX',lat=48.194611,lon=-122.49569,primary=True,contributing=True,reason=None)])
     r['tiles'].update(source=r['sourceId'],site='KATX')
     for frame in r['tiles']['frames']:frame['siteScans']=[dict(id='KATX',ts=frame['ts'])]
@@ -423,7 +424,7 @@ def chrome(page,theme,data,output):
     page.evaluate("d=>{radarView.refresh={state:'idle'};renderRadar(d)}",data)
     caption(mosaic)
     # Site legend keeps exactly the same outer and unit geometry.
-    page.evaluate('r=>{radarView.data={...radarView.data,...r};radarView.current=null;radarLegendRender();radarSourceRender()}',dict(sourceId='iem-nexrad-n0b',sourceMode='site',siteId='KATX',scanCadenceSec=240,scanMode=None,legend=dict(ae._RADAR_DISPLAY_RAMP,remapped=True),sites=[dict(id='KATX',contributing=True)]))
+    page.evaluate('r=>{radarView.data={...radarView.data,...r};radarView.current=null;radarLegendRender();radarSourceRender()}',dict(sourceId='iem-nexrad-n0b',sourceMode='site',siteId='KATX',scanCadenceSec=240,scanMode=None,legend=dict(radar_engine._RADAR_DISPLAY_RAMP,remapped=True),sites=[dict(id='KATX',contributing=True)]))
     widths=page.locator('#rad-ramp i').evaluate_all('es=>es.map(e=>e.getBoundingClientRect().width)')
     assert len(widths)==10 and all(abs(a-b)<1 for a,b in zip(widths,[26.6,53.1,26.6,53.1,26.6,26.6,26.6,53.1,53.1,26.6]))
     swatch=page.locator('#rad-ramp i').first.evaluate('e=>({color:getComputedStyle(e).backgroundColor,image:getComputedStyle(e).backgroundImage})')
@@ -438,7 +439,7 @@ def chrome(page,theme,data,output):
     assert legend['y']-box['y']+legend['height']<=73
     assert page.locator('.rad-clear-note').evaluate("e=>getComputedStyle(e).color===getComputedStyle(document.getElementById('rad-src-cap')).color")
     page.screenshot(path=str(output/f'radar-v43b-site-{theme}.png'))
-    colors=[b[k] for b in ae._RADAR_RAMP['bands'] for k in ('start','end')]
+    colors=[b[k] for b in radar_engine._RADAR_RAMP['bands'] for k in ('start','end')]
     purity=page.evaluate('''colors=>{const rgb=colors.map(c=>{let e=document.createElement('i');e.style.color=c;document.body.append(e);let v=getComputedStyle(e).color;e.remove();return v});return [...document.querySelectorAll(RAD_CONTROLS+',.rad-tick,.rad-legend-unit,#rad-src-cap,#rad-note,.rad-clear-note')].every(e=>!rgb.includes(getComputedStyle(e).color));}''',colors);assert purity
     contrast=page.evaluate('''()=>{function rgba(s){let c=document.createElement('canvas'),x=c.getContext('2d');x.fillStyle=s;x.fillRect(0,0,1,1);let a=Array.from(x.getImageData(0,0,1,1).data);a[3]/=255;return a}function lum(c){let a=c.slice(0,3).map(v=>v/255<=.04045?v/255/12.92:((v/255+.055)/1.055)**2.4);return a[0]*.2126+a[1]*.7152+a[2]*.0722}let ground=document.documentElement.dataset.theme==='night'?[255,255,255]:[0,0,0];return ['#rad-note','#rad-src-cap','.rad-clear-note','.rad-loop-read','.rad-zoom-read'].map(sel=>{let style=getComputedStyle(document.querySelector(sel)),fg=rgba(style.color),bg=rgba(style.backgroundColor);if(sel==='.rad-clear-note')bg=rgba(getComputedStyle(document.querySelector('#rad-legend')).backgroundColor);let a=bg[3]??1,mixed=bg.slice(0,3).map((v,i)=>v*a+ground[i]*(1-a)),x=lum(fg),y=lum(mixed);return (Math.max(x,y)+.05)/(Math.min(x,y)+.05);});}''')
     assert min(contrast)>=4.5,contrast
@@ -515,8 +516,8 @@ def chrome(page,theme,data,output):
       const f={ts:0,stamp:'197001010000',siteScans:[]},c=new OffscreenCanvas(256,256),x=c.getContext('2d'),t=radarTileSet(radarCamera,8)[0];
       colors.forEach((v,i)=>{x.fillStyle='rgba('+v[0]+','+v[1]+','+v[2]+','+(v[3]/255)+')';x.fillRect(i*9,0,9,256)});
       let key=radarTileKey(f,8,t.x,t.y);radarTileRemember(key,{key,z:8,x:t.x,y:t.y,bitmap:await createImageBitmap(c),meta:{opaquePixels:65536,unmatchedPixels:0,ambiguousPixels:0},hasEcho:true});radarEchoPaint(f);
-      let p=radarWorldPoint(radarCamera.lat,radarCamera.lon,8),left=Math.round(478+t.x*256-p[0]),top=Math.round(245+t.y*256-p[1]);return colors.map((_,i)=>Array.from(document.getElementById('rad-echo').getContext('2d').getImageData(left+i*9+4,top+100,1,1).data));}''',[list(c) for _,c in ae._RADAR_LUT])
-    assert lut==[list(c) for _,c in ae._RADAR_LUT],lut
+      let p=radarWorldPoint(radarCamera.lat,radarCamera.lon,8),left=Math.round(478+t.x*256-p[0]),top=Math.round(245+t.y*256-p[1]);return colors.map((_,i)=>Array.from(document.getElementById('rad-echo').getContext('2d').getImageData(left+i*9+4,top+100,1,1).data));}''',[list(c) for _,c in radar_engine._RADAR_LUT])
+    assert lut==[list(c) for _,c in radar_engine._RADAR_LUT],lut
     print('R24',theme,dict(contrast=contrast,legend='9 + 10 bands',cluster=cluster),flush=True)
 
 

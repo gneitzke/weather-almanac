@@ -2,6 +2,7 @@
 import pytest
 
 from lib import almanac_emit as ae, radar_native_budget as budget
+from lib import radar_engine
 from tests.test_radar_hybrid import hybrid  # noqa: F401
 from tests.test_radar_v3 import multisite  # noqa: F401
 from tests.test_radar_level3 import native  # noqa: F401
@@ -20,12 +21,12 @@ def test_auto_warms_next_source_at_settled_zoom(scene, monkeypatch, source, zoom
     def tiles(target, stamp, warm, *args):
         warmed.append((target, warm['zoom'], warm['center']))
         return iter(())
-    monkeypatch.setattr(emitter, '_radar_tile_batch', tiles)
-    monkeypatch.setattr(emitter, '_radar_headroom_delay', lambda *args: 0)
-    emitter._radar_prefetch(source, dict(ctx, zoom=zoom, camera_zoom=zoom))
+    monkeypatch.setattr(emitter.radar, '_tile_batch', tiles)
+    monkeypatch.setattr(emitter.radar, '_headroom_delay', lambda *args: 0)
+    emitter.radar._prefetch(source, dict(ctx, zoom=zoom, camera_zoom=zoom))
     other = SITE if source == MRMS else MRMS
     actual = {z for target, z, center in warmed if target == other}
-    floor, ceiling = (7, 10) if other == SITE else (ae.RADAR_MIN_ZOOM, 9)
+    floor, ceiling = (7, 10) if other == SITE else (radar_engine.RADAR_MIN_ZOOM, 9)
     expected = {z for z in (zoom-1, zoom, zoom+1) if floor <= z <= ceiling} if opposite else set()
     assert actual == expected
     assert all(center == ctx['center'] for _, _, center in warmed)
@@ -45,44 +46,44 @@ def test_region_warming_uses_native_until_paused(
     hybrid.pin('mosaic')
     (tmp_path/'radar_viewed').unlink()
     (tmp_path/'radar_viewing').unlink()
-    monkeypatch.setattr(ae, 'RADAR_ATTENTION_MODE', attention)
+    monkeypatch.setattr(radar_engine, 'RADAR_ATTENTION_MODE', attention)
     emitter = make_emitter()
-    emitter._radar_attention.forced = emitter._radar_attention.tier = tier
-    emitter._radar_native_budget.add(ceiling)
-    emitter._do_radar()
-    source, ctx = emitter._radar_idle_context
+    emitter.radar._attention.forced = emitter.radar._attention.tier = tier
+    emitter.radar._native_budget.add(ceiling)
+    emitter.radar._acquire()
+    source, ctx = emitter.radar._idle_context
     assert source == MRMS and not native.calls
     hybrid.view()
-    monkeypatch.setattr(emitter, '_radar_headroom_delay', lambda *args: 0)
-    emitter._radar_prefetch(source, dict(ctx, viewed=True, refresh=dict(state='idle')))
-    keys = [k for k in emitter._radar_disk_inventory.records if k[0] == SITE]
+    monkeypatch.setattr(emitter.radar, '_headroom_delay', lambda *args: 0)
+    emitter.radar._prefetch(source, dict(ctx, viewed=True, refresh=dict(state='idle')))
+    keys = [k for k in emitter.radar._disk_inventory.records if k[0] == SITE]
     assert keys and all((k[-1] == 'native' if len(k) == 7 else False) is
                         (variant == 'native') for k in keys)
     assert bool(native.calls) is (variant == 'native')
     assert bool([c for c in multisite.calls if c[0] == 'tile']) is (variant is False)
-    assert emitter._radar_result.source_mode == 'mosaic'
+    assert emitter.radar._result.source_mode == 'mosaic'
 
 
 def test_region_failed_listing_replaces_old_evidence_on_original_cadence(
         make_emitter, hybrid, multisite, native, tmp_path, monkeypatch):
     hybrid.pin(None)
     intent(tmp_path, 6)
-    emitter = make_emitter(); emitter._do_radar()
+    emitter = make_emitter(); emitter.radar._acquire()
     # A Level III cooldown cannot suppress the independent IEM evidence check.
-    emitter._radar_cooldowns[ae.RADAR_LEVEL3_TRANSPORT] = hybrid.mono+1000
-    emitter._do_radar(discovery=True, intent_triggered=False)
+    emitter.radar._cooldowns[radar_engine.RADAR_LEVEL3_TRANSPORT] = hybrid.mono+1000
+    emitter.radar._acquire(discovery=True, intent_triggered=False)
     before = emitter._build_payload()['radar']['nexrad']
     assert before['reporting'] is True and before['newestTs'] is not None
     hybrid.mono += 20
     # Even Auto's successful acquisition cache must not suppress this refresh.
     multisite.calls.clear()
-    emitter._do_radar(discovery=True, intent_triggered=False)
+    emitter.radar._acquire(discovery=True, intent_triggered=False)
     assert multisite.calls == [('list', 'KNEA')]
     assert emitter._build_payload()['radar']['nexrad']['checkedTs'] == before['checkedTs']+20
     fail_listings(emitter, monkeypatch)
     for elapsed, reporting in [(40, None), (340, False)]:
         hybrid.mono = elapsed
-        emitter._do_radar(discovery=True, intent_triggered=False)
+        emitter.radar._acquire(discovery=True, intent_triggered=False)
         evidence = emitter._build_payload()['radar']['nexrad']
         assert evidence['reporting'] is reporting
         assert evidence['newestTs'] is None

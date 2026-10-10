@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from lib import almanac_emit as ae, radar_auto as auto, radar_native_budget as budget
+from lib import radar_engine
 from tests.test_radar_hybrid import hybrid  # noqa: F401
 from tests.test_radar_v3 import multisite  # noqa: F401
 from tests.test_radar_level3 import native  # noqa: F401
@@ -16,70 +17,70 @@ from tests.test_radar_auto_page import controls
 
 
 def fail_listings(emitter, monkeypatch, site=None):
-    request = emitter._radar_request
+    request = emitter.radar._request
     def unavailable(source, url, *args, **kwargs):
         if 'operation=list' in url and (site is None or 'radar='+site[1:] in url):
             raise TimeoutError('listing endpoint unavailable')
         return request(source, url, *args, **kwargs)
-    monkeypatch.setattr(emitter, '_radar_request', unavailable)
-    emitter._radar_forget('iem-nexrad-n0b', site)
+    monkeypatch.setattr(emitter.radar, '_request', unavailable)
+    emitter.radar._forget('iem-nexrad-n0b', site)
 
 
 def test_dead_listing_falls_back_and_region_keeps_advancing(make_emitter, hybrid, multisite, tmp_path, monkeypatch):
     intent(tmp_path, 9)
-    emitter = make_emitter(); emitter._do_radar()
-    assert emitter._radar_result.source_mode == 'site'
+    emitter = make_emitter(); emitter.radar._acquire()
+    assert emitter.radar._result.source_mode == 'site'
     fail_listings(emitter, monkeypatch)
     published = []
-    publish = emitter._radar_publish_refresh
+    publish = emitter.radar._publish_refresh
     def observe(ctx, *args, **kwargs):
         if ctx.get('staging_source'):
             published.append(ctx['staging_source'])
         return publish(ctx, *args, **kwargs)
-    monkeypatch.setattr(emitter, '_radar_publish_refresh', observe)
+    monkeypatch.setattr(emitter.radar, '_publish_refresh', observe)
     for elapsed in (600, 1200, 1800, 3600):
         hybrid.latest += elapsed-hybrid.mono
         hybrid.mono = elapsed
-        emitter._do_radar(discovery=True, intent_triggered=False)
-        assert emitter._radar_result.source_mode == 'mosaic'
-        assert emitter._radar_result.ts_frame == hybrid.latest
-        assert emitter._radar_site_status['KNEA']['reporting'] is not True
+        emitter.radar._acquire(discovery=True, intent_triggered=False)
+        assert emitter.radar._result.source_mode == 'mosaic'
+        assert emitter.radar._result.ts_frame == hybrid.latest
+        assert emitter.radar._site_status['KNEA']['reporting'] is not True
     assert 'iem-mrms-lcref' in published
 
 
 @pytest.mark.parametrize('failure', ['budget', 'timeout'])
 def test_unknown_site_hold_ends_at_display_freshness_boundary(make_emitter, hybrid, multisite, tmp_path, monkeypatch, failure):
     intent(tmp_path, 9)
-    emitter = make_emitter(); emitter._do_radar()
-    stamp = emitter._radar_result.ts_frame
+    emitter = make_emitter(); emitter.radar._acquire()
+    stamp = emitter.radar._result.ts_frame
     def unavailable(ctx):
-        raise ae._RadarBudget('busy') if failure == 'budget' else TimeoutError('busy')
-    monkeypatch.setattr(emitter, '_radar_site_discover', unavailable)
-    for age, expected in [(ae.RADAR_SITE_MAX_AGE_SEC-1, 'site'), (ae.RADAR_SITE_MAX_AGE_SEC, 'mosaic')]:
+        raise radar_engine._RadarBudget('busy') if failure == 'budget' else TimeoutError('busy')
+    monkeypatch.setattr(emitter.radar, '_site_discover', unavailable)
+    for age, expected in [(radar_engine.RADAR_SITE_MAX_AGE_SEC-1, 'site'), (radar_engine.RADAR_SITE_MAX_AGE_SEC, 'mosaic')]:
         hybrid.mono = stamp+age-hybrid.now
         hybrid.latest = int((ae.time.time()-60)//60)*60
-        emitter._do_radar(discovery=True, intent_triggered=False)
-        assert emitter._radar_result.source_mode == expected
+        emitter.radar._acquire(discovery=True, intent_triggered=False)
+        assert emitter.radar._result.source_mode == expected
 
 
 def test_site_adapter_failure_limit_has_region_adapter(make_emitter, hybrid, multisite, tmp_path, monkeypatch):
     intent(tmp_path, 9)
-    emitter = make_emitter(); emitter._do_radar()
+    emitter = make_emitter(); emitter.radar._acquire()
     def fail(ctx): raise ValueError('site tile adapter failed')
-    monkeypatch.setattr(emitter, '_radar_site_frames', fail)
+    monkeypatch.setattr(emitter.radar, '_site_frames', fail)
     for number in range(1, 4):
         hybrid.mono += 12
-        emitter._do_radar(discovery=True, intent_triggered=False)
-        assert emitter._radar_result.source_mode == ('site' if number < 3 else 'mosaic')
+        emitter.radar._acquire(discovery=True, intent_triggered=False)
+        assert emitter.radar._result.source_mode == ('site' if number < 3 else 'mosaic')
 
 
 def test_redundant_failed_listing_cannot_veto_site_entry(make_emitter, hybrid, multisite, tmp_path, monkeypatch):
     intent(tmp_path, 9)
     emitter = make_emitter()
     fail_listings(emitter, monkeypatch, 'KFAR')
-    emitter._do_radar()
-    assert emitter._radar_result.source_mode == 'site'
-    assert emitter._radar_site_status['KFAR']['reporting'] is None
+    emitter.radar._acquire()
+    assert emitter.radar._result.source_mode == 'site'
+    assert emitter.radar._site_status['KFAR']['reporting'] is None
 
 
 def test_coverage_relevant_unknown_expires_after_one_cadence(make_emitter, hybrid, multisite, tmp_path, monkeypatch):
@@ -88,51 +89,51 @@ def test_coverage_relevant_unknown_expires_after_one_cadence(make_emitter, hybri
     # Deterministic coverage boundary: the missing neighbour matters initially.
     monkeypatch.setattr(auto, 'coverage_fraction', lambda bounds, sites, radius: .9 if any(s['id']=='KMID' for s in sites) else .6)
     fail_listings(emitter, monkeypatch, 'KMID')
-    emitter._do_radar()
-    assert emitter._radar_result.source_mode == 'mosaic'
-    first = emitter._radar_site_status['KMID']['failedSince']
-    hybrid.mono += ae._RADAR_SOURCES['iem-nexrad-n0b']['cadence']
-    emitter._do_radar(discovery=True, intent_triggered=False)
-    assert emitter._radar_site_status['KMID']['reporting'] is False
-    assert emitter._radar_site_status['KMID']['failedSince'] == first
-    assert next(iter(emitter._radar_auto_evidence.values()))['coverage'] == .6
+    emitter.radar._acquire()
+    assert emitter.radar._result.source_mode == 'mosaic'
+    first = emitter.radar._site_status['KMID']['failedSince']
+    hybrid.mono += radar_engine._RADAR_SOURCES['iem-nexrad-n0b']['cadence']
+    emitter.radar._acquire(discovery=True, intent_triggered=False)
+    assert emitter.radar._site_status['KMID']['reporting'] is False
+    assert emitter.radar._site_status['KMID']['failedSince'] == first
+    assert next(iter(emitter.radar._auto_evidence.values()))['coverage'] == .6
 
 
 @pytest.mark.parametrize('zoom', [5, 7])
 def test_region_listing_and_warming_do_not_add_unused_breaker_wakes(make_emitter, hybrid, multisite, native, tmp_path, monkeypatch, zoom):
     intent(tmp_path, zoom)
     hybrid.view()
-    emitter = make_emitter(); emitter._do_radar()
-    assert emitter._radar_result.source_mode == 'mosaic'
+    emitter = make_emitter(); emitter.radar._acquire()
+    assert emitter.radar._result.source_mode == 'mosaic'
     def forbidden(*args): raise AssertionError('Region ran an unused Auto coverage decision')
     monkeypatch.setattr(auto, 'coverage_fraction', forbidden)
     for _ in range(8):
-        emitter._radar_health.record(ae.RADAR_LEVEL3_TRANSPORT, ae.RADAR_LEVEL3_BUCKET+'test', False, TimeoutError('S3 unavailable'))
+        emitter.radar._health.record(radar_engine.RADAR_LEVEL3_TRANSPORT, radar_engine.RADAR_LEVEL3_BUCKET+'test', False, TimeoutError('S3 unavailable'))
     hybrid.mono += 10000
     # Keep Region fresh after the artificial cooldown.
     hybrid.latest += 9960
     hybrid.view()
-    assert emitter._radar_probe_delay() is None
-    emitter._do_radar(discovery=True, intent_triggered=False)
-    source, ctx = emitter._radar_idle_context
-    monkeypatch.setattr(emitter, '_radar_headroom_delay', lambda *args: 0)
-    emitter._radar_prefetch(source, dict(ctx, viewed=True, refresh=dict(state='idle')))
+    assert emitter.radar._probe_delay() is None
+    emitter.radar._acquire(discovery=True, intent_triggered=False)
+    source, ctx = emitter.radar._idle_context
+    monkeypatch.setattr(emitter.radar, '_headroom_delay', lambda *args: 0)
+    emitter.radar._prefetch(source, dict(ctx, viewed=True, refresh=dict(state='idle')))
     assert ('list', 'KNEA') in multisite.calls
-    assert emitter._radar_probe_delay() is None
-    assert emitter._radar_pass['outcome'] != 'superseded'
-    emitter._running = True
+    assert emitter.radar._probe_delay() is None
+    assert emitter.radar._pass['outcome'] != 'superseded'
+    emitter._runtime.running = True
     scheduled = []
-    monkeypatch.setattr(emitter, '_schedule', lambda callback, delay: scheduled.append(delay))
-    emitter._radar_arm_discovery()
+    monkeypatch.setattr(emitter._runtime, 'schedule', lambda callback, delay: scheduled.append(delay))
+    emitter.radar._arm_discovery()
     assert scheduled[-1] > 1
 
 
 def test_eligible_auto_site_dependency_still_probes(make_emitter, monkeypatch):
     emitter = make_emitter()
-    emitter._radar_result = emitter._radar_result._replace(source_mode='mosaic', source_id='iem-mrms-lcref', zoom_desired=8)
+    emitter.radar._result = emitter.radar._result._replace(source_mode='mosaic', source_id='iem-mrms-lcref', zoom_desired=8)
     seen = []
-    monkeypatch.setattr(emitter._radar_health, 'probe_delay', lambda sources: seen.append(sources) or 12)
-    assert emitter._radar_probe_delay() == 12
+    monkeypatch.setattr(emitter.radar._health, 'probe_delay', lambda sources: seen.append(sources) or 12)
+    assert emitter.radar._probe_delay() == 12
     assert 'iem-nexrad-n0b' in seen[0]
 
 
@@ -144,12 +145,12 @@ def test_coverage_geometry_is_reused_until_reporting_set_changes(make_emitter, h
         measurements.append(args)
         return original(*args)
     monkeypatch.setattr(auto, 'coverage_fraction', measure)
-    emitter = make_emitter(); emitter._do_radar()
-    for _ in range(3): emitter._do_radar(discovery=True, intent_triggered=False)
+    emitter = make_emitter(); emitter.radar._acquire()
+    for _ in range(3): emitter.radar._acquire(discovery=True, intent_triggered=False)
     assert len(measurements) == 1
     multisite.scans['KMID'] = []
-    emitter._radar_forget('iem-nexrad-n0b', 'KMID')
-    emitter._do_radar(discovery=True, intent_triggered=False)
+    emitter.radar._forget('iem-nexrad-n0b', 'KMID')
+    emitter.radar._acquire(discovery=True, intent_triggered=False)
     assert len(measurements) == 2
 
 
@@ -261,20 +262,20 @@ radarSourceRender();assert.doesNotMatch(caption(),/accounting|byte ledger|daily 
 
 def test_region_fallback_checkpoint_ignores_displayed_site_policy(make_emitter):
     emitter = make_emitter()
-    emitter._radar_result = emitter._radar_result._replace(source_mode='site')
-    emitter._radar_native_budget.add(budget.NATIVE_PAUSE_BYTES+1)
-    emitter._radar_checkpoint(dict(target_source='iem-mrms-lcref', native_ceiling='normal'))
+    emitter.radar._result = emitter.radar._result._replace(source_mode='site')
+    emitter.radar._native_budget.add(budget.NATIVE_PAUSE_BYTES+1)
+    emitter.radar._checkpoint(dict(target_source='iem-mrms-lcref', native_ceiling='normal'))
 
 
 def test_auto_decision_reuses_listings_within_scan_cadence(make_emitter, hybrid, multisite, tmp_path):
     intent(tmp_path, 9)
-    emitter = make_emitter(); emitter._do_radar()
+    emitter = make_emitter(); emitter.radar._acquire()
     multisite.calls.clear()
     hybrid.mono += 120
-    emitter._do_radar(discovery=True, intent_triggered=False)
+    emitter.radar._acquire(discovery=True, intent_triggered=False)
     assert not [c for c in multisite.calls if c[0]=='list']
     hybrid.mono += 180
-    emitter._do_radar(discovery=True, intent_triggered=False)
+    emitter.radar._acquire(discovery=True, intent_triggered=False)
     assert len([c for c in multisite.calls if c[0]=='list']) == 3
 
 
@@ -286,24 +287,24 @@ def test_failed_listing_ages_without_another_transport_attempt():
 
 def test_quiet_region_refreshes_closest_listing(make_emitter, hybrid, multisite, tmp_path, monkeypatch):
     intent(tmp_path, 6)
-    emitter = make_emitter();emitter._do_radar()
-    monkeypatch.setattr(ae, 'RADAR_ATTENTION_MODE', 'active')
-    emitter._radar_attention.forced = emitter._radar_attention.tier = 'rest'
+    emitter = make_emitter();emitter.radar._acquire()
+    monkeypatch.setattr(radar_engine, 'RADAR_ATTENTION_MODE', 'active')
+    emitter.radar._attention.forced = emitter.radar._attention.tier = 'rest'
     multisite.calls.clear()
-    emitter._do_radar(discovery=True, intent_triggered=False)
+    emitter.radar._acquire(discovery=True, intent_triggered=False)
     assert multisite.calls == [('list', 'KNEA')]
 
 
 def test_region_admission_and_watcher_do_not_read_native_policy(make_emitter, monkeypatch):
     emitter = make_emitter()
-    emitter._radar_result = emitter._radar_result._replace(source_mode='mosaic', source_id='iem-mrms-lcref')
-    emitter._radar_target_source = 'iem-mrms-lcref'
-    emitter._radar_policy_ceiling = 'normal'
+    emitter.radar._result = emitter.radar._result._replace(source_mode='mosaic', source_id='iem-mrms-lcref')
+    emitter.radar._target_source = 'iem-mrms-lcref'
+    emitter.radar._policy_ceiling = 'normal'
     def unexpected(): raise AssertionError('Region evaluated the native ledger')
-    monkeypatch.setattr(emitter._radar_native_budget, 'snapshot', unexpected)
-    assert emitter._radar_headroom_delay('iem-mrms-lcref', 1) == 0
-    assert emitter._radar_transport_sources('iem-mrms-lcref') == ('iem-mrms-lcref',)
-    emitter._check_radar_zoom()
+    monkeypatch.setattr(emitter.radar._native_budget, 'snapshot', unexpected)
+    assert emitter.radar._headroom_delay('iem-mrms-lcref', 1) == 0
+    assert emitter.radar._transport_sources('iem-mrms-lcref') == ('iem-mrms-lcref',)
+    emitter.radar._check_zoom()
 
 
 def test_auto_region_at_zoom_nine_ignores_unused_level3_breaker(make_emitter, hybrid, multisite, tmp_path, monkeypatch):
@@ -312,14 +313,14 @@ def test_auto_region_at_zoom_nine_ignores_unused_level3_breaker(make_emitter, hy
     Region never contacts Level III, so that breaker cannot clear from there."""
     monkeypatch.setattr(auto, 'coverage_fraction', lambda *a, **k: .5)
     (tmp_path/'radar_intent').write_text(json.dumps(dict(seq=1, zoom=9, center='station')))
-    e = make_emitter(); e._do_radar()
-    assert e._radar_result.source_mode == 'mosaic'
-    url = ae.RADAR_LEVEL3_BUCKET + 'x'
+    e = make_emitter(); e.radar._acquire()
+    assert e.radar._result.source_mode == 'mosaic'
+    url = radar_engine.RADAR_LEVEL3_BUCKET + 'x'
     for _ in range(8):
-        e._radar_health.record(ae.RADAR_LEVEL3_TRANSPORT, url, False, TimeoutError('t'))
+        e.radar._health.record(radar_engine.RADAR_LEVEL3_TRANSPORT, url, False, TimeoutError('t'))
     hybrid.mono += 10000
     for _ in range(3):
-        e._do_radar(discovery=True, intent_triggered=False)
-    assert e._radar_result.source_mode == 'mosaic'
-    delay = e._radar_probe_delay()
+        e.radar._acquire(discovery=True, intent_triggered=False)
+    assert e.radar._result.source_mode == 'mosaic'
+    delay = e.radar._probe_delay()
     assert delay is None or delay > 1

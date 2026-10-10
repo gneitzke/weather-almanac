@@ -4,6 +4,7 @@ No external sockets: the autouse network fence is also installed for this CLI.
 Every step must either advance four decoded frames by 20s or expose a retry at
 20s, with the exact rate resume time when capacity prevents acquisition.
 """
+from lib import radar_engine
 import argparse
 import hashlib
 import json
@@ -27,19 +28,19 @@ from tests.conftest import loopback_only_when_offline
 
 def verify(browser, server, origin, patch, theme, output, flaky, cold=False, site_count=2):
     clock=FakeClock();patch.setattr(ae,'Clock',clock)
-    patch.setattr(ae,'RADAR_DIR',str(server.root/'radar'))
+    patch.setattr(radar_engine,'RADAR_DIR',str(server.root/'radar'))
     if cold:
-        shutil.rmtree(server.root/'radar'/'t'/ae._radar_render_revision()/'iem-nexrad-n0b')
+        shutil.rmtree(server.root/'radar'/'t'/radar_engine._radar_render_revision()/'iem-nexrad-n0b')
     else:
         shutil.rmtree(server.root/'radar'/'t')
-    patch.setattr(ae,'RADAR_IEM_METADATA_URL',origin.url+'/metadata')
-    patch.setattr(ae,'RADAR_IEM_ARCHIVE_TEMPLATE',origin.url+'/archive/%Y%m%d%H%M')
-    patch.setattr(ae,'RADAR_IEM_TILE_TEMPLATE',origin.url+'/tile/{stamp}/{z}/{x}/{y}')
-    patch.setattr(ae,'RADAR_SITE_LIST_URL',origin.url+'/listing')
-    patch.setattr(ae,'RADAR_SITE_TILE_TEMPLATE',origin.url+'/site/{site}/{stamp}/{z}/{x}/{y}')
-    patch.setattr(ae,'_NEXRAD_SITES',{k:v for k,v in ae._NEXRAD_SITES.items() if k in ('KATX','KLGX')})
+    patch.setattr(radar_engine,'RADAR_IEM_METADATA_URL',origin.url+'/metadata')
+    patch.setattr(radar_engine,'RADAR_IEM_ARCHIVE_TEMPLATE',origin.url+'/archive/%Y%m%d%H%M')
+    patch.setattr(radar_engine,'RADAR_IEM_TILE_TEMPLATE',origin.url+'/tile/{stamp}/{z}/{x}/{y}')
+    patch.setattr(radar_engine,'RADAR_SITE_LIST_URL',origin.url+'/listing')
+    patch.setattr(radar_engine,'RADAR_SITE_TILE_TEMPLATE',origin.url+'/site/{site}/{stamp}/{z}/{x}/{y}')
+    patch.setattr(radar_engine,'_NEXRAD_SITES',{k:v for k,v in radar_engine._NEXRAD_SITES.items() if k in ('KATX','KLGX')})
     if site_count==4:
-        patch.setattr(ae,'_NEXRAD_SITES',{k:(47.61,-122.33,k) for k in ('KATX','KLGX','KRTX','KOTX')})
+        patch.setattr(radar_engine,'_NEXRAD_SITES',{k:(47.61,-122.33,k) for k in ('KATX','KLGX','KRTX','KOTX')})
     origin.newest_ts=server.data['radar']['observedTs'] if cold else int(time.time())//120*120
     def response(path, raw):
         if path.startswith('/listing'):
@@ -54,25 +55,25 @@ def verify(browser, server, origin, patch, theme, output, flaky, cold=False, sit
     def verdict(self,ctx,site_ok):
         zoom=ctx['desired'] if ctx['desired'] is not None else ctx['auto_zoom']
         return 'site' if site_ok and zoom>=9 else 'mosaic'
-    patch.setattr(ae.AlmanacEmitter,'_radar_auto_source',verdict)
+    patch.setattr(radar_engine.RadarEngine,'_auto_source',verdict)
     app=SimpleNamespace(config=make_config(Station={'Latitude':'47.61','Longitude':'-122.33'}),obsParser=SimpleNamespace(api_data={}))
     e=ae.AlmanacEmitter(SimpleNamespace(app=app,Obs={},Met={},Astro={},Sager={}),output_path=str(server.root/'wx.json'))
     publications=[];logs=[]
     def publish(*_):
         data=dict(server.data,radar=e._build_payload()['radar']);temp=server.root/'wx.new';temp.write_text(json.dumps(data));temp.replace(server.root/'wx.json')
         publications.append(dict(at=time.monotonic(),source=data['radar']['sourceId'],intent=data['radar']['intent'],ready=data['radar']['completeFrameCount']))
-    patch.setattr(e,'_radar_emit_now',publish);patch.setattr(e,'_emit',publish);patch.setattr(ae.Logger,'info',logs.append)
+    patch.setattr(e.radar,'_emit_now',publish);patch.setattr(e,'_emit',publish);patch.setattr(ae.Logger,'info',logs.append)
     if cold:
         (server.root/'radar_viewed').unlink()
-        e._radar_request_times=[time.monotonic()]*30
-    e._do_radar();publish();e._running=True
+        e.radar._request_times=[time.monotonic()]*30
+    e.radar._acquire();publish();e._runtime.running=True
     context=browser.new_context(viewport=dict(width=1024,height=600),has_touch=True);context.add_init_script(AUDIT)
     context.route('**/*',lambda route:route.continue_() if route.request.url.startswith(server.url+'/') else route.abort())
     page=context.new_page();errors=[];page.on('pageerror',lambda error:errors.append(str(error)))
     rows=[];last_tick=time.monotonic()
     def tick():
         nonlocal last_tick
-        e._check_radar_zoom();now=time.monotonic();clock.advance(now-last_tick);last_tick=now;page.wait_for_timeout(50)
+        e.radar._check_zoom();now=time.monotonic();clock.advance(now-last_tick);last_tick=now;page.wait_for_timeout(50)
     def state():
         return page.evaluate('''({elapsed:performance.now()-(window.v57Tap??performance.now()),camera:radarCamera,source:radarView.data?.sourceId,ready:radarReady().length,stamp:radarView.current?.stamp,bitmap:!!radarView.current?.bitmap,pending:!!radarView.pendingSource,caption:document.getElementById('rad-src-cap').textContent,read:document.getElementById('rad-frame-time').textContent,note:document.getElementById('rad-note').textContent,switch:radarSwitch,owned:radarIntent.owned})''')
     try:
@@ -108,10 +109,10 @@ def verify(browser, server, origin, patch, theme, output, flaky, cold=False, sit
                     retry=r
                     assert r['switch'] and r['switch'].get('overdue'), r
                     assert 'Retry' in r['caption']+r['note']+r['read'] or r['caption'].startswith('Updating view'), r
-            assert first and r['stamp']!=first[0], dict(step=(kind,value),last=r,health=e._radar_health_payload())
+            assert first and r['stamp']!=first[0], dict(step=(kind,value),last=r,health=e.radar._health_payload())
             assert r['elapsed']<20 or retry is not None
             if cold:assert r['elapsed']<20, dict(step=(kind,value),last=r)
-            if not flaky and len(e._radar_request_times)<100:assert r['elapsed']<20, r
+            if not flaky and len(e.radar._request_times)<100:assert r['elapsed']<20, r
             rows.append(dict(step=[kind,value],secondsToFour=first[1],secondsToAdvance=r['elapsed'],deadlineRetry=retry,rows=seen))
             (output/f'{theme}-{flaky}-trace.json').write_text(json.dumps(dict(steps=rows,publications=publications,logs=logs,requests=origin.requests,errors=errors),indent=2))
         assert not errors,errors
@@ -120,8 +121,8 @@ def verify(browser, server, origin, patch, theme, output, flaky, cold=False, sit
     finally:
         (output/f'{theme}-{flaky}-final.json').write_text(json.dumps(dict(steps=rows,publications=publications,logs=logs,requests=origin.requests,errors=errors,state=state(),path=page.evaluate('radarMetrics.path')),indent=2))
         e.stop()
-        while 'radar' in e._inflight:page.wait_for_timeout(50)
-        if e._radar_session:e._radar_session.close()
+        while 'radar' in e._runtime.inflight:page.wait_for_timeout(50)
+        if e.radar._session:e.radar._session.close()
         context.close()
 
 

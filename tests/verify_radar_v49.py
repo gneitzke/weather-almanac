@@ -1,4 +1,5 @@
 """Accelerated five-stamp hostile HTTPS provider -> engine -> loopback Chromium."""
+from lib import radar_engine
 import argparse
 import json
 import shutil
@@ -20,13 +21,13 @@ def verify(browser, server, origin, monkeypatch, theme, output):
                           obsParser=SimpleNamespace(api_data={}))
     emitter = ae.AlmanacEmitter(SimpleNamespace(app=app, Obs={}, Met={}, Astro={}, Sager={}),
                                output_path=str(server.root/'engine'/'wx.json'))
-    monkeypatch.setattr(ae, 'RADAR_DIR', str(server.root/'radar'))
+    monkeypatch.setattr(radar_engine, 'RADAR_DIR', str(server.root/'radar'))
     # The all-features baseline duplicates all five levels for eight site scans.
     # This mosaic scenario needs no site copies; keep real production cache caps.
-    shutil.rmtree(server.root/'radar'/'t'/ae._radar_render_revision()/'iem-nexrad-n0b')
-    monkeypatch.setattr(ae, 'RADAR_IEM_METADATA_URL', origin.url+'/metadata')
-    monkeypatch.setattr(ae, 'RADAR_IEM_ARCHIVE_TEMPLATE', origin.url+'/archive/%Y%m%d%H%M')
-    monkeypatch.setattr(ae, 'RADAR_IEM_TILE_TEMPLATE', origin.url+'/tile/{stamp}/{z}/{x}/{y}')
+    shutil.rmtree(server.root/'radar'/'t'/radar_engine._radar_render_revision()/'iem-nexrad-n0b')
+    monkeypatch.setattr(radar_engine, 'RADAR_IEM_METADATA_URL', origin.url+'/metadata')
+    monkeypatch.setattr(radar_engine, 'RADAR_IEM_ARCHIVE_TEMPLATE', origin.url+'/archive/%Y%m%d%H%M')
+    monkeypatch.setattr(radar_engine, 'RADAR_IEM_TILE_TEMPLATE', origin.url+'/tile/{stamp}/{z}/{x}/{y}')
     # Every tenth group of wire tile requests has three hangs, including retries.
     # This deliberately allows both attempts for one tile to lose.
     outcomes = []
@@ -68,7 +69,7 @@ def verify(browser, server, origin, monkeypatch, theme, output):
             pass_times = []
             for repair in range(3):
                 pass_start = time.monotonic()
-                worker = threading.Thread(target=emitter._do_radar)
+                worker = threading.Thread(target=emitter.radar._acquire)
                 worker.start()
                 while worker.is_alive():
                     payload = emitter._build_payload()['radar']
@@ -81,7 +82,7 @@ def verify(browser, server, origin, monkeypatch, theme, output):
                     page.wait_for_timeout(40)
                 worker.join()
                 pass_times.append(round(time.monotonic()-pass_start,3))
-                latest = next((f for f in emitter._radar_frames if f['ts'] == stamp), {})
+                latest = next((f for f in emitter.radar._frames if f['ts'] == stamp), {})
                 if latest.get('complete'):
                     break
                 page.wait_for_timeout(2000)  # production partial-repair retry delay
@@ -90,12 +91,12 @@ def verify(browser, server, origin, monkeypatch, theme, output):
             page.evaluate('r=>renderRadar({radar:r})', payload)
             page.wait_for_function('ts=>radarView.good&&radarView.good.ts===ts&&radarView.good.bitmap', arg=stamp)
             elapsed = time.monotonic()-started
-            h = emitter._radar_health.snapshot()
+            h = emitter.radar._health.snapshot()
             read = page.locator('#rad-frame-time').inner_text()
             assert payload['observedTs'] == stamp and payload['ageSec'] <= 120
             assert not samples or max(samples) <= 120
             assert payload['completeFrameCount'] >= 1 and payload['refresh']['state'] == 'idle'
-            assert max(pass_times) < ae.RADAR_BUILD_DEADLINE_SEC+.4 and payload['observedAt'] in read
+            assert max(pass_times) < radar_engine.RADAR_BUILD_DEADLINE_SEC+.4 and payload['observedAt'] in read
             assert page.evaluate('renderTicks') > paints
             assert not page.locator('#rad-note').inner_text().startswith("Couldn't refresh")
             assert h['breaker'] == 'closed'
@@ -117,15 +118,15 @@ def verify(browser, server, origin, monkeypatch, theme, output):
         page.screenshot(path=str(output/f'{theme}-five-stamps.png'))
         assert not errors, errors
         result = dict(theme=theme, stamps=rows, failureCopy=copy,
-                      health=emitter._radar_health.snapshot(), consoleErrors=errors,
+                      health=emitter.radar._health.snapshot(), consoleErrors=errors,
                       tileRequests=len(outcomes), hangingRequests=outcomes.count('hang'),
                       hangFraction=outcomes.count('hang')/len(outcomes))
         (output/f'{theme}.json').write_text(json.dumps(result, indent=2))
         print(json.dumps(result), flush=True)
     finally:
         monkeypatch.setattr(ae.time, 'time', real_time)
-        if emitter._radar_session:
-            emitter._radar_session.close()
+        if emitter.radar._session:
+            emitter.radar._session.close()
         context.close()
 
 

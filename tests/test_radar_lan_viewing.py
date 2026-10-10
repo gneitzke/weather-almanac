@@ -14,6 +14,7 @@ from urllib.parse import urlencode
 import pytest
 
 from lib import almanac_emit as ae
+from lib import radar_engine
 from lib import radar_attention
 from tests.test_radar_hybrid import hybrid  # noqa: F401
 from tests.test_radar_remote_serve import server  # noqa: F401
@@ -62,8 +63,8 @@ def test_windows_mirror_the_engine():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     assert module.LAN_VIEW_ATTENDED_SEC == radar_attention.UNATTENDED_SEC
-    assert module.RADAR_VIEWING_LAPSE_SEC == ae.RADAR_VIEWING_LAPSE_SEC
-    assert module.RADAR_VIEW_POLL_GAP_SEC == ae.RADAR_VIEW_POLL_GAP_SEC
+    assert module.RADAR_VIEWING_LAPSE_SEC == radar_engine.RADAR_VIEWING_LAPSE_SEC
+    assert module.RADAR_VIEW_POLL_GAP_SEC == radar_engine.RADAR_VIEW_POLL_GAP_SEC
 
 
 def test_visible_attended_lan_viewer_is_live_with_eight_frames(server, clock, make_emitter, tmp_path):
@@ -174,7 +175,7 @@ def test_panel_and_lan_viewers_do_not_clear_each_other(server, clock, make_emitt
 def test_closed_lan_tab_lapses_like_a_silent_panel(server, clock, make_emitter, tmp_path):
     e = make_emitter()
     view(server, touch=True)
-    clock[0] += ae.RADAR_VIEWING_LAPSE_SEC - 1
+    clock[0] += radar_engine.RADAR_VIEWING_LAPSE_SEC - 1
     assert attention(e)[0] == 'live'
     clock[0] += 1
     assert attention(e)[0] == 'warm'

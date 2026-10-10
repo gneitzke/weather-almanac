@@ -2,6 +2,7 @@
 import pytest
 
 from lib import almanac_emit as ae, radar_level3 as l3
+from lib import radar_engine
 from tests.test_radar_hybrid import hybrid, make_config  # noqa: F401
 from tests.test_radar_level3 import product, SITE
 
@@ -11,7 +12,7 @@ NOT_IN_BUCKET = {'LPLA', 'RODN'}
 
 
 def test_every_site_has_a_level3_identity():
-    for site, (lat, lon, name) in ae._NEXRAD_SITES.items():
+    for site, (lat, lon, name) in radar_engine._NEXRAD_SITES.items():
         assert len(site) == 4 and site.isalnum() and site.isupper(), site
         assert -90 <= lat <= 90 and -180 <= lon <= 180 and name
         key = '%s_N0B_2026_09_25_03_42_24' % site[1:]
@@ -27,14 +28,14 @@ def test_every_site_has_a_level3_identity():
 ])
 def test_site_mode_is_offered_wherever_a_radar_is_in_range(make_emitter, hybrid, lat, lon, site):
     emitter = make_emitter(config=make_config(Station={'Latitude': str(lat), 'Longitude': str(lon)}))
-    emitter._do_radar()
+    emitter.radar._acquire()
     sources = emitter._build_payload()['radar']['sources']
     assert sources[1]['siteId'] == site and sources[1]['available'] is True, sources
 
 
 def test_no_radar_in_range_offers_no_site(make_emitter, hybrid):
     emitter = make_emitter(config=make_config(Station={'Latitude': '52.52', 'Longitude': '13.4'}))
-    emitter._do_radar()
+    emitter.radar._acquire()
     sources = emitter._build_payload()['radar']['sources']
     assert sources[1]['available'] is False and sources[1]['reason'] == 'no site in range'
 
@@ -54,4 +55,4 @@ def test_decoded_scan_cache_holds_a_whole_loop():
     # A multi-site loop needs every site's scan per frame plus the next per site;
     # an LRU smaller than that working set misses on every in-order walk (the
     # LRU mechanics themselves: test_radar_level3_review).
-    assert ae.RADAR_LEVEL3_SCAN_CACHE >= ae.RADAR_SITE_MAX_COUNT * (ae.RADAR_LOOP_FRAMES + 1)
+    assert radar_engine.RADAR_LEVEL3_SCAN_CACHE >= radar_engine.RADAR_SITE_MAX_COUNT * (radar_engine.RADAR_LOOP_FRAMES + 1)

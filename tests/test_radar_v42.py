@@ -8,6 +8,7 @@ from PIL import Image
 import pytest
 
 from lib import almanac_emit as ae, radar_basemap as bm
+from lib import radar_engine
 from tests.test_emitter_lifecycle import FakeClock
 from tests.test_freshness_health import _load_serve
 
@@ -21,7 +22,7 @@ def fast_tiles(monkeypatch):
         calls.append(args)
         return out.getvalue()
     monkeypatch.setattr(bm,'tile',render)
-    monkeypatch.setattr(ae,'RADAR_GEO_UNVIEWED_SLEEP_SEC',0)
+    monkeypatch.setattr(radar_engine,'RADAR_GEO_UNVIEWED_SLEEP_SEC',0)
     return calls
 
 
@@ -35,7 +36,7 @@ def activity(e,**changes):
 
 def tick(e):
     """Execute the real spawn wrapper, joining so no worker leaks into teardown."""
-    e._check_radar_geo()
+    e.radar._check_geo()
     # Tests that need concurrency use explicit barriers instead of this helper.
     for thread in threading.enumerate():
         if thread is not threading.current_thread() and thread.name.startswith('geo-test-'):
@@ -65,30 +66,30 @@ def test_engine_prewarm_before_any_radar_or_view(make_emitter,monkeypatch,geo_th
     e.start()
     try:
         clock.advance(.24)
-        assert not list(Path(ae.RADAR_DIR).rglob('*.png'))
+        assert not list(Path(radar_engine.RADAR_DIR).rglob('*.png'))
         clock.advance(.01)
         for thread in geo_threads:thread.join(5)
-        files=list(Path(ae.RADAR_DIR).glob('geo/*/*/*/*/*.png'))
+        files=list(Path(radar_engine.RADAR_DIR).glob('geo/*/*/*/*/*.png'))
         assert len(files)==1
         with Image.open(files[0]) as image:assert image.size==(256,256)
-        assert e._radar_session is None and e._radar_result==ae._RADAR_NONE
+        assert e.radar._session is None and e.radar._result==radar_engine._RADAR_NONE
         assert not Path(e.output_path).with_name('radar_viewed').exists()
         assert not Path(e.output_path).with_name('radar_viewing').exists()
-        assert (Path(ae.RADAR_DIR)/'.geo-revision').read_text()==bm.version()
+        assert (Path(radar_engine.RADAR_DIR)/'.geo-revision').read_text()==bm.version()
     finally:e.stop()
 
 
 @pytest.mark.parametrize('theme',['paper','night'])
 def test_current_activity_preempts_home_and_ignores_old_radar_context(make_emitter,fast_tiles,theme):
-    e=make_emitter();e._radar_geo_work()
+    e=make_emitter();e.radar._geo_work()
     e._radar_geo_context=((0,0),dict(lat=0,lon=0),4,4)  # obsolete transport geometry
     Path(e.output_path).with_name('radar_viewed').write_text(str(ae.time.time()))
     a=activity(e,theme=theme)
     expected=list(bm.viewport_requests(a['center'],8,theme))
-    for _ in expected:e._radar_geo_work()
+    for _ in expected:e.radar._geo_work()
     assert fast_tiles[1:]==expected
-    e._radar_geo_work()
-    home=list(bm.home_requests((47.61,-122.33),ae._radar_zoom_for(47.61)))
+    e.radar._geo_work()
+    home=list(bm.home_requests((47.61,-122.33),radar_engine._radar_zoom_for(47.61)))
     assert fast_tiles[-1]==home[1]
     # No live viewing session is needed for the current activity report either.
     assert not Path(e.output_path).with_name('radar_viewing').exists()
@@ -98,29 +99,29 @@ def test_current_activity_preempts_home_and_ignores_old_radar_context(make_emitt
 def test_freshness_and_view_gate_only_viewport(make_emitter,fast_tiles,age,viewed):
     e=make_emitter();activity(e,at=ae.time.time()-age)
     if viewed:Path(e.output_path).with_name('radar_viewed').write_text(str(ae.time.time()))
-    e._radar_geo_work()
-    assert fast_tiles==[next(bm.home_requests((47.61,-122.33),ae._radar_zoom_for(47.61),'night'))]
+    e.radar._geo_work()
+    assert fast_tiles==[next(bm.home_requests((47.61,-122.33),radar_engine._radar_zoom_for(47.61),'night'))]
 
 
 @pytest.mark.parametrize('age',[0,200])
 def test_moving_suppresses_both_queues_until_settled(make_emitter,fast_tiles,age):
     e=make_emitter();activity(e,moving=True,at=ae.time.time()-age)
-    e._radar_geo_work();assert len(fast_tiles)==(0 if age<5 else 1)
+    e.radar._geo_work();assert len(fast_tiles)==(0 if age<5 else 1)
     before=len(fast_tiles)
-    activity(e,moving=False);e._radar_geo_work();assert len(fast_tiles)==before+1
+    activity(e,moving=False);e.radar._geo_work();assert len(fast_tiles)==before+1
 
 
 def test_background_sleep_and_viewed_priority(make_emitter,fast_tiles,monkeypatch):
     e=make_emitter();sleeps=[]
-    monkeypatch.setattr(ae,'RADAR_GEO_UNVIEWED_SLEEP_SEC',.05)
+    monkeypatch.setattr(radar_engine,'RADAR_GEO_UNVIEWED_SLEEP_SEC',.05)
     monkeypatch.setattr(ae.time,'sleep',sleeps.append)
-    e._radar_geo_work();assert sleeps==[.05]
+    e.radar._geo_work();assert sleeps==[.05]
     Path(e.output_path).with_name('radar_viewed').write_text(str(ae.time.time()))
-    activity(e);e._radar_geo_work();assert sleeps==[.05]
+    activity(e);e.radar._geo_work();assert sleeps==[.05]
 
 
 def test_radar_inflight_and_held_result_lock_cannot_block_geo(make_emitter,fast_tiles,geo_threads):
-    e=make_emitter(_running=True)
+    e=make_emitter(running=True)
     entered=threading.Event();release=threading.Event();written=threading.Event()
     real=bm.atomic_write
     def write(path,raw):
@@ -128,38 +129,38 @@ def test_radar_inflight_and_held_result_lock_cannot_block_geo(make_emitter,fast_
         if path.suffix=='.png':written.set()
     # Hold the actual radar result lock through a simulated stalled network pass.
     def radar():
-        with e._radar_lock:
+        with e.radar._lock:
             entered.set()
             assert release.wait(5)
     from unittest.mock import patch
     try:
         with patch.object(bm,'atomic_write',write):
-            e._spawn('radar',radar);assert entered.wait(2)
-            e._check_radar_geo()
+            e.radar._spawn('radar',radar);assert entered.wait(2)
+            e.radar._check_geo()
             assert written.wait(2), 'geo waited behind radar'
-            assert 'radar' in e._inflight and not release.is_set()
-            assert list(Path(ae.RADAR_DIR).rglob('*.png'))
+            assert 'radar' in e._runtime.inflight and not release.is_set()
+            assert list(Path(radar_engine.RADAR_DIR).rglob('*.png'))
     finally:release.set();e.stop()
 
 
 def test_geo_is_single_flight_and_stopped_callback_is_fenced(make_emitter,fast_tiles,geo_threads,monkeypatch):
-    e=make_emitter(_running=True);entered=threading.Event();release=threading.Event()
+    e=make_emitter(running=True);entered=threading.Event();release=threading.Event()
     real=bm.tile
     def blocked(*args):
         entered.set();assert release.wait(5);return real(*args)
     monkeypatch.setattr(bm,'tile',blocked)
     try:
-        e._check_radar_geo();assert entered.wait(2)
-        for _ in range(10):e._check_radar_geo()
-        assert len(geo_threads)==1 and 'geo' in e._inflight
-        e.stop();e._check_radar_geo();assert len(geo_threads)==1
+        e.radar._check_geo();assert entered.wait(2)
+        for _ in range(10):e.radar._check_geo()
+        assert len(geo_threads)==1 and 'geo' in e._runtime.inflight
+        e.stop();e.radar._check_geo();assert len(geo_threads)==1
     finally:release.set()
 
 
 def test_home_completes_idles_and_rewarms_on_revision_station(make_emitter,fast_tiles,geo_threads,monkeypatch):
-    e=make_emitter(_running=True)
+    e=make_emitter(running=True)
     for _ in range(491):tick(e)
-    assert len(fast_tiles)==490 and not e._radar_geo_state.home
+    assert len(fast_tiles)==490 and not e.radar._geo_state.home
     count=len(geo_threads)
     for _ in range(4):tick(e)
     assert len(geo_threads)==count  # no worker or home directory scan once complete
@@ -169,10 +170,10 @@ def test_home_completes_idles_and_rewarms_on_revision_station(make_emitter,fast_
     assert fast_tiles[490:]==original
     e.app.config['Station'].update(Latitude='-33.87',Longitude='151.21')
     for _ in range(491):tick(e)
-    expected=list(bm.home_requests((-33.87,151.21),ae._radar_zoom_for(-33.87)))
+    expected=list(bm.home_requests((-33.87,151.21),radar_engine._radar_zoom_for(-33.87)))
     assert set(expected)<=set(fast_tiles[980:])|set(original)
-    assert all(bm.tile_path(ae.RADAR_DIR,*r).is_file() for r in expected)
-    assert not e._radar_geo_state.home
+    assert all(bm.tile_path(radar_engine.RADAR_DIR,*r).is_file() for r in expected)
+    assert not e.radar._geo_state.home
     e.stop()
 
 

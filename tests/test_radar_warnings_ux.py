@@ -69,10 +69,10 @@ def test_the_emitter_publishes_the_failure_with_last_good_items(make_emitter, mo
     now = time.time()
     net.answers.append(FakeResp(json.dumps(fx.collection(fx.feature(now, ring=fx.OVER_STATION, ends_in=3600)))))
     e = emitter(make_emitter)
-    reach, home, codes, url = e._warnings_query()
-    e._do_warnings(url, reach, home)
+    reach, home, codes, url = e.radar._warnings_query()
+    e.radar._do_warnings(url, reach, home)
     net.answers.append(urllib.error.HTTPError(url, 503, 'busy', {}, None))
-    e._do_warnings(url, reach, home)
+    e.radar._do_warnings(url, reach, home)
     w = e._build_payload()['radar']['warnings']
     assert w['stale'] is False and len(w['items']) == 1
     assert isinstance(w['refreshFailedAt'], int) and w['refreshFailedAt'] >= w['fetchedTs']

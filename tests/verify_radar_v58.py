@@ -1,4 +1,5 @@
 """Warm disk switch and cold 15-tile newest: real page/engine/TLS, loopback only."""
+from lib import radar_engine
 import argparse
 import cProfile
 import io
@@ -24,13 +25,13 @@ from tests.conftest import loopback_only_when_offline
 
 
 def verify(browser, server, origin, patch, theme, output):
-    patch.setattr(ae,'RADAR_DIR',str(server.root/'radar'))
-    patch.setattr(ae,'_NEXRAD_SITES',{k:(47.61,-122.8,k) for k in ('KATX','KLGX','KRTX')})
-    patch.setattr(ae,'RADAR_IEM_METADATA_URL',origin.url+'/metadata')
-    patch.setattr(ae,'RADAR_IEM_ARCHIVE_TEMPLATE',origin.url+'/archive/%Y%m%d%H%M')
-    patch.setattr(ae,'RADAR_IEM_TILE_TEMPLATE',origin.url+'/tile/{stamp}/{z}/{x}/{y}')
-    patch.setattr(ae,'RADAR_SITE_LIST_URL',origin.url+'/listing')
-    patch.setattr(ae,'RADAR_SITE_TILE_TEMPLATE',origin.url+'/site/{site}/{stamp}/{z}/{x}/{y}')
+    patch.setattr(radar_engine,'RADAR_DIR',str(server.root/'radar'))
+    patch.setattr(radar_engine,'_NEXRAD_SITES',{k:(47.61,-122.8,k) for k in ('KATX','KLGX','KRTX')})
+    patch.setattr(radar_engine,'RADAR_IEM_METADATA_URL',origin.url+'/metadata')
+    patch.setattr(radar_engine,'RADAR_IEM_ARCHIVE_TEMPLATE',origin.url+'/archive/%Y%m%d%H%M')
+    patch.setattr(radar_engine,'RADAR_IEM_TILE_TEMPLATE',origin.url+'/tile/{stamp}/{z}/{x}/{y}')
+    patch.setattr(radar_engine,'RADAR_SITE_LIST_URL',origin.url+'/listing')
+    patch.setattr(radar_engine,'RADAR_SITE_TILE_TEMPLATE',origin.url+'/site/{site}/{stamp}/{z}/{x}/{y}')
     clock=FakeClock();patch.setattr(ae,'Clock',clock)
     newest=int(time.time())//120*120-360
     origin.newest_ts=newest;origin.delay=0;origin.behavior=None
@@ -45,17 +46,17 @@ def verify(browser, server, origin, patch, theme, output):
     for source,sites in (('iem-mrms-lcref',[None]),('iem-nexrad-n0b',['KATX','KLGX','KRTX'])):
         for i in range(8):
             for z in (7,8,9):
-                for x,y,*_ in ae._radar_grid(ctx,z,margin=1):
-                    path=ae._radar_tile_path(source,sites[0],newest-i*120,z,x,y)
-                    raw=tile_png(ae._RADAR_LUT[i*3][1])
+                for x,y,*_ in radar_engine._radar_grid(ctx,z,margin=1):
+                    path=radar_engine._radar_tile_path(source,sites[0],newest-i*120,z,x,y)
+                    raw=tile_png(radar_engine._RADAR_LUT[i*3][1])
                     for site in sites:
-                        path=ae._radar_tile_path(source,site,newest-i*120,z,x,y)
+                        path=radar_engine._radar_tile_path(source,site,newest-i*120,z,x,y)
                         path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(raw)
     for name,value in dict(radar_zoom='8',radar_viewed=str(time.time())).items():
         (server.root/name).write_text(value)
     # Auto is the only source policy; pin its verdict so the scenario drives the source.
     verdict=dict(mode='mosaic')
-    patch.setattr(ae.AlmanacEmitter,'_radar_auto_source',lambda self,ctx,site_ok:verdict['mode'] if site_ok else 'mosaic')
+    patch.setattr(radar_engine.RadarEngine,'_auto_source',lambda self,ctx,site_ok:verdict['mode'] if site_ok else 'mosaic')
     app=SimpleNamespace(config=make_config(Station={'Latitude':'47.61','Longitude':'-122.8'}),obsParser=SimpleNamespace(api_data={}))
     e=ae.AlmanacEmitter(SimpleNamespace(app=app,Obs={},Met={},Astro={},Sager={}),output_path=str(server.root/'wx.json'))
     publications=[];profiles=[];rows=[]
@@ -64,7 +65,7 @@ def verify(browser, server, origin, patch, theme, output):
         path=server.root/'wx.new';path.write_text(json.dumps(data));path.replace(server.root/'wx.json')
         publications.append(dict(at=time.monotonic(),source=data['radar']['sourceId'],ready=data['radar']['completeFrameCount']))
     patch.setattr(e,'_emit',publish)
-    original=e._do_radar
+    original=e.radar._acquire
     def profiled(*args,**kwargs):
         pr=cProfile.Profile();cpu=time.thread_time();started=time.monotonic()
         pr.runcall(original,*args,**kwargs)
@@ -72,10 +73,10 @@ def verify(browser, server, origin, patch, theme, output):
         pr.dump_stats(str(output/(name+'.prof')))
         with (output/(name+'.txt')).open('w') as f:pstats.Stats(pr,stream=f).sort_stats('cumulative').print_stats(30)
         profiles.append(dict(name=name,cpuSec=time.thread_time()-cpu,wallSec=time.monotonic()-started))
-    patch.setattr(e,'_do_radar',profiled)
-    e._do_radar();publish();e._running=True
-    e._schedule(e._emit,2,interval=True)
-    e._radar_arm_discovery()
+    patch.setattr(e.radar,'_acquire',profiled)
+    e.radar._acquire();publish();e._runtime.running=True
+    e._runtime.schedule(e._emit,2,interval=True)
+    e.radar._arm_discovery()
     context=browser.new_context(viewport=dict(width=1024,height=600),has_touch=True)
     context.add_init_script(AUDIT)
     context.route('**/*',lambda route:route.continue_() if route.request.url.startswith(server.url+'/') else route.abort())
@@ -83,7 +84,7 @@ def verify(browser, server, origin, patch, theme, output):
     last=time.monotonic()
     def tick():
         nonlocal last
-        e._check_radar_zoom();now=time.monotonic();clock.advance(now-last);last=now;page.wait_for_timeout(40)
+        e.radar._check_zoom();now=time.monotonic();clock.advance(now-last);last=now;page.wait_for_timeout(40)
     def state():
         return page.evaluate('''({ready:radarReady().length,stamp:radarView.current?.stamp,source:radarView.data?.sourceId,pending:!!radarView.pendingSource,owned:radarIntent.owned,elapsed:(performance.now()-(window.v58Tap??performance.now()))/1000})''')
     def until(predicate,seconds=20):
@@ -100,7 +101,7 @@ def verify(browser, server, origin, patch, theme, output):
             if path.startswith(('/tile/','/control/')):threading.Event().wait(.55)
             return 'normal'
         origin.behavior=behavior
-        control=ae.RadarSession();deadline=time.monotonic()+10;control.begin_pass(deadline)
+        control=radar_engine.RadarSession();deadline=time.monotonic()+10;control.begin_pass(deadline)
         def get(i):
             with control.open(urllib.request.Request(origin.url+f'/control/{i}'),3) as r:r.read()
         started=time.monotonic()
@@ -110,17 +111,17 @@ def verify(browser, server, origin, patch, theme, output):
             if mode=='mosaic':
                 origin.newest_ts=newest+120
                 # Simulate metadata age after dwelling in site mode; no rate reset.
-                when,known=e._radar_newest[('iem-mrms-lcref',None)]
-                e._radar_newest[('iem-mrms-lcref',None)]=(time.monotonic()-121,known)
+                when,known=e.radar._newest[('iem-mrms-lcref',None)]
+                e.radar._newest[('iem-mrms-lcref',None)]=(time.monotonic()-121,known)
             start_request=len(origin.requests);first=advanced=None;eight=None;engine_newest=None
             tap=time.monotonic()
-            page.evaluate("()=>{window.v58Tap=performance.now()}");verdict['mode']=mode;e._radar_restart=True
+            page.evaluate("()=>{window.v58Tap=performance.now()}");verdict['mode']=mode;e.radar._restart=True
             target='iem-nexrad-n0b' if mode=='site' else 'iem-mrms-lcref'
             samples=[]
             end=time.monotonic()+15
             while time.monotonic()<end:
                 tick();r=state();samples.append(r)
-                snap=e._radar_result
+                snap=e.radar._result
                 if snap.source_id==target and snap.frames and snap.frames[-1]['complete'] and engine_newest is None:
                     engine_newest=time.monotonic()-tap
                 if r['source']==target and not r['pending']:
@@ -131,8 +132,8 @@ def verify(browser, server, origin, patch, theme, output):
             assert first and advanced and eight, r
             assert eight<12 and advanced<12, r
             requests=origin.requests[start_request:]
-            visible={(x,y) for x,y,*_ in ae._radar_grid(ctx)}
-            newest_requests=[p for _,_,p in requests if p.startswith('/tile/'+ae._radar_stamp_text(newest+120)+'/8/') and tuple(map(int,p.split('/')[-2:])) in visible]
+            visible={(x,y) for x,y,*_ in radar_engine._radar_grid(ctx)}
+            newest_requests=[p for _,_,p in requests if p.startswith('/tile/'+radar_engine._radar_stamp_text(newest+120)+'/8/') and tuple(map(int,p.split('/')[-2:])) in visible]
             if mode=='site':assert not any('/site/' in p for _,_,p in requests),requests
             else:
                 assert len(set(newest_requests))==15,newest_requests
@@ -140,13 +141,13 @@ def verify(browser, server, origin, patch, theme, output):
             rows.append(dict(mode=mode,four=first['elapsed'],advance=advanced,eight=eight,engineNewest=engine_newest,requests=len(requests),newestTileRequests=len(newest_requests),uniqueNewestTiles=len(set(newest_requests)),samples=samples))
         assert not errors,errors
         page.screenshot(path=str(output/(theme+'.png')))
-        result=dict(theme=theme,control15TilesSec=network,startup=e._radar_disk_inventory.startup,steps=rows,workerProfiles=profiles,publications=publications,errors=errors)
+        result=dict(theme=theme,control15TilesSec=network,startup=e.radar._disk_inventory.startup,steps=rows,workerProfiles=profiles,publications=publications,errors=errors)
         (output/(theme+'.json')).write_text(json.dumps(result,indent=2))
         print(json.dumps(dict(theme=theme,control=network,startup=result['startup'],steps=[{k:v for k,v in r.items() if k!='samples'} for r in rows])),flush=True)
     finally:
         e.stop()
-        while 'radar' in e._inflight:page.wait_for_timeout(40)
-        if e._radar_session:e._radar_session.close()
+        while 'radar' in e._runtime.inflight:page.wait_for_timeout(40)
+        if e.radar._session:e.radar._session.close()
         context.close()
 
 

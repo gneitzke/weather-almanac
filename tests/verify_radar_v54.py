@@ -9,6 +9,7 @@ from tests.verify_radar_headless import radar_server, tile_png
 from tests.test_radar_v54 import CADENCES, stamps
 from tests.test_radar_v32 import indexed
 from lib import almanac_emit as ae, radar_palette as rp
+from lib import radar_engine
 
 OUT=Path('/private/tmp/radar-v54-headless')
 
@@ -65,7 +66,7 @@ def check(page,theme):
     }''',colors)
     copies=[]
     for gaps,mode,minutes,slow in CADENCES:
-        inf=ae._radar_scan_cadence(stamps(gaps))
+        inf=radar_engine._radar_scan_cadence(stamps(gaps))
         copy=page.evaluate('''r=>{
           radarSwitch=null;radarView.current=null;
           Object.assign(radarView.data,{sourceId:'iem-nexrad-n0b',sourceMode:'site',siteId:'KATX',
@@ -105,7 +106,7 @@ def main():
         # A rain-only fixture plate with the three green bands.
         # Replace the newest frame's native test shapes using real immutable tiles.
         latest=server.data['radar']['tiles']['frames'][-1]['stamp']
-        newest=server.root/'radar'/'t'/ae._radar_render_revision()/'iem-mrms-lcref'/'-'/latest
+        newest=server.root/'radar'/'t'/radar_engine._radar_render_revision()/'iem-mrms-lcref'/'-'/latest
         for tile in newest.glob('*/*/*.png'):
             tile.write_bytes(tile_png(rp._RADAR_LUT[(int(tile.parent.name)+int(tile.stem))%10][1]))
         browser=p.chromium.launch(headless=True,args=['--disable-gpu'])

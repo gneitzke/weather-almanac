@@ -6,6 +6,7 @@ import pytest
 from PIL import Image
 
 from lib import almanac_emit as ae, radar_palette as rp
+from lib import radar_engine
 from lib.radar_geometry import world_inverse, world_point
 from tests.test_radar_hybrid import hybrid, png  # noqa: F401
 from tests.test_radar_attention_engine import active, tier  # noqa: F401
@@ -25,10 +26,10 @@ def native_png(source, dbz):
 def test_sentinel_uses_reflectivity_not_native_alpha(make_emitter, hybrid, active, dbz, echo):
     e = make_emitter(); tier(e, 'rest')
     hybrid.tile = native_png('iem-mrms-lcref', dbz)
-    e._do_radar(intent_triggered=False)
-    assert e._radar_sentinel['echo'] is echo
-    assert e._radar_sentinel['complete']
-    assert len(e._radar_request_times) == 6  # listing, metadata, four tiles
+    e.radar._acquire(intent_triggered=False)
+    assert e.radar._sentinel['echo'] is echo
+    assert e.radar._sentinel['complete']
+    assert len(e.radar._request_times) == 6  # listing, metadata, four tiles
 
 
 @pytest.mark.parametrize('bad', ['red', 'corrupt', 'missing', 'unknown-color'])
@@ -40,16 +41,16 @@ def test_bad_or_missing_sentinel_tiles_are_unknown(make_emitter, hybrid, active,
             if 'mrms::' in req.full_url:
                 raise urllib.error.HTTPError(req.full_url, 404, 'missing', {}, None)
         hybrid.failure = fail
-    e._do_radar(intent_triggered=False)
-    assert e._radar_sentinel['echo'] is None
-    assert not e._radar_sentinel['complete']
+    e.radar._acquire(intent_triggered=False)
+    assert e.radar._sentinel['echo'] is None
+    assert not e.radar._sentinel['complete']
 
 
 def test_stale_sentinel_metadata_cannot_refresh_weather_hold(make_emitter, hybrid, active):
     e = make_emitter(); tier(e, 'rest')
     hybrid.latest -= 7200
-    e._do_radar(intent_triggered=False)
-    assert e._radar_sentinel is None
+    e.radar._acquire(intent_triggered=False)
+    assert e.radar._sentinel is None
     assert not any('mrms::' in c[2] for c in hybrid.calls)
 
 
@@ -57,10 +58,10 @@ def test_stale_sentinel_metadata_cannot_refresh_weather_hold(make_emitter, hybri
 def test_frame_echo_and_reloaded_inventory_exclude_low_dbz(make_emitter, hybrid, active, dbz, echo):
     e = make_emitter(); tier(e, 'watch', hour=2)
     hybrid.tile = native_png('iem-mrms-lcref', dbz)
-    e._do_radar(intent_triggered=False)
-    assert e._radar_result.frames[-1]['echo'] is echo
-    path, _, metadata = next(iter(e._radar_disk_inventory.records.values()))
-    assert metadata['weatherPixels'] == ae._radar_tile_metadata(path, 'iem-mrms-lcref')['weatherPixels']
+    e.radar._acquire(intent_triggered=False)
+    assert e.radar._result.frames[-1]['echo'] is echo
+    path, _, metadata = next(iter(e.radar._disk_inventory.records.values()))
+    assert metadata['weatherPixels'] == radar_engine._radar_tile_metadata(path, 'iem-mrms-lcref')['weatherPixels']
 
 
 @pytest.mark.parametrize('dbz', [7, 12.5])
@@ -74,11 +75,11 @@ def test_clear_air_and_sub_floor_returns_are_neither_drawn_nor_counted(dbz):
 
 @pytest.mark.parametrize('offset', [0.1, 127.9, 128.1, 255.9])
 def test_sentinel_four_tiles_surround_home_at_tile_edges(make_emitter, hybrid, offset):
-    e = make_emitter(); e._radar_session = ae.RadarSession()
-    z = ae.RADAR_SENTINEL_ZOOM
+    e = make_emitter(); e.radar._session = radar_engine.RadarSession()
+    z = radar_engine.RADAR_SENTINEL_ZOOM
     home = world_inverse(5*256+offset, 11*256+offset, z)
-    e._radar_session.begin_pass(100)
-    e._radar_sentinel_pass(dict(station=home, deadline=100))
+    e.radar._session.begin_pass(100)
+    e.radar._sentinel_pass(dict(station=home, deadline=100))
     urls = [c[2] for c in hybrid.calls if 'mrms::' in c[2]]
     coords = [tuple(map(int, u.removesuffix('.png').split('/')[-2:])) for u in urls]
     px, py = world_point(*home, z)
@@ -91,8 +92,8 @@ def test_sentinel_four_tiles_surround_home_at_tile_edges(make_emitter, hybrid, o
 
 def test_sentinel_obeys_request_budget(make_emitter, hybrid, active):
     e = make_emitter(); tier(e, 'rest')
-    e._radar_request_times = [ae.time.monotonic()] * (ae.RADAR_REQUESTS_PER_MIN-3)
-    e._do_radar(intent_triggered=False)
-    assert len(e._radar_request_times) <= ae.RADAR_REQUESTS_PER_MIN
+    e.radar._request_times = [ae.time.monotonic()] * (radar_engine.RADAR_REQUESTS_PER_MIN-3)
+    e.radar._acquire(intent_triggered=False)
+    assert len(e.radar._request_times) <= radar_engine.RADAR_REQUESTS_PER_MIN
     assert len(hybrid.calls) <= 3
-    assert e._radar_sentinel is None or e._radar_sentinel['echo'] is not False
+    assert e.radar._sentinel is None or e.radar._sentinel['echo'] is not False

@@ -4,6 +4,7 @@ import json
 import pytest
 
 from lib import almanac_emit as ae
+from lib import radar_engine
 from tests.test_pre_rain_fixes import poll
 from tests.test_radar_attention_serve import server  # noqa: F401
 from tests.test_radar_buffer_page import run_page
@@ -55,26 +56,26 @@ def test_rejected_reports_cannot_extend_since(server, monkeypatch, tmp_path):
 
 @pytest.mark.parametrize('unattended', [True, False])
 def test_prefetch_flip_does_not_supersede_foreground(make_emitter, monkeypatch, unattended):
-    monkeypatch.setattr(ae, 'RADAR_ATTENTION_MODE', 'active')
+    monkeypatch.setattr(radar_engine, 'RADAR_ATTENTION_MODE', 'active')
     e = make_emitter()
-    e._radar_attention.tier = 'live'
-    e._radar_attention.unattended = not unattended
-    before = e._radar_attention_knobs()
-    e._radar_attention.unattended = unattended
-    e._radar_checkpoint(dict(attention_knobs=before))
+    e.radar._attention.tier = 'live'
+    e.radar._attention.unattended = not unattended
+    before = e.radar._attention_knobs()
+    e.radar._attention.unattended = unattended
+    e.radar._checkpoint(dict(attention_knobs=before))
     arms = []
-    monkeypatch.setattr(e, '_radar_arm_discovery', lambda **kw: arms.append(kw))
-    e._radar_attention_changed(before, ae.time.time())
+    monkeypatch.setattr(e.radar, '_arm_discovery', lambda **kw: arms.append(kw))
+    e.radar._attention_changed(before, ae.time.time())
     assert not arms, 'prefetch-only flip must not rearm foreground discovery'
 
 
 def test_prefetch_work_yields_when_unattended(make_emitter, monkeypatch):
-    monkeypatch.setattr(ae, 'RADAR_ATTENTION_MODE', 'active')
-    e = make_emitter(); e._radar_attention.tier = 'live'
-    before = e._radar_attention_knobs()
-    e._radar_attention.unattended = True
-    with pytest.raises(ae._RadarBudget):
-        e._radar_checkpoint(dict(attention_knobs=before, prefetch=True))
+    monkeypatch.setattr(radar_engine, 'RADAR_ATTENTION_MODE', 'active')
+    e = make_emitter(); e.radar._attention.tier = 'live'
+    before = e.radar._attention_knobs()
+    e.radar._attention.unattended = True
+    with pytest.raises(radar_engine._RadarBudget):
+        e.radar._checkpoint(dict(attention_knobs=before, prefetch=True))
 
 
 @pytest.mark.parametrize('state', ['retarget', 'source', 'partial', 'short', 'failed'])
@@ -94,35 +95,35 @@ assert.notEqual(radarPendingRetry(),null,'budget silence concealed '+STATE);
 
 @pytest.mark.parametrize('unattended', [True, False])
 def test_prefetch_flip_mid_acquisition_finishes_eight_frames(make_emitter, hybrid, monkeypatch, unattended):
-    monkeypatch.setattr(ae, 'RADAR_ATTENTION_MODE', 'active')
-    e = make_emitter(); e._radar_attention.tier = 'live'
-    e._radar_attention.unattended = not unattended
-    original = e._radar_fill_frame
+    monkeypatch.setattr(radar_engine, 'RADAR_ATTENTION_MODE', 'active')
+    e = make_emitter(); e.radar._attention.tier = 'live'
+    e.radar._attention.unattended = not unattended
+    original = e.radar._fill_frame
     def flip(*args, **kwargs):
         frame = original(*args, **kwargs)
-        e._radar_attention.unattended = unattended
+        e.radar._attention.unattended = unattended
         return frame
-    monkeypatch.setattr(e, '_radar_fill_frame', flip)
-    e._do_radar(intent_triggered=False)
-    assert sum(f['complete'] for f in e._radar_result.frames) == 8
-    assert e._radar_pass['outcome'] != 'superseded'
-    assert not any(e._radar_pending.get(k) for k in ('newest', 'four', 'eight'))
+    monkeypatch.setattr(e.radar, '_fill_frame', flip)
+    e.radar._acquire(intent_triggered=False)
+    assert sum(f['complete'] for f in e.radar._result.frames) == 8
+    assert e.radar._pass['outcome'] != 'superseded'
+    assert not any(e.radar._pending.get(k) for k in ('newest', 'four', 'eight'))
 
 
 def test_unattended_flip_during_history_stops_optional_retry(make_emitter, hybrid, monkeypatch):
-    monkeypatch.setattr(ae, 'RADAR_ATTENTION_MODE', 'active')
-    e = make_emitter(); e._radar_attention.tier = 'live'; hybrid.view()
-    original = e._radar_fill_frame
+    monkeypatch.setattr(radar_engine, 'RADAR_ATTENTION_MODE', 'active')
+    e = make_emitter(); e.radar._attention.tier = 'live'; hybrid.view()
+    original = e.radar._fill_frame
     def flip(*args, **kwargs):
         frame = original(*args, **kwargs)
         if args[1] != hybrid.latest:
-            e._radar_attention.unattended = True
+            e.radar._attention.unattended = True
         return frame
-    monkeypatch.setattr(e, '_radar_fill_frame', flip)
-    e._do_radar(intent_triggered=False)
-    assert sum(f['complete'] for f in e._radar_result.frames) == 8
-    assert not e._radar_pending.get('optional')
-    assert 'radar' not in e._retries
+    monkeypatch.setattr(e.radar, '_fill_frame', flip)
+    e.radar._acquire(intent_triggered=False)
+    assert sum(f['complete'] for f in e.radar._result.frames) == 8
+    assert not e.radar._pending.get('optional')
+    assert 'radar' not in e._runtime.retries
 
 
 def test_concurrent_reports_have_one_ordered_marker_writer(server, monkeypatch, tmp_path):

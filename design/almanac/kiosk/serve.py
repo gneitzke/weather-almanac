@@ -61,7 +61,7 @@ LOCAL_CONNECTIONS, LAN_CONNECTIONS, LAN_CLIENT_CONNECTIONS = 64, 48, 12
 # Aligned with the emitter shared floor and highest source ceiling.
 RADAR_MIN_ZOOM, RADAR_MAX_DESIRED_ZOOM = 4, 10
 # Intent-record fields of the retired manual source choice; the emitter strips
-# the same set (almanac_emit.RADAR_RETIRED_INTENT_FIELDS).
+# the same set (radar_engine.RADAR_RETIRED_INTENT_FIELDS).
 RETIRED_INTENT_FIELDS = frozenset(('source', 'sourceAcceptedAt'))
 
 # Page build handshake. The page, this server and the emitter the launcher
@@ -299,7 +299,7 @@ _count_lock = threading.Lock()
 # The engine admits deep history only during a continuous, live view session.
 RADAR_VIEW_POLL_GAP_SEC = 5
 # The engine treats the tab as open while radar_viewing's `last` is younger than
-# this (almanac_emit.RADAR_VIEWING_LAPSE_SEC); a silent viewer lapses with it.
+# this (radar_engine.RADAR_VIEWING_LAPSE_SEC); a silent viewer lapses with it.
 RADAR_VIEWING_LAPSE_SEC = 60
 
 # LAN viewing. A LAN browser whose Radar tab is active and visible counts as

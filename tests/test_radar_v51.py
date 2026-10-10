@@ -61,7 +61,7 @@ from tests.test_radar_keepalive import origin  # noqa: E402,F401
 
 def test_health_separates_hedge_and_failure_retry_in_same_batch(engine, origin, monkeypatch):
     # No idle warm lease: both failure modes must use their second attempt.
-    monkeypatch.setattr(engine._radar_session, "reserve_hedge", lambda url: None)
+    monkeypatch.setattr(engine.radar._session, "reserve_hedge", lambda url: None)
     def behavior(path, ordinal):
         if ordinal == 1:
             if path.endswith('/0'):
@@ -71,8 +71,8 @@ def test_health_separates_hedge_and_failure_retry_in_same_batch(engine, origin, 
         return 'normal'
     origin.behavior = behavior
     result, _ = batch(engine, origin, count=3)
-    health = engine._radar_health.snapshot()
+    health = engine.radar._health.snapshot()
     assert len(result) == 3
     assert health['hedges'] == 0 and health['retries'] == 2
     assert health['discardedHedges'] == 0  # no hedge was admitted
-    assert len(origin.requests) == len(engine._radar_request_times) == 5
+    assert len(origin.requests) == len(engine.radar._request_times) == 5

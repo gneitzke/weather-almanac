@@ -12,6 +12,7 @@ import urllib.request
 from pathlib import Path
 
 from lib import almanac_emit as ae
+from lib import radar_engine
 from tests.test_freshness_health import SERVE, _payload, serve_at  # noqa: F401
 from tests.test_radar_review_oct_serve import _raw, _status
 from tests.test_radar_hybrid import hybrid  # noqa: F401
@@ -147,12 +148,12 @@ def test_the_engine_strips_retired_fields_before_the_payload(make_emitter, hybri
     hybrid.pin(None)
     (tmp_path/'radar_intent').write_text(json.dumps(OLD_INTENT))
     emitter = make_emitter()
-    assert emitter._radar_read_intent() == {k: v for k, v in OLD_INTENT.items() if k not in ('source', 'sourceAcceptedAt')}
-    emitter._do_radar()
+    assert emitter.radar._read_intent() == {k: v for k, v in OLD_INTENT.items() if k not in ('source', 'sourceAcceptedAt')}
+    emitter.radar._acquire()
     intent = emitter._build_payload()['radar']['intent']
     assert intent['seq'] == 7 and intent['zoom'] == 9
     assert 'source' not in intent and 'sourceAcceptedAt' not in intent
 
 
 def test_both_readers_retire_the_same_fields(server):
-    assert server.RETIRED_INTENT_FIELDS == ae.RADAR_RETIRED_INTENT_FIELDS == {'source', 'sourceAcceptedAt'}
+    assert server.RETIRED_INTENT_FIELDS == radar_engine.RADAR_RETIRED_INTENT_FIELDS == {'source', 'sourceAcceptedAt'}

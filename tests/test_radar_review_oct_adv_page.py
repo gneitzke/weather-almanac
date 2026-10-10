@@ -8,6 +8,7 @@ import math
 import numpy as np
 
 from lib import almanac_emit as ae
+from lib import radar_engine
 from lib import radar_mosaic as mosaic
 from lib.radar_level3 import Scan
 from lib.radar_palette import source_palette
@@ -117,12 +118,12 @@ def test_site_layer_disc_cells_match_the_engine_and_union():
     n = 2**z
     cx = int((-122.33+180)/360*n)
     cy = int((1-math.asinh(math.tan(math.radians(47.61)))/math.pi)/2*n)
-    old = ae._NEXRAD_SITES
-    ae._NEXRAD_SITES = {'KNEA': (47.61, -122.33, 'n')}
+    old = radar_engine._NEXRAD_SITES
+    radar_engine._NEXRAD_SITES = {'KNEA': (47.61, -122.33, 'n')}
     try:
-        expected = {f'{x}/{y}': ae._radar_disc_grid('KNEA', z, x, y) for x in range(cx-4, cx+5) for y in range(cy-3, cy+4)}
+        expected = {f'{x}/{y}': radar_engine._radar_disc_grid('KNEA', z, x, y) for x in range(cx-4, cx+5) for y in range(cy-3, cy+4)}
     finally:
-        ae._NEXRAD_SITES = old
+        radar_engine._NEXRAD_SITES = old
     assert len(set(expected.values())) > 3      # inside, outside and edge tiles
     run_page(r'''
 radarSiteTable=[{id:'KNEA',lat:47.61,lon:-122.33}];

@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 import pytest
 
 from lib import almanac_emit as ae
+from lib import radar_engine
 from lib import nws_warnings as nw
 from tests.fixtures import nws_warnings as fx
 from tests.fixtures import obs_scenarios as scn
@@ -29,7 +30,7 @@ from tests.test_radar_warnings import FakeResp, Net, emitter
 
 STATION = (47.61, -122.33)                      # a generic Puget Sound point
 REACH = nw.Reach(*STATION)
-HOME = nw.Reach(*STATION, ae._radar_zoom_for(STATION[0]))
+HOME = nw.Reach(*STATION, radar_engine._radar_zoom_for(STATION[0]))
 
 
 def parse(features, now, reach=REACH, until=None, home=HOME):
@@ -134,8 +135,8 @@ def test_reach_edges_match_the_page_clamp():
 def test_the_emitter_queries_what_the_camera_can_reach(make_emitter, monkeypatch):
     Net(monkeypatch)
     e = emitter(make_emitter)
-    reach, home, codes, url = e._warnings_query()
-    assert reach.zoom == ae.RADAR_MIN_ZOOM and home.zoom == ae._radar_zoom_for(STATION[0])
+    reach, home, codes, url = e.radar._warnings_query()
+    assert reach.zoom == radar_engine.RADAR_MIN_ZOOM and home.zoom == radar_engine._radar_zoom_for(STATION[0])
     assert set(codes) == set(nw.AREAS) and 'area=' in url
 
 
@@ -152,18 +153,18 @@ def test_without_a_viewer_only_the_home_view_speeds_polling(make_emitter, monkey
     Net(monkeypatch)
     now = time.time()
     london = emitter(make_emitter, Station={'Latitude': '51.5', 'Longitude': '-0.12', 'Timezone': 'Europe/London'})
-    london._radar_attention.tier = 'rest'
-    london._radar_attention.wet_until = now + 600             # rain at London: no NWS concern
-    assert london._warnings_fast(now) is False
-    london._radar_attention.tier = 'live'                     # a viewer can pan to the US
-    assert london._warnings_fast(now) is True
+    london.radar._attention.tier = 'rest'
+    london.radar._attention.wet_until = now + 600             # rain at London: no NWS concern
+    assert london.radar._warnings_fast(now) is False
+    london.radar._attention.tier = 'live'                     # a viewer can pan to the US
+    assert london.radar._warnings_fast(now) is True
     seattle = emitter(make_emitter)
-    seattle._radar_attention.tier = 'rest'
+    seattle.radar._attention.tier = 'rest'
     far = [[-97.6, 35.4], [-97.4, 35.4], [-97.4, 35.6], [-97.6, 35.6]]
-    seattle._warnings.succeeded(now, parse([fx.feature(now, ring=far, office='KOUN')], now), 'u')
-    assert seattle._warnings_fast(now) is False                # a far warning: no hurry
-    seattle._warnings.succeeded(now, parse([fx.feature(now, ring=fx.NEARBY)], now), 'u')
-    assert seattle._warnings_fast(now) is True
+    seattle.radar._warnings.succeeded(now, parse([fx.feature(now, ring=far, office='KOUN')], now), 'u')
+    assert seattle.radar._warnings_fast(now) is False                # a far warning: no hurry
+    seattle.radar._warnings.succeeded(now, parse([fx.feature(now, ring=fx.NEARBY)], now), 'u')
+    assert seattle.radar._warnings_fast(now) is True
 
 
 # ------------------------------------------- 3 original geometry, cap, wrap
@@ -291,8 +292,8 @@ def test_the_emitter_publishes_the_deadline(make_emitter, monkeypatch):
     now = time.time()
     net.answers.append(FakeResp(json.dumps(fx.collection(fx.feature(now, ring=fx.OVER_STATION)))))
     e = emitter(make_emitter)
-    e._radar_attention.tier = 'rest'
-    e._check_warnings()
+    e.radar._attention.tier = 'rest'
+    e.radar._check_warnings()
     e._spawned[0][1]()
     w = e._build_payload()['radar']['warnings']
     assert w['stale'] is False
@@ -310,10 +311,10 @@ def healthy(e, scans=12, latency=300):
     for k in range(scans):
         ts = T + 300 * k
         while now < ts + latency:
-            e._radar_note_latency('KATX', list(listing), now)
+            e.radar._note_latency('KATX', list(listing), now)
             now += 60
         listing.append(ts)
-        e._radar_note_latency('KATX', list(listing), now)
+        e.radar._note_latency('KATX', list(listing), now)
         now += 60
     return listing, now
 
@@ -321,26 +322,26 @@ def healthy(e, scans=12, latency=300):
 def test_a_regressed_listing_does_not_turn_old_scans_into_latency(make_emitter):
     e = make_emitter(scn.all_none())
     listing, now = healthy(e)
-    before = e._radar_site_latency('KATX', now)
-    assert 300 <= before < 360 and ae._radar_site_stale_sec(300, before) <= 960
-    e._radar_note_latency('KATX', [], now)                         # IEM answers empty
-    e._radar_note_latency('KATX', listing[:3], now + 60)            # ... then partial
-    e._radar_note_latency('KATX', listing, now + 120)               # ... then whole again
-    assert e._radar_site_latency('KATX', now + 120) == before
-    assert len(e._radar_latency['KATX']['samples']) == 12
+    before = e.radar._site_latency('KATX', now)
+    assert 300 <= before < 360 and radar_engine._radar_site_stale_sec(300, before) <= 960
+    e.radar._note_latency('KATX', [], now)                         # IEM answers empty
+    e.radar._note_latency('KATX', listing[:3], now + 60)            # ... then partial
+    e.radar._note_latency('KATX', listing, now + 120)               # ... then whole again
+    assert e.radar._site_latency('KATX', now + 120) == before
+    assert len(e.radar._latency['KATX']['samples']) == 12
 
 
 def test_a_backlog_batch_is_one_vote(make_emitter):
     e = make_emitter(scn.all_none())
     listing, now = healthy(e, scans=3)
-    count = len(e._radar_latency['KATX']['samples'])
+    count = len(e.radar._latency['KATX']['samples'])
     newest = listing[-1]
     while now < newest + 900 + 300:                                # listings keep coming, nothing new
-        e._radar_note_latency('KATX', list(listing), now)
+        e.radar._note_latency('KATX', list(listing), now)
         now += 60
     batch = listing + [newest + 300, newest + 600, newest + 900]
-    e._radar_note_latency('KATX', batch, newest + 900 + 300)       # then three new scans at once
-    samples = e._radar_latency['KATX']['samples']
+    e.radar._note_latency('KATX', batch, newest + 900 + 300)       # then three new scans at once
+    samples = e.radar._latency['KATX']['samples']
     assert len(samples) == count + 1 and samples[-1][1] == 300      # the newest arrival only
 
 
@@ -349,16 +350,16 @@ def test_a_backfilled_older_scan_is_not_a_sample(make_emitter):
     # nothing about how quickly IEM publishes.
     e = make_emitter(scn.all_none())
     listing, now = healthy(e, scans=4)
-    count = len(e._radar_latency['KATX']['samples'])
-    e._radar_note_latency('KATX', sorted(listing + [listing[-1] - 150]), now)
-    assert len(e._radar_latency['KATX']['samples']) == count
+    count = len(e.radar._latency['KATX']['samples'])
+    e.radar._note_latency('KATX', sorted(listing + [listing[-1] - 150]), now)
+    assert len(e.radar._latency['KATX']['samples']) == count
 
 
 def test_samples_expire(make_emitter):
     e = make_emitter(scn.all_none())
     _, now = healthy(e)
-    assert e._radar_site_latency('KATX', now) is not None
-    assert e._radar_site_latency('KATX', now + ae.RADAR_SITE_LATENCY_MAX_AGE_SEC + 3600) is None
+    assert e.radar._site_latency('KATX', now) is not None
+    assert e.radar._site_latency('KATX', now + radar_engine.RADAR_SITE_LATENCY_MAX_AGE_SEC + 3600) is None
 
 
 # --------------------------------------------- should-fix: exact reach test
@@ -400,20 +401,20 @@ def test_a_trickled_body_hits_one_fetch_deadline(make_emitter, origin, monkeypat
     body = json.dumps(fx.collection()).encode() + b' ' * 4000
     origin.drip = (b'HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n' % len(body) + body, 0.02)
     e = make_emitter(scn.all_none(), config=make_config(Display={'TimeFormat': '12 hr'}))
-    reach, home, codes, url = e._warnings_query()
+    reach, home, codes, url = e.radar._warnings_query()
     started = time.monotonic()
     try:
-        e._do_warnings(origin.url + '/alerts/active?area=WA', reach, home)
+        e.radar._do_warnings(origin.url + '/alerts/active?area=WA', reach, home)
     finally:
-        if e._warnings_session is not None:
-            e._warnings_session.close()
+        if e.radar._warnings_session is not None:
+            e.radar._warnings_session.close()
     elapsed = time.monotonic() - started
     # The whole body would take ~80 s to drip; only a deadline stops it.
     assert elapsed < 3.0, elapsed
-    assert e._warnings.failures == 1 and e._warnings.stale(time.time()) is True
+    assert e.radar._warnings.failures == 1 and e.radar._warnings.stale(time.time()) is True
     # bytes keep arriving every 20 ms, so no per-read timeout can fire: the
     # remaining-time deadline did (expressed as a socket timeout on the read)
-    assert 'deadline' in e._warnings.error or 'timed out' in e._warnings.error, e._warnings.error
+    assert 'deadline' in e.radar._warnings.error or 'timed out' in e.radar._warnings.error, e.radar._warnings.error
     assert origin.requests and origin.requests[0][2].startswith('/alerts/active')
 
 
@@ -425,13 +426,13 @@ def test_the_fetch_uses_one_deadline_bounded_transport(make_emitter, monkeypatch
             raise TimeoutError('radar request exceeded deadline')
         def close(self):
             pass
-    monkeypatch.setattr(ae, 'RadarSession', Session)
+    monkeypatch.setattr(radar_engine, 'RadarSession', Session)
     e = make_emitter(scn.all_none(), config=make_config())
-    reach, home, codes, url = e._warnings_query()
-    e._do_warnings(url, reach, home)
-    e._do_warnings(url, reach, home)
-    assert calls == [nw.FETCH_DEADLINE_SEC] * 2 and isinstance(e._warnings_session, Session)
-    assert e._warnings.failures == 2
+    reach, home, codes, url = e.radar._warnings_query()
+    e.radar._do_warnings(url, reach, home)
+    e.radar._do_warnings(url, reach, home)
+    assert calls == [nw.FETCH_DEADLINE_SEC] * 2 and isinstance(e.radar._warnings_session, Session)
+    assert e.radar._warnings.failures == 2
 
 
 # ------------------------------------------- the loop caption's frame time
@@ -440,9 +441,9 @@ def test_frame_labels_are_station_local_in_the_clock_style():
     # labels every frame in the station's zone and clock style.
     ts = 1_791_579_120                                    # 20:52 UTC = 1:52 PM PDT
     frame = dict(ts=ts, stamp='x', complete=True, levels={}, mosaicKey='M', siteScans=[], requestedPairs=[])
-    snap = ae._RADAR_NONE._replace(available=True, reason=None, frames=(frame,), ts_frame=ts,
+    snap = radar_engine._RADAR_NONE._replace(available=True, reason=None, frames=(frame,), ts_frame=ts,
                                    tiles=dict(frames=[dict(frame)]), legend={}, sources=(), sites=())
     tz = ae.pytz.timezone('America/Los_Angeles')
-    r = ae.AlmanacEmitter._radar_payload(snap, ts + 300, tz, style='12 hr')
+    r = radar_engine.RadarEngine._payload(snap, ts + 300, tz, style='12 hr')
     assert r['tiles']['frames'][0]['at'] == '1:52 PM'
     assert datetime.fromtimestamp(ts, timezone.utc).strftime('%H:%M') == '20:52'

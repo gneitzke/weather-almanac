@@ -78,9 +78,9 @@ def test_retry_armed_after_stop_does_not_register(make_emitter):
     e = make_emitter()
     e.start()
     e.stop()
-    e._schedule_retry('forecast', lambda dt: None, 120)          # worker lost the race with stop()
-    assert e._retries == {} and e._events == []
-    assert e._schedule(lambda dt: None, 5) is None
+    e._runtime.schedule_retry('forecast', lambda dt: None, 120)          # worker lost the race with stop()
+    assert e._runtime.retries == {} and e._runtime.events == []
+    assert e._runtime.schedule(lambda dt: None, 5) is None
 
 
 def test_tempest_daily_buckets_seed_raw_rain_in_raw_mode():

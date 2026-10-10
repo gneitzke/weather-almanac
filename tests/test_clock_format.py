@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 import pytest
 import pytz
 from lib import almanac_emit as ae
+from lib import radar_engine
 from tests.fixtures.config import make_config
 
 TZ = pytz.timezone('America/Los_Angeles')
@@ -62,8 +63,8 @@ def test_radar_check_times_follow_the_setting(style, expect):
     ts = local(2026, 9, 16, 18, 25).timestamp()
     nexrad = dict(id='KATX', name='Camano Island', distanceMeters=1.0, bearing='NW',
                   reporting=True, newestTs=ts-300, ageSec=300, reason=None, checkedTs=ts, nextCheckTs=ts+60)
-    snap = ae._RADAR_NONE._replace(nexrad=nexrad)
-    r = ae.AlmanacEmitter._radar_payload(snap, ts, TZ, None, style)
+    snap = radar_engine._RADAR_NONE._replace(nexrad=nexrad)
+    r = radar_engine.RadarEngine._payload(snap, ts, TZ, None, style)
     assert expect.match(r['nexrad']['checkedAt']) and expect.match(r['nexrad']['nextCheckAt'])
 
 

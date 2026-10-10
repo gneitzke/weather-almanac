@@ -11,6 +11,7 @@ import pytest
 from PIL import Image  # noqa: F401 - exclude Pillow startup from render allocation samples
 
 from lib import almanac_emit as ae, radar_level3 as l3, radar_mosaic as mosaic
+from lib import radar_engine
 from lib.radar_palette import source_palette
 from tests.test_radar_mosaic import scan, classes, SOURCE, classified  # noqa: F401
 from tests.test_radar_hybrid import hybrid  # noqa: F401
@@ -29,7 +30,7 @@ def candidates():
 @pytest.mark.parametrize('z', [7, 8, 9, 10])
 def test_real_viewport_eight_frames_survive_margin_and_prefetch(candidates, z):
     ctx = dict(zoom=z, camera_zoom=z, center=dict(lat=47.6, lon=-122.3))
-    grid = [(x, y) for x, y, _, _ in ae._radar_grid(ctx)]
+    grid = [(x, y) for x, y, _, _ in radar_engine._radar_grid(ctx)]
     assert grid == viewport_grid(z)
     assert len(grid) == (15 if z == 7 else 12)
     mosaic.clear_geometry_cache()
@@ -126,17 +127,17 @@ def test_emitter_admits_only_foreground_viewport(make_emitter, hybrid, monkeypat
     ctx = dict(zoom=zoom, camera_zoom=camera, center=dict(lat=47.6, lon=-122.3),
                native=True, attention='live', prefetch=prefetch, mosaic_scans=[scan()],
                tile_workers=1)
-    ctx['tiles'] = ae._radar_grid(ctx, margin=1)
+    ctx['tiles'] = radar_engine._radar_grid(ctx, margin=1)
     seen = {}
     def render(scans, z, x, y, *args, **kwargs):
         seen[x, y] = kwargs['cache_geometry']
         # Record the actual batch boundary without exercising PNG persistence.
         raise ValueError('projection inspected')
     monkeypatch.setattr(mosaic, 'render_mosaic', render)
-    monkeypatch.setattr(emitter, '_radar_checkpoint', lambda ctx: None)
+    monkeypatch.setattr(emitter.radar, '_checkpoint', lambda ctx: None)
     try:
-        list(emitter._radar_tile_batch(SOURCE, hybrid.latest, ctx, 100, None, 'Mtest'))
-        viewport = {(x, y) for x, y, _, _ in ae._radar_grid(ctx)}
+        list(emitter.radar._tile_batch(SOURCE, hybrid.latest, ctx, 100, None, 'Mtest'))
+        viewport = {(x, y) for x, y, _, _ in radar_engine._radar_grid(ctx)}
         assert len(seen) == len(ctx['tiles'])
         assert {tile for tile, admitted in seen.items() if admitted} == (
             viewport if not prefetch and zoom == camera else set())
@@ -146,8 +147,8 @@ def test_emitter_admits_only_foreground_viewport(make_emitter, hybrid, monkeypat
 
 def test_pass_finishes_while_ledger_fsync_is_stalled(make_emitter, hybrid, multisite, classified, monkeypatch):
     emitter = make_emitter()
-    emitter._do_radar()
-    ledger = emitter._radar_native_budget
+    emitter.radar._acquire()
+    ledger = emitter.radar._native_budget
     assert ledger.flush()
     entered, release = threading.Event(), threading.Event()
     write = ledger._write
@@ -164,7 +165,7 @@ def test_pass_finishes_while_ledger_fsync_is_stalled(make_emitter, hybrid, multi
     pool = ThreadPoolExecutor(max_workers=1)
     try:
         started = time.perf_counter()
-        job = pool.submit(emitter._do_radar)
+        job = pool.submit(emitter.radar._acquire)
         job.result(timeout=2)
         print('Pass with blocked ledger fsync: %.2f ms' % ((time.perf_counter()-started)*1000))
         assert not release.is_set(), 'pass must not wait on the ledger writer'
@@ -177,20 +178,20 @@ def test_pass_finishes_while_ledger_fsync_is_stalled(make_emitter, hybrid, multi
 
 def test_frame_executors_reused_and_stop_retires_both(make_emitter, hybrid, monkeypatch):
     emitter = make_emitter()
-    pools = (emitter._radar_input_pool, emitter._radar_hca_pool)
+    pools = (emitter.radar._input_pool, emitter.radar._hca_pool)
     workers = {'N0B': set(), 'N0H': set()}
     lock = threading.Lock()
     def acquire(site, stamp, ctx, deadline, product='N0B', volume_ts=None):
         with lock:
             workers[product].add(threading.get_ident())
         return scan(ts=stamp+24) if product == 'N0B' else classes(60, ts=volume_ts)
-    monkeypatch.setattr(emitter, '_radar_level3_scan', acquire)
+    monkeypatch.setattr(emitter.radar, '_level3_scan', acquire)
     try:
         for frame in range(12):
             stamp = hybrid.latest+frame*60
-            metadata, inputs = emitter._radar_mosaic_inputs([(s, stamp) for s in 'ABCD'], stamp, {}, 100)
+            metadata, inputs = emitter.radar._mosaic_inputs([(s, stamp) for s in 'ABCD'], stamp, {}, 100)
             assert len(inputs) == 4 and not metadata['unfilteredSites']
-            assert pools == (emitter._radar_input_pool, emitter._radar_hca_pool)
+            assert pools == (emitter.radar._input_pool, emitter.radar._hca_pool)
         assert all(0 < len(ids) <= 8 for ids in workers.values())
         print('12 frames, distinct input/HCA workers:', {p: len(ids) for p, ids in workers.items()})
     finally:
@@ -209,7 +210,7 @@ def test_stalled_hca_has_next_frame_capacity_and_bounded_saturation(make_emitter
     # Stalled work is held by events, never by the clock; the budget only has to
     # outlast thread scheduling of FRESH work on a loaded CI runner (a 30 ms
     # budget failed there once, 2026-09-25).
-    monkeypatch.setattr(ae, 'RADAR_N0H_FRAME_BUDGET_SEC', 1.0)
+    monkeypatch.setattr(radar_engine, 'RADAR_N0H_FRAME_BUDGET_SEC', 1.0)
     calls = []
     def acquire(site, stamp, ctx, deadline, product='N0B', volume_ts=None):
         if product == 'N0B':
@@ -219,10 +220,10 @@ def test_stalled_hca_has_next_frame_capacity_and_bounded_saturation(make_emitter
             started.wait(timeout=2)
             assert release.wait(5)
         return classes(60, ts=volume_ts)
-    monkeypatch.setattr(emitter, '_radar_level3_scan', acquire)
+    monkeypatch.setattr(emitter.radar, '_level3_scan', acquire)
     def frame(offset):
         stamp = hybrid.latest+offset
-        return emitter._radar_mosaic_inputs([(s, stamp) for s in 'ABCD'], stamp, {}, 100)[0]
+        return emitter.radar._mosaic_inputs([(s, stamp) for s in 'ABCD'], stamp, {}, 100)[0]
     try:
         assert len(frame(0)['unfilteredSites']) == 4
         assert not frame(60)['unfilteredSites'], 'old stalled frame must leave four fresh HCA slots'
@@ -230,16 +231,16 @@ def test_stalled_hca_has_next_frame_capacity_and_bounded_saturation(make_emitter
         for offset in (180, 240, 300):
             assert len(frame(offset)['unfilteredSites']) == 4
         assert len(calls) == 12, 'saturated work must fail admission, not queue or spawn more threads'
-        assert len(emitter._radar_hca_pool._threads) <= 8
+        assert len(emitter.radar._hca_pool._threads) <= 8
     finally:
         release.set()
         emitter.stop()
-        emitter._radar_hca_pool.shutdown(wait=True)
-        emitter._radar_input_pool.shutdown(wait=True)
+        emitter.radar._hca_pool.shutdown(wait=True)
+        emitter.radar._input_pool.shutdown(wait=True)
 
 
 def test_executor_saturation_does_not_grow_queue_or_threads():
-    pool = ae._RadarInputExecutor(1, 'radar-review3')
+    pool = radar_engine._RadarInputExecutor(1, 'radar-review3')
     entered, release = threading.Event(), threading.Event()
     def stalled():
         entered.set()
@@ -270,18 +271,18 @@ def test_late_cancelled_reflectivity_cannot_launch_hca_for_retired_frame(make_em
             started.wait(timeout=2)
             assert release.wait(5)
         return scan(ts=stamp+24)
-    monkeypatch.setattr(emitter, '_radar_level3_scan', acquire)
+    monkeypatch.setattr(emitter.radar, '_level3_scan', acquire)
     try:
-        first, scans = emitter._radar_mosaic_inputs([(s, hybrid.latest) for s in 'ABCD'],
+        first, scans = emitter.radar._mosaic_inputs([(s, hybrid.latest) for s in 'ABCD'],
                                                    hybrid.latest, {}, .02)
         assert not scans and not first['siteScans']
         stamp = hybrid.latest+60
-        second, scans = emitter._radar_mosaic_inputs([(s, stamp) for s in 'ABCD'], stamp, {}, 100)
+        second, scans = emitter.radar._mosaic_inputs([(s, stamp) for s in 'ABCD'], stamp, {}, 100)
         assert len(scans) == 4 and not second['unfilteredSites']
     finally:
         release.set()
-        emitter._radar_input_pool.shutdown(wait=True)
-        emitter._radar_hca_pool.shutdown(wait=True)
+        emitter.radar._input_pool.shutdown(wait=True)
+        emitter.radar._hca_pool.shutdown(wait=True)
         emitter.stop()
     assert hca_stamps == [hybrid.latest+60]*4
 
@@ -290,12 +291,12 @@ def test_cancelled_wrapper_keeps_admission_until_dequeued(monkeypatch):
     # Freeze the executor's work dispatch, as if all worker threads have not
     # yet been scheduled. Cancel/retry must not grow a queue of dead wrappers.
     submitted = []
-    original = ae.ThreadPoolExecutor.submit
+    original = radar_engine.ThreadPoolExecutor.submit
     def delayed(self, fn, *args, **kwargs):
         submitted.append(fn)
-        return ae.Future()
-    monkeypatch.setattr(ae.ThreadPoolExecutor, 'submit', delayed)
-    pool = ae._RadarInputExecutor(1, 'radar-review3')
+        return radar_engine.Future()
+    monkeypatch.setattr(radar_engine.ThreadPoolExecutor, 'submit', delayed)
+    pool = radar_engine._RadarInputExecutor(1, 'radar-review3')
     first = pool.submit(lambda: pytest.fail('cancelled function ran'))
     assert first.cancel()
     for _ in range(100):
@@ -303,7 +304,7 @@ def test_cancelled_wrapper_keeps_admission_until_dequeued(monkeypatch):
             pool.submit(lambda: None).result()
     assert len(submitted) == 1
     submitted[0]()
-    monkeypatch.setattr(ae.ThreadPoolExecutor, 'submit', original)
+    monkeypatch.setattr(radar_engine.ThreadPoolExecutor, 'submit', original)
     try:
         assert pool.submit(lambda: 42).result(timeout=1) == 42
     finally:

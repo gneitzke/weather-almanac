@@ -19,6 +19,7 @@ from types import SimpleNamespace
 import pytest
 
 from lib import almanac_emit as ae
+from lib import radar_engine
 from tests.fixtures import obs_scenarios as scn
 
 
@@ -168,13 +169,13 @@ def test_a_day_of_forecast_failures_stays_one_retry_chain(make_emitter, clock, m
         raise OSError('network is down')
 
     monkeypatch.setattr(urllib.request, 'urlopen', refuse)
-    monkeypatch.setattr(ae.RadarSession, 'open', refuse)
+    monkeypatch.setattr(radar_engine.RadarSession, 'open', refuse)
     emitter = make_emitter(scn.all_none())
     attempts = []
     # This simulates a full day of provider retries; raster correctness and the
     # real independent geo worker are exercised in test_radar_v42.
-    monkeypatch.setattr(emitter, '_radar_geo_work',
-                        lambda token=None: setattr(emitter, '_radar_geo_idle', token))
+    monkeypatch.setattr(emitter.radar, '_geo_work',
+                        lambda token=None: setattr(emitter.radar, '_geo_idle', token))
     fetch = emitter._do_forecast
     monkeypatch.setattr(emitter, '_do_forecast', lambda: (attempts.append(clock.now), fetch())[1])
 
@@ -187,11 +188,11 @@ def test_a_day_of_forecast_failures_stays_one_retry_chain(make_emitter, clock, m
     assert 600 < len(attempts) <= ceiling         # still retrying, not multiplying
     # one retry chain PER provider, never a chain per failure: with the network
     # down, radar (also fetched) legitimately keeps its own single retry too
-    assert sorted(emitter._retries) == ['forecast', 'radar']
+    assert sorted(emitter._runtime.retries) == ['forecast', 'radar']
     assert len(clock.events) == 11                # 8 intervals + forecast/radar retries + discovery
 
     emitter.stop()
-    assert clock.events == [] and emitter._retries == {}
+    assert clock.events == [] and emitter._runtime.retries == {}
 
 
 def test_only_one_fetch_per_provider_is_in_flight(make_emitter, clock, monkeypatch):
@@ -206,7 +207,7 @@ def test_only_one_fetch_per_provider_is_in_flight(make_emitter, clock, monkeypat
     assert len(HangingThread.started) == 2
 
     # the slow AQI fetch finishes; the next poll is allowed again
-    emitter._inflight.discard('aqi')
+    emitter._runtime.inflight.discard('aqi')
     emitter._check_aqi()
     assert len(HangingThread.started) == 3
 

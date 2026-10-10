@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 
 from lib import almanac_emit as ae
+from lib import radar_engine
 from lib import radar_attention as ra
 from lib import radar_basemap as bm
 from lib import radar_level3 as l3
@@ -70,9 +71,9 @@ class CheckedLock:
 
 def checked(emitter):
     registry = SimpleNamespace(held={}, violations=[], timeouts=[], attempts=[], attempted=threading.Event())
-    emitter._radar_lock = CheckedLock('radar', registry)
-    emitter._radar_health.lock = CheckedLock('health', registry)
-    emitter._radar_n0h_health.lock = CheckedLock('health', registry)
+    emitter.radar._lock = CheckedLock('radar', registry)
+    emitter.radar._health.lock = CheckedLock('health', registry)
+    emitter.radar._n0h_health.lock = CheckedLock('health', registry)
     return registry
 
 
@@ -87,8 +88,8 @@ class Offline:
 def test_late_input_worker_pass_logging_and_payload_cannot_deadlock(make_emitter):
     e = make_emitter()
     registry = checked(e)
-    e._radar_session = Offline()
-    admitted = e._radar_health.admit
+    e.radar._session = Offline()
+    admitted = e.radar._health.admit
     worker_holds_health = threading.Event()
 
     def admit(source, url, metadata=False):
@@ -99,12 +100,12 @@ def test_late_input_worker_pass_logging_and_payload_cannot_deadlock(make_emitter
         registry.attempted.wait(1)          # the logger reaches for a lock
         real_time.sleep(.05)
         return admitted(source, url, metadata)
-    e._radar_health.admit = admit
+    e.radar._health.admit = admit
     errors = []
 
     def worker():
         try:
-            e._radar_request(ae.RADAR_LEVEL3_TRANSPORT, ae.RADAR_LEVEL3_BUCKET + 'NEA_N0B_x', real_time.monotonic() + 30)
+            e.radar._request(radar_engine.RADAR_LEVEL3_TRANSPORT, radar_engine.RADAR_LEVEL3_BUCKET + 'NEA_N0B_x', real_time.monotonic() + 30)
         except LockTimeout as error:
             errors.append(error)
         except Exception:                                            # noqa: BLE001
@@ -113,7 +114,7 @@ def test_late_input_worker_pass_logging_and_payload_cannot_deadlock(make_emitter
     def logger():
         try:
             assert worker_holds_health.wait(5)
-            e._radar_log_pass(real_time.monotonic())
+            e.radar._log_pass(real_time.monotonic())
         except Exception as error:                                   # noqa: BLE001
             errors.append(error)
 
@@ -121,11 +122,11 @@ def test_late_input_worker_pass_logging_and_payload_cannot_deadlock(make_emitter
         try:
             assert worker_holds_health.wait(5)
             e._build_payload()
-            e._radar_health_payload()
+            e.radar._health_payload()
         except Exception as error:                                   # noqa: BLE001
             errors.append(error)
 
-    e._radar_begin_log_pass()
+    e.radar._begin_log_pass()
     threads = [threading.Thread(target=t, name=t.__name__, daemon=True) for t in (worker, logger, payload)]
     for t in threads:
         t.start()
@@ -140,16 +141,16 @@ def test_a_full_native_pass_never_takes_health_under_the_radar_lock(make_emitter
     hybrid.view()
     e = make_emitter()
     registry = checked(e)
-    e._do_radar()
+    e.radar._acquire()
     e._build_payload()
-    e._radar_write_health(ae.time.time(), force=True)
-    assert e._radar_result.available and e._radar_result.tiles['variant'] == 'native'
+    e.radar._write_health(ae.time.time(), force=True)
+    assert e.radar._result.available and e.radar._result.tiles['variant'] == 'native'
     assert not registry.violations and not registry.timeouts
 
 
 def test_the_lock_order_is_documented_where_the_lock_is_made():
-    source = Path(ae.__file__).read_text()
-    head = source[:source.index('self._radar_lock = _RLock()')]
+    source = Path(radar_engine.__file__).read_text()
+    head = source[:source.index('self._lock = _RLock()')]
     assert 'LOCK ORDER' in head[-1500:] and 'HostHealth.lock' in head[-1500:]
 
 
@@ -162,35 +163,35 @@ def site_ctx(**scans):
 def test_neighbour_blend_limit_follows_the_scan_cadence():
     # The blend limit keeps L9's 2.5-interval rule. The display stale threshold
     # (latency + two intervals) is pinned in test_radar_stale_latency.py.
-    assert ae._radar_neighbour_limit_sec(None) == 900
-    assert ae._radar_neighbour_limit_sec(120) == 480   # SAILS: never under 8 min
-    assert ae._radar_neighbour_limit_sec(270) == 720   # precipitation: 2.5 scans, whole minutes
-    assert ae._radar_neighbour_limit_sec(600) == 900   # clear air: never over 15 min
+    assert radar_engine._radar_neighbour_limit_sec(None) == 900
+    assert radar_engine._radar_neighbour_limit_sec(120) == 480   # SAILS: never under 8 min
+    assert radar_engine._radar_neighbour_limit_sec(270) == 720   # precipitation: 2.5 scans, whole minutes
+    assert radar_engine._radar_neighbour_limit_sec(600) == 900   # clear air: never over 15 min
 
 
 def test_a_stale_neighbour_never_blends_into_the_newest_frame():
     T = 1_800_000_000
     ctx = site_ctx(KNEA=[T-600, T], KMID=[T-420])
     # Fresh as of now (780 s < 900 s for a 10-minute cadence): blended.
-    assert ae._radar_site_pairs(ctx, T, now=T+360) == (('KNEA', T), ('KMID', T-420))
+    assert radar_engine._radar_site_pairs(ctx, T, now=T+360) == (('KNEA', T), ('KMID', T-420))
     # The neighbour ages past the threshold while its frame is still newest.
-    assert ae._radar_site_pairs(ctx, T, now=T+500) == (('KNEA', T),)
+    assert radar_engine._radar_site_pairs(ctx, T, now=T+500) == (('KNEA', T),)
 
 
 def test_an_older_frame_keeps_its_contributors_as_the_clock_runs():
     T = 1_800_000_000
     ctx = site_ctx(KNEA=[T-600, T-300, T], KMID=[T-700])
-    first = ae._radar_site_pairs(ctx, T-300, now=T+10)
+    first = radar_engine._radar_site_pairs(ctx, T-300, now=T+10)
     # Judged as of its successor's scan (T), not the wall clock.
     assert first == (('KNEA', T-300), ('KMID', T-700))
-    assert ae._radar_site_pairs(ctx, T-300, now=T+3000) == first
+    assert radar_engine._radar_site_pairs(ctx, T-300, now=T+3000) == first
 
 
 def native_snapshot(now, contributors, anchor, cadence=600):
     frame = dict(ts=anchor, stamp='x', complete=True, levels={}, mosaicKey='Mabc', siteScans=contributors,
                  acquiredSites=contributors, requestedPairs=[[p['id'], p['ts']] for p in contributors])
     tiles = dict(frames=[dict(frame)], variant='native')
-    return ae._RADAR_NONE._replace(available=True, reason=None, frames=(frame,), ts_frame=anchor,
+    return radar_engine._RADAR_NONE._replace(available=True, reason=None, frames=(frame,), ts_frame=anchor,
         source_id='iem-nexrad-n0b', source_mode='site', stale_sec=900, tiles=tiles, scan_cadence_sec=cadence,
         units='mi', legend={}, sources=(), sites=())
 
@@ -200,7 +201,7 @@ def test_native_age_is_the_oldest_contributor_not_the_anchor():
     # The reviewer's case: the primary's newest scan failed, a neighbour 8 min
     # older carried the mosaic. The pixels are 22 minutes old, not 14.
     snap = native_snapshot(T+840, [dict(id='KMID', ts=T-456, volumeTs=T-430, filtered=True)], T)
-    r = ae.AlmanacEmitter._radar_payload(snap, T+840, timezone.utc)
+    r = radar_engine.RadarEngine._payload(snap, T+840, timezone.utc)
     assert r['observedTs'] == T                        # the animation key keeps its meaning
     assert r['ageSec'] == 1296 and r['stale'] is True
     assert r['observedRange'] == [T-456, T-456]
@@ -208,7 +209,7 @@ def test_native_age_is_the_oldest_contributor_not_the_anchor():
     # Fresh contributors: a range and the oldest age, current.
     snap = native_snapshot(T+120, [dict(id='KNEA', ts=T, volumeTs=T+20, filtered=True),
                                    dict(id='KMID', ts=T-240, volumeTs=T-220, filtered=True)], T, cadence=270)
-    r = ae.AlmanacEmitter._radar_payload(snap, T+120, timezone.utc)
+    r = radar_engine.RadarEngine._payload(snap, T+120, timezone.utc)
     assert r['observedRange'] == [T-240, T] and r['ageSec'] == 360
     assert r['staleSec'] == 840 and r['stale'] is False    # default latency 300 + 2 x 270
 
@@ -216,10 +217,10 @@ def test_native_age_is_the_oldest_contributor_not_the_anchor():
 def test_region_frames_keep_the_anchor_age():
     T = 1_800_000_000
     frame = dict(ts=T, stamp='x', complete=True, levels={}, siteScans=[])
-    snap = ae._RADAR_NONE._replace(available=True, reason=None, frames=(frame,), ts_frame=T,
+    snap = radar_engine._RADAR_NONE._replace(available=True, reason=None, frames=(frame,), ts_frame=T,
         source_id='iem-mrms-lcref', source_mode='mosaic', stale_sec=600, tiles=dict(frames=[dict(frame)]),
         units='mi', legend={}, sources=(), sites=())
-    r = ae.AlmanacEmitter._radar_payload(snap, T+100, timezone.utc)
+    r = radar_engine.RadarEngine._payload(snap, T+100, timezone.utc)
     assert r['ageSec'] == 100 and r['observedRange'] is None and r['staleSec'] == 600
     assert 'observedRange' not in r['tiles']['frames'][0]
 
@@ -229,7 +230,7 @@ def test_a_neighbour_only_native_mosaic_reports_the_neighbours_age(make_emitter,
     native.missing.add(hybrid.latest)          # the primary's newest product never reaches S3
     hybrid.view()
     e = make_emitter()
-    e._do_radar()
+    e.radar._acquire()
     r = e._build_payload()['radar']
     newest = next(f for f in r['tiles']['frames'] if f['ts'] == r['observedTs'])
     if any(p['id'] == 'KNEA' for p in newest['siteScans']):
@@ -282,8 +283,8 @@ def test_native_tiles_carry_the_coverage_count_and_a_new_revision(make_emitter, 
     assert l3.NATIVE_REVISION.endswith('v7')  # v7: radarMeasuredGrid
     hybrid.view()
     e = make_emitter()
-    e._do_radar()
-    records = {k: v for k, v in e._radar_disk_inventory.records.items() if k[-1] == 'native'}
+    e.radar._acquire()
+    records = {k: v for k, v in e.radar._disk_inventory.records.items() if k[-1] == 'native'}
     assert records
     for key, (path, _, meta) in records.items():
         with Image.open(path) as image:
@@ -291,10 +292,10 @@ def test_native_tiles_carry_the_coverage_count_and_a_new_revision(make_emitter, 
             count = int(image.info['radarUncoveredPixels'])
             grid = image.info['radarMeasuredGrid']
         assert meta['uncoveredPixels'] == count and meta['measuredGrid'] == grid
-        read = ae._radar_tile_metadata(Path(path), key[0])
+        read = radar_engine._radar_tile_metadata(Path(path), key[0])
         assert read['uncoveredPixels'] == count and read['measuredGrid'] == grid
     # Region (MRMS) tiles carry no count: fully covered by definition.
-    for key, (path, _, _) in e._radar_disk_inventory.records.items():
+    for key, (path, _, _) in e.radar._disk_inventory.records.items():
         if key[0] == 'iem-mrms-lcref':
             with Image.open(path) as image:
                 assert 'radarUncoveredPixels' not in image.info
@@ -305,8 +306,8 @@ def test_a_tile_without_or_with_a_false_coverage_count_is_refused(make_emitter, 
     from PIL.PngImagePlugin import PngInfo
     hybrid.view()
     e = make_emitter()
-    e._do_radar()
-    key, (path, _, _) = next((k, v) for k, v in e._radar_disk_inventory.records.items() if k[-1] == 'native')
+    e.radar._acquire()
+    key, (path, _, _) = next((k, v) for k, v in e.radar._disk_inventory.records.items() if k[-1] == 'native')
     with Image.open(path) as image:
         image.load()
         texts = {k: v for k, v in image.info.items() if k.startswith('radar')}
@@ -320,7 +321,7 @@ def test_a_tile_without_or_with_a_false_coverage_count_is_refused(make_emitter, 
             info.add_text('radarUncoveredPixels', value)
         rebuilt.save(path, format='PNG', pnginfo=info)
         with pytest.raises((KeyError, ValueError)):
-            ae._radar_tile_metadata(Path(path), key[0])
+            radar_engine._radar_tile_metadata(Path(path), key[0])
 
 
 def test_partial_coverage_for_site_frames():
@@ -328,13 +329,13 @@ def test_partial_coverage_for_site_frames():
     beyond = dict(n=50.5, s=47.4, w=-122.8, e=-121.9)
     frame = lambda requested, got, expected=(): dict(requestedPairs=requested, expectedSites=list(expected),
         acquiredSites=[dict(id=s, ts=t) for s, t in got], siteScans=[dict(id=s, ts=t) for s, t in got])
-    assert not ae._radar_partial_coverage('iem-nexrad-n0b', frame([['KNEA', 1]], [('KNEA', 1)], ['KNEA']), dict(bounds=beyond))
-    assert ae._radar_partial_coverage('iem-nexrad-n0b',
+    assert not radar_engine._radar_partial_coverage('iem-nexrad-n0b', frame([['KNEA', 1]], [('KNEA', 1)], ['KNEA']), dict(bounds=beyond))
+    assert radar_engine._radar_partial_coverage('iem-nexrad-n0b',
         frame([['KMID', 1], ['KNEA', 1]], [('KNEA', 1)]), dict(bounds=beyond))
-    assert ae._radar_partial_coverage('iem-nexrad-n0b',
+    assert radar_engine._radar_partial_coverage('iem-nexrad-n0b',
         frame([['KNEA', 1]], [('KNEA', 1)], ['KMID', 'KNEA']), dict(bounds=beyond))
-    assert not ae._radar_partial_coverage('rainviewer', None, dict(bounds=beyond))
-    assert ae._radar_partial_coverage('iem-mrms-lcref', None, dict(bounds=dict(n=56, s=40, w=-125, e=-110)))
+    assert not radar_engine._radar_partial_coverage('rainviewer', None, dict(bounds=beyond))
+    assert radar_engine._radar_partial_coverage('iem-mrms-lcref', None, dict(bounds=dict(n=56, s=40, w=-125, e=-110)))
 
 
 # --------------------------------------------- A4 / L1: cache boot and retries
@@ -354,40 +355,40 @@ def test_a_failed_cache_boot_is_not_ready_is_reported_and_retries_with_backoff(m
     clock = Clock()
     monkeypatch.setattr(ae, 'Clock', clock)
     e = make_emitter()
-    e._running = True
-    migrate = e._radar_migrate_cache
+    e._runtime.running = True
+    migrate = e.radar._migrate_cache
     failures = [OSError(28, 'No space left on device')] * 3
     def flaky(*args):
         if failures:
             raise failures.pop(0)
         return migrate(*args)
-    monkeypatch.setattr(e, '_radar_migrate_cache', flaky)
+    monkeypatch.setattr(e.radar, '_migrate_cache', flaky)
     delays = []
     for attempt in range(1, 4):
-        e._radar_start_inventory()
-        assert e._radar_cache_done.wait(5)
-        assert not e._radar_cache_ready.is_set()
-        assert e._radar_cache_error['attempts'] == attempt
+        e.radar._start_inventory()
+        assert e.radar._cache_done.wait(5)
+        assert not e.radar._cache_ready.is_set()
+        assert e.radar._cache_error['attempts'] == attempt
         delays.append(clock.calls[-1].timeout)
         # The backoff holds a pass's own start attempt back.
-        e._radar_start_inventory()
-        assert e._radar_cache_thread is None
-        e._radar_cache_error['retryMono'] = 0  # the scheduled retry is due
+        e.radar._start_inventory()
+        assert e.radar._cache_thread is None
+        e.radar._cache_error['retryMono'] = 0  # the scheduled retry is due
     assert delays == [5, 10, 20]
-    health = e._radar_health_payload()
+    health = e.radar._health_payload()
     assert 'No space left' in health['cache']['initError']['error']
-    summary = e._radar_health_summary(ae.time.time())
+    summary = e.radar._health_summary(ae.time.time())
     assert summary['state'] == 'error' and 'No space left' in summary['initError']
     # Storage recovers: the scheduled retry reconciles and becomes ready.
     clock.calls[-1].callback(0)
-    assert e._radar_cache_done.wait(5) and e._radar_cache_ready.is_set()
-    assert e._radar_cache_error is None
-    assert (Path(ae.RADAR_DIR) / '.native-revision').read_text() == ae._radar_render_revision('native')
-    assert e._radar_health_summary(ae.time.time())['initError'] is None
+    assert e.radar._cache_done.wait(5) and e.radar._cache_ready.is_set()
+    assert e.radar._cache_error is None
+    assert (Path(radar_engine.RADAR_DIR) / '.native-revision').read_text() == radar_engine._radar_render_revision('native')
+    assert e.radar._health_summary(ae.time.time())['initError'] is None
 
 
 def test_the_backoff_is_bounded():
-    assert min(ae.RADAR_CACHE_RETRY_MAX_SEC, ae.RADAR_CACHE_RETRY_SEC * 2**20) == ae.RADAR_CACHE_RETRY_MAX_SEC == 300
+    assert min(radar_engine.RADAR_CACHE_RETRY_MAX_SEC, radar_engine.RADAR_CACHE_RETRY_SEC * 2**20) == radar_engine.RADAR_CACHE_RETRY_MAX_SEC == 300
 
 
 def test_a_retry_rescans_from_an_empty_inventory(tmp_path):
@@ -406,21 +407,21 @@ def test_a_pass_in_the_lane_while_scanning_is_deferred_not_polled(make_emitter, 
     clock = Clock()
     monkeypatch.setattr(ae, 'Clock', clock)
     e = make_emitter()
-    e._running = True
+    e._runtime.running = True
     release = threading.Event()
-    migrate = e._radar_migrate_cache
+    migrate = e.radar._migrate_cache
     def slow(*args):
         release.wait(5)
         return migrate(*args)
-    monkeypatch.setattr(e, '_radar_migrate_cache', slow)
-    e._inflight.add('radar')                  # production: always on the radar lane
-    e._do_radar(intent_triggered=False)
+    monkeypatch.setattr(e.radar, '_migrate_cache', slow)
+    e._runtime.inflight.add('radar')                  # production: always on the radar lane
+    e.radar._acquire(intent_triggered=False)
     assert not clock.calls, 'no 100 ms re-arm while the scan runs'
-    assert e._radar_cache_deferred
+    assert e.radar._cache_deferred
     release.set()
-    assert e._radar_cache_done.wait(5) and e._radar_cache_ready.is_set()
+    assert e.radar._cache_done.wait(5) and e.radar._cache_ready.is_set()
     assert [c.callback for c in clock.calls if c.timeout == 0], 'the finished scan runs the deferred pass'
-    assert not e._radar_cache_deferred
+    assert not e.radar._cache_deferred
 
 
 # ------------------------------------------------------- A5: radar-health.json
@@ -439,29 +440,29 @@ def test_wx_json_drops_health_and_radar_health_json_carries_it(make_emitter, hyb
     stamp = path.stat().st_mtime_ns
     real_time.sleep(.01)
     hybrid.mono += 5
-    assert e._radar_write_health(ae.time.time()) is False and path.stat().st_mtime_ns == stamp
+    assert e.radar._write_health(ae.time.time()) is False and path.stat().st_mtime_ns == stamp
     hybrid.mono += 11
-    assert e._radar_write_health(ae.time.time()) is True
+    assert e.radar._write_health(ae.time.time()) is True
     # ... but a state change is written at once.
-    e._radar_attention.tier = 'dormant' if e._radar_attention.tier != 'dormant' else 'rest'
+    e.radar._attention.tier = 'dormant' if e.radar._attention.tier != 'dormant' else 'rest'
     hybrid.mono += 1
-    assert e._radar_write_health(ae.time.time()) is True
+    assert e.radar._write_health(ae.time.time()) is True
     assert not list(path.parent.glob('radar-health.json.tmp*'))
 
 
 def test_summary_states(make_emitter, hybrid, multisite, native):
     e = make_emitter()
-    e._radar_boot_mono = ae.time.monotonic()
-    e._radar_cache_ready.clear()
-    assert e._radar_health_summary(ae.time.time())['state'] == 'starting'
+    e.radar._boot_mono = ae.time.monotonic()
+    e.radar._cache_ready.clear()
+    assert e.radar._health_summary(ae.time.time())['state'] == 'starting'
     hybrid.view()
     e = make_emitter()
-    e._do_radar()
-    s = e._radar_health_summary(ae.time.time())
+    e.radar._acquire()
+    s = e.radar._health_summary(ae.time.time())
     assert s['state'] == 'current' and s['source'] == 'iem-nexrad-n0b' and s['coverage'] in ('full', 'partial')
     assert s['newestObservationAgeSec'] == int(ae.time.time()) - s['newestObservationTs']
     hybrid.mono += 3600
-    assert e._radar_health_summary(ae.time.time())['state'] == 'stale'
+    assert e.radar._health_summary(ae.time.time())['state'] == 'stale'
 
 
 # ---------------------------------------------- A6: discovery follows the site
@@ -492,8 +493,8 @@ def test_boot_deletes_undisplayable_stamps_without_opening_them(tmp_path):
 
 
 def test_the_retention_covers_everything_a_view_can_show():
-    assert ae.RADAR_CACHE_RETENTION_SEC == ae.RADAR_HISTORY_SEC + max(
-        ae.RADAR_SITE_MAX_AGE_SEC, ae.RADAR_IEM_STALE_SEC, ae.RADAR_RAINVIEWER_STALE_SEC)
+    assert radar_engine.RADAR_CACHE_RETENTION_SEC == radar_engine.RADAR_HISTORY_SEC + max(
+        radar_engine.RADAR_SITE_MAX_AGE_SEC, radar_engine.RADAR_IEM_STALE_SEC, radar_engine.RADAR_RAINVIEWER_STALE_SEC)
 
 
 def test_the_emitter_boot_passes_the_retention_cutoff(make_emitter, hybrid, monkeypatch):
@@ -504,9 +505,9 @@ def test_the_emitter_boot_passes_the_retention_cutoff(make_emitter, hybrid, monk
         return real(self, roots, validate, entry_limit, expire_before)
     monkeypatch.setattr(TileInventory, 'scan_roots', spy)
     e = make_emitter()
-    e._radar_start_inventory()
-    assert e._radar_cache_ready.wait(5)
-    expected = datetime.fromtimestamp(int(ae.time.time() - ae.RADAR_CACHE_RETENTION_SEC), timezone.utc).strftime('%Y%m%d%H%M')
+    e.radar._start_inventory()
+    assert e.radar._cache_ready.wait(5)
+    expected = datetime.fromtimestamp(int(ae.time.time() - radar_engine.RADAR_CACHE_RETENTION_SEC), timezone.utc).strftime('%Y%m%d%H%M')
     assert seen['cutoff'] == expected
 
 
@@ -548,8 +549,8 @@ def test_an_unrefreshed_forecast_expires_with_its_last_update():
 
 def test_the_emitter_reads_the_forecast_update_time(make_emitter, hybrid):
     e = make_emitter(scenario=dict(Met={'PrecipPercnt': [80, '%'], 'Conditions': 'Rain', 'UpdatedTs': ae.time.time() - 7300}))
-    assert e._radar_forecast_age(ae.time.time()) == pytest.approx(7300)
-    assert make_emitter()._radar_forecast_age(ae.time.time()) is None
+    assert e.radar._forecast_age(ae.time.time()) == pytest.approx(7300)
+    assert make_emitter().radar._forecast_age(ae.time.time()) is None
 
 
 def test_forecast_success_stamps_its_update_time():

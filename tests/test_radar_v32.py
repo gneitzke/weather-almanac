@@ -6,6 +6,7 @@ import pytest
 from PIL import Image
 
 from lib import almanac_emit as ae, radar_palette as rp
+from lib import radar_engine
 from tests.test_radar_hybrid import hybrid  # noqa: F401
 
 
@@ -22,7 +23,7 @@ def indexed(source):
 
 def test_k1_source_legends():
     # One drawn scale for every source since 2026-09-24: 15-75 dBZ, no clear-air band.
-    for source, settings in ae._RADAR_SOURCES.items():
+    for source, settings in radar_engine._RADAR_SOURCES.items():
         legend = settings['legend']
         assert legend['floorDbz'] == rp.DISPLAY_FLOOR_DBZ == 15
         assert legend['bands'][0] == dict(lo=15, hi=20, start='#66A678', end='#43A05D')   # the ramp's own colour at 15
@@ -117,7 +118,7 @@ def test_translucent_rgb_fallback_rounds_coverage(monkeypatch):
 def test_k6_wide_zoom_draws_region_without_clear_air(make_emitter, hybrid, tmp_path):
     hybrid.pin(None)  # Auto: zoom 5 is wider than any one radar reaches
     (tmp_path/'radar_zoom').write_text('5')
-    emitter = make_emitter(); emitter._do_radar()
+    emitter = make_emitter(); emitter.radar._acquire()
     r = emitter._build_payload()['radar']
     assert r['sourceMode'] == 'mosaic'
     assert r['legend']['floorDbz'] == 15
@@ -134,17 +135,17 @@ def test_live_tile_set_matches_provider_bytes(make_emitter,tmp_path,monkeypatch,
     from pathlib import Path
     from tests.fixtures.config import make_config
     config=make_config();config['Station']['Latitude']=str(lat);config['Station']['Longitude']=str(lon)
-    monkeypatch.setattr(ae.AlmanacEmitter,'_radar_auto_source',lambda self,ctx,site_ok:mode)
+    monkeypatch.setattr(radar_engine.RadarEngine,'_auto_source',lambda self,ctx,site_ok:mode)
     emitter=make_emitter(config=config)
-    started=time.perf_counter();emitter._do_radar()
+    started=time.perf_counter();emitter.radar._acquire()
     expected_source='iem-nexrad-n0b' if mode=='site' else 'iem-mrms-lcref'
-    assert emitter._radar_result.source_id==expected_source and emitter._radar_result.ts_frame,emitter._build_payload()['radar']
+    assert emitter.radar._result.source_id==expected_source and emitter.radar._result.ts_frame,emitter._build_payload()['radar']
     count=visible=0;sites=set();max_error=0
     try:
-        for key,native in emitter._radar_tiles.items():
+        for key,native in emitter.radar._tiles.items():
             source,site,_,stamp,z,x,y=key
             if source!=expected_source:continue
-            path=ae._radar_tile_path(source,site,stamp,z,x,y)
+            path=radar_engine._radar_tile_path(source,site,stamp,z,x,y)
             if not path.exists():continue
             with Image.open(io.BytesIO(native)) as im:
                 with rp.remap(im,source,rp.source_palette(source)) as mapped:
@@ -153,11 +154,11 @@ def test_live_tile_set_matches_provider_bytes(make_emitter,tmp_path,monkeypatch,
                         assert cached.convert('RGBA').tobytes()==mapped.tobytes(),str(path)
                         meta=json.loads(cached.info['radarRemap'])
                         assert set(meta)=={'remapped','unmatchedColors','opaqueColors','unmatchedPixels','opaquePixels','ambiguousPixels','revision'}
-                        assert meta['revision']==ae.REMAP_REVISION
+                        assert meta['revision']==radar_engine.REMAP_REVISION
                         visible+=sum(p[3]>0 for p in cached.convert('RGBA').getdata())
                         max_error=max(max_error,meta['unmatchedPixels']/max(1,meta['opaquePixels']))
             count+=1;sites.add(site or '-')
         assert count>=4,count
-        print('LIVE TILE SET',json.dumps(dict(place=place,source=expected_source,tiles=count,sites=sorted(sites),visiblePixels=visible,maxUnmatchedFraction=max_error,stamp=emitter._radar_result.ts_frame,seconds=round(time.perf_counter()-started,3),byteIdentical=True)),flush=True)
+        print('LIVE TILE SET',json.dumps(dict(place=place,source=expected_source,tiles=count,sites=sorted(sites),visiblePixels=visible,maxUnmatchedFraction=max_error,stamp=emitter.radar._result.ts_frame,seconds=round(time.perf_counter()-started,3),byteIdentical=True)),flush=True)
     finally:
-        if emitter._radar_session:emitter._radar_session.close()
+        if emitter.radar._session:emitter.radar._session.close()

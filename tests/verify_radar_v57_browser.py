@@ -1,4 +1,5 @@
 """Deterministic browser intent/deadline scenarios on production page, both themes."""
+from lib import radar_engine
 import argparse
 import copy
 import json
@@ -11,7 +12,7 @@ from tests.verify_radar_headless import radar_server, AUDIT, ae
 def site_payload(original):
     """The fixture's Region payload re-described as the KATX site view."""
     data=copy.deepcopy(original);r=data['radar'];r.update(sourceId='iem-nexrad-n0b',sourceMode='site',siteId='KATX',
-        legend=dict(ae._RADAR_DISPLAY_RAMP,remapped=True),cadenceSec=300,sites=[dict(id='KATX',lat=48.1947,lon=-122.4957,contributing=True,reporting=True)],zoomMin=7,zoomMax=10)
+        legend=dict(radar_engine._RADAR_DISPLAY_RAMP,remapped=True),cadenceSec=300,sites=[dict(id='KATX',lat=48.1947,lon=-122.4957,contributing=True,reporting=True)],zoomMin=7,zoomMax=10)
     r['tiles'].update(source=r['sourceId'],site='KATX')
     for f in r['tiles']['frames']:f['siteScans']=[dict(id='KATX',ts=f['ts'])]
     return data

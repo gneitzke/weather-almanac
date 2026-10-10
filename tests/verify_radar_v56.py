@@ -7,10 +7,11 @@ from PIL.PngImagePlugin import PngInfo
 from playwright.sync_api import sync_playwright
 from tests.verify_radar_headless import radar_server, AUDIT
 from lib import almanac_emit as ae, radar_palette as rp
+from lib import radar_engine
 
 
 def smooth_fixtures(server):
-    root=server.root/'radar';revision=ae._radar_render_revision(True)
+    root=server.root/'radar';revision=radar_engine._radar_render_revision(True)
     (root/'.smooth-revision').write_text(revision)
     source='iem-mrms-lcref'
     native=Image.new('P',(256,256))
@@ -22,7 +23,7 @@ def smooth_fixtures(server):
         info.add_text('radarRemap',json.dumps(meta));info.add_text('radarVisiblePixels',str(mapped.width*mapped.height-mapped.getchannel('A').histogram()[0]))
         out=io.BytesIO();mapped.save(out,'PNG',pnginfo=info)
     master=None
-    old=root/'t'/ae._radar_render_revision()
+    old=root/'t'/radar_engine._radar_render_revision()
     for path in old.rglob('*.png'):
         target=root/'t'/revision/path.relative_to(old);target.parent.mkdir(parents=True,exist_ok=True)
         if master is None:target.write_bytes(out.getvalue());master=target
@@ -34,7 +35,7 @@ def publish(server,smooth):
     # persists the marker. Engine/native reuse/restart is tested in pytest.
     r=server.data['radar'];r['smooth']=smooth
     r['tiles'].update(smooth=smooth,tileSize=256,
-        revision=ae._radar_render_revision(smooth),remapRevision=rp.SMOOTH_REVISION if smooth else rp.REMAP_REVISION)
+        revision=radar_engine._radar_render_revision(smooth),remapRevision=rp.SMOOTH_REVISION if smooth else rp.REMAP_REVISION)
     temp=server.root/'wx.tmp';temp.write_text(json.dumps(server.data));temp.replace(server.root/'wx.json')
 
 
@@ -72,7 +73,7 @@ def main():
                     page.screenshot(path=str(output/f'{theme}-geography-failure.png'))
                     print('GEOGRAPHY',page.evaluate('({camera:radarCamera,geo:radarGeoTiles.size,keys:[...radarGeoTiles.keys()],mem:radarMemory(),tiles:radarTiles.size})'),flush=True)
                     raise AssertionError('geography pixels changed')
-                assert any('/radar/t/'+ae._radar_render_revision(smooth)+'/' in path for path in server.requests)
+                assert any('/radar/t/'+radar_engine._radar_render_revision(smooth)+'/' in path for path in server.requests)
                 assert page.evaluate('radarReserved')==0
                 assert page.evaluate('audit.peak')<=41943040
                 # Reproject a real decoded plate at fractional zoom and inspect

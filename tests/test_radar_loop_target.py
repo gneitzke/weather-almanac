@@ -18,7 +18,7 @@ from tests.test_radar_attention_engine import active, tier  # noqa: F401
 
 
 def payload(e):
-    return e._radar_payload(e._radar_result, ae.time.time(), timezone.utc, e._radar_refresh)
+    return e.radar._payload(e.radar._result, ae.time.time(), timezone.utc, e.radar._refresh)
 
 
 def complete_at_zoom(r):
@@ -30,24 +30,24 @@ def run(e, name, hybrid, viewed=False):
     tier(e, name)
     if viewed:
         hybrid.view()
-    e._do_radar()
+    e.radar._acquire()
     # Live goes on to deep history after its loop and may yield for budget.
-    assert e._radar_pass['outcome'] in (('ok', 'deferred') if name == 'live' else ('ok',)), e._radar_pass
+    assert e.radar._pass['outcome'] in (('ok', 'deferred') if name == 'live' else ('ok',)), e.radar._pass
     return payload(e)
 
 
 def test_live_state_warm_idle_is_not_refreshing(make_emitter, hybrid, active):
     """The exact live state: warm tier, engine idle with four complete frames.
     Nothing incomplete may be listed, and every counter agrees on four."""
-    e = make_emitter(); e._running = True
+    e = make_emitter(); e._runtime.running = True
     r = run(e, 'warm', hybrid)
-    assert len(e._radar_result.frames) > 8            # the hour holds many more slots
+    assert len(e.radar._result.frames) > 8            # the hour holds many more slots
     assert r['loopFrames'] == r['refresh']['loopFrames'] == 4
     assert r['refresh']['state'] == 'idle'
     assert r['refresh']['frameTotal'] == 4 and r['refresh']['frameIndex'] == 4
     assert not any(r['refresh']['pending'].get(k) for k in ('newest', 'four', 'eight'))
     assert len(r['tiles']['frames']) == 4
-    assert r['frameCount'] == len(e._radar_result.frames)   # candidate slots, as documented
+    assert r['frameCount'] == len(e.radar._result.frames)   # candidate slots, as documented
     assert r['completeFrameCount'] == 4
     assert all(complete_at_zoom(r)), 'an incomplete frame the engine will not fetch was published'
     assert r['tiles']['frames'][-1]['ts'] == r['observedTs']
@@ -56,46 +56,46 @@ def test_live_state_warm_idle_is_not_refreshing(make_emitter, hybrid, active):
 def test_unfetched_slots_are_withheld_but_complete_leftovers_stay(make_emitter, hybrid, active):
     """Trimming is a publication rule over the engine's own snapshot: the newest
     loopFrames slots (being completed) plus any older frame already complete."""
-    e = make_emitter(); e._running = True
+    e = make_emitter(); e._runtime.running = True
     run(e, 'warm', hybrid)
-    snap = e._radar_result
+    snap = e.radar._result
     frames = [dict(f) for f in snap.frames]
     # An older frame left complete by an earlier, larger target; a slot inside
     # the target that is still incomplete (the engine is fetching it).
     frames[-7]['complete'] = True
     frames[-2]['complete'] = False
     snap = snap._replace(frames=tuple(frames))
-    refresh = dict(e._radar_refresh, state='history')
-    r = e._radar_payload(snap, ae.time.time(), timezone.utc, refresh)
+    refresh = dict(e.radar._refresh, state='history')
+    r = e.radar._payload(snap, ae.time.time(), timezone.utc, refresh)
     listed = [f['ts'] for f in r['tiles']['frames']]
     assert listed == [frames[-7]['ts']] + [f['ts'] for f in frames[-4:]]
     assert len(listed) == 5 and r['loopFrames'] == 4
 
 
 def test_payload_without_a_target_lists_everything(make_emitter, hybrid, active):
-    e = make_emitter(); e._running = True
+    e = make_emitter(); e._runtime.running = True
     run(e, 'warm', hybrid)
-    refresh = {k: v for k, v in e._radar_refresh.items() if k != 'loopFrames'}
-    r = e._radar_payload(e._radar_result, ae.time.time(), timezone.utc, refresh)
+    refresh = {k: v for k, v in e.radar._refresh.items() if k != 'loopFrames'}
+    r = e.radar._payload(e.radar._result, ae.time.time(), timezone.utc, refresh)
     assert r['loopFrames'] is None
-    assert len(r['tiles']['frames']) == len(e._radar_result.frames)
+    assert len(r['tiles']['frames']) == len(e.radar._result.frames)
 
 
 def test_warm_to_live_publishes_the_larger_loop_while_it_loads(make_emitter, hybrid, active, monkeypatch):
-    e = make_emitter(); e._running = True
+    e = make_emitter(); e._runtime.running = True
     warm = run(e, 'warm', hybrid)
     assert warm['loopFrames'] == 4
     # The tier rises; until a pass starts, nothing changes on the wire.
     tier(e, 'live')
     assert payload(e)['loopFrames'] == 4 and len(payload(e)['tiles']['frames']) == 4
     seen = []
-    original = e._radar_publish_refresh
+    original = e.radar._publish_refresh
     def spy(ctx, snapshot=None, **changes):
         original(ctx, snapshot=snapshot, **changes)
         seen.append(payload(e))
-    monkeypatch.setattr(e, '_radar_publish_refresh', spy)
+    monkeypatch.setattr(e.radar, '_publish_refresh', spy)
     hybrid.view()
-    e._do_radar()
+    e.radar._acquire()
     history = [r for r in seen if r['refresh']['state'] == 'history']
     assert history, [r['refresh'] for r in seen]
     # While the four extra frames load, the wire says 8 and lists them.
@@ -110,7 +110,7 @@ def test_warm_to_live_publishes_the_larger_loop_while_it_loads(make_emitter, hyb
 
 
 def test_live_to_warm_keeps_every_complete_frame(make_emitter, hybrid, active):
-    e = make_emitter(); e._running = True
+    e = make_emitter(); e._runtime.running = True
     live = run(e, 'live', hybrid, viewed=True)
     stamps = [f['ts'] for f in live['tiles']['frames'][-8:]]
     assert live['loopFrames'] == 8 and len(stamps) == 8
@@ -127,11 +127,11 @@ def test_live_to_warm_keeps_every_complete_frame(make_emitter, hybrid, active):
 
 @pytest.mark.parametrize('name,hour,loop', [('warm', 14.0, 4), ('watch', 14.0, 8), ('watch', 2.0, 1), ('live', 2.0, 8)])
 def test_loop_frames_follows_each_tier(make_emitter, hybrid, active, name, hour, loop):
-    e = make_emitter(); e._running = True
+    e = make_emitter(); e._runtime.running = True
     tier(e, name, hour)
     if name == 'live':
         hybrid.view()
-    e._do_radar()
+    e.radar._acquire()
     r = payload(e)
     assert r['loopFrames'] == loop
     assert r['refresh']['frameTotal'] == loop

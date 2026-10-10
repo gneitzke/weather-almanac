@@ -14,6 +14,7 @@ from types import SimpleNamespace
 import pytest
 
 from lib import almanac_emit as ae, radar_http as http
+from lib import radar_engine
 from tests.test_emitter_lifecycle import FakeClock
 from tests.test_radar_hybrid import hybrid, png  # noqa: F401
 
@@ -260,38 +261,38 @@ def test_six_workers_complete_frame_with_closing_connections(make_emitter, origi
     origin.delay = .02
     origin.hold = 6      # tile requests are released only once six are in flight
     # Region transport; Auto would also list sites.
-    monkeypatch.setattr(ae.AlmanacEmitter, '_radar_auto_source', lambda self, ctx, site_ok: 'mosaic')
-    monkeypatch.setattr(ae, 'RADAR_DIR', str(tmp_path/'radar'))
-    monkeypatch.setattr(ae, 'RADAR_IEM_METADATA_URL', origin.url+'/metadata')
-    monkeypatch.setattr(ae, 'RADAR_IEM_ARCHIVE_TEMPLATE', origin.url+'/archive/%Y%m%d%H%M')
-    monkeypatch.setattr(ae, 'RADAR_IEM_TILE_TEMPLATE', origin.url+'/tile/{stamp}/{z}/{x}/{y}')
+    monkeypatch.setattr(radar_engine.RadarEngine, '_auto_source', lambda self, ctx, site_ok: 'mosaic')
+    monkeypatch.setattr(radar_engine, 'RADAR_DIR', str(tmp_path/'radar'))
+    monkeypatch.setattr(radar_engine, 'RADAR_IEM_METADATA_URL', origin.url+'/metadata')
+    monkeypatch.setattr(radar_engine, 'RADAR_IEM_ARCHIVE_TEMPLATE', origin.url+'/archive/%Y%m%d%H%M')
+    monkeypatch.setattr(radar_engine, 'RADAR_IEM_TILE_TEMPLATE', origin.url+'/tile/{stamp}/{z}/{x}/{y}')
     warnings, infos = [], []
     monkeypatch.setattr(ae.Logger, 'warning', warnings.append)
     monkeypatch.setattr(ae.Logger, 'info', infos.append)
     emitter = make_emitter()
     try:
-        emitter._do_radar()
-        assert emitter._radar_result.available
-        assert emitter._radar_result.source_id == 'iem-mrms-lcref'
-        assert sum(f['complete'] for f in emitter._radar_result.frames) == 1
-        session = emitter._radar_session
+        emitter.radar._acquire()
+        assert emitter.radar._result.available
+        assert emitter.radar._result.source_id == 'iem-mrms-lcref'
+        assert sum(f['complete'] for f in emitter.radar._result.frames) == 1
+        session = emitter.radar._session
         assert origin.peak == 6
         assert len(session.connections[('localhost', int(origin.url.rsplit(':',1)[1]))]) <= 6
-        assert emitter._radar_health.retries > 0
-        assert len(emitter._radar_request_times) == len(origin.requests) + emitter._radar_health.retries
+        assert emitter.radar._health.retries > 0
+        assert len(emitter.radar._request_times) == len(origin.requests) + emitter.radar._health.retries
         assert not warnings and not any('SWITCH' in line for line in infos)
     finally:
-        if emitter._radar_session: emitter._radar_session.close()
+        if emitter.radar._session: emitter.radar._session.close()
 
 
 @pytest.mark.parametrize('phase', ['metadata', 'tile'])
 def test_primary_transport_failure_falls_back_in_new_geometry_then_recovers(make_emitter, hybrid, tmp_path, monkeypatch, phase):
-    emitter = make_emitter(); emitter._do_radar()
-    previous = emitter._radar_result
-    clock = FakeClock(); monkeypatch.setattr(ae, 'Clock', clock); emitter._running = True
+    emitter = make_emitter(); emitter.radar._acquire()
+    previous = emitter.radar._result
+    clock = FakeClock(); monkeypatch.setattr(ae, 'Clock', clock); emitter._runtime.running = True
     (tmp_path/'radar_intent').write_text(json.dumps(dict(seq=1, zoom=7, center='station')))
     def fail(req, timeout):
-        if (phase == 'metadata' and req.full_url == ae.RADAR_IEM_METADATA_URL or
+        if (phase == 'metadata' and req.full_url == radar_engine.RADAR_IEM_METADATA_URL or
                 phase == 'tile' and 'mrms::' in req.full_url):
             raise client.RemoteDisconnected('stale socket')
     hybrid.failure = fail
@@ -300,34 +301,34 @@ def test_primary_transport_failure_falls_back_in_new_geometry_then_recovers(make
     # deliberately make no metadata request. Tile outages still exercise reuse.
     hybrid.view()
     for _ in range(3):
-        emitter._do_radar(intent_triggered=False if phase == 'metadata' else True)
-    assert emitter._radar_result.source_id == 'rainviewer'
-    assert emitter._radar_refresh['state'] == 'idle'
-    assert not emitter._radar_negative and any(c[0] == 'rainviewer' for c in hybrid.calls)
+        emitter.radar._acquire(intent_triggered=False if phase == 'metadata' else True)
+    assert emitter.radar._result.source_id == 'rainviewer'
+    assert emitter.radar._refresh['state'] == 'idle'
+    assert not emitter.radar._negative and any(c[0] == 'rainviewer' for c in hybrid.calls)
     hybrid.failure = None
     hybrid.mono += 301  # source dwell, also beyond any host circuit
     hybrid.latest += 240
-    emitter._do_radar()
-    assert emitter._radar_result.zoom == 7 and emitter._radar_result.source_id == 'iem-mrms-lcref'
-    assert not emitter._radar_transport_failures
+    emitter.radar._acquire()
+    assert emitter.radar._result.zoom == 7 and emitter.radar._result.source_id == 'iem-mrms-lcref'
+    assert not emitter.radar._transport_failures
     emitter.stop()
 
 
 def test_repeated_transport_outage_falls_back_and_recovers(make_emitter, hybrid):
-    emitter = make_emitter(); emitter._do_radar()
-    previous = emitter._radar_result
+    emitter = make_emitter(); emitter.radar._acquire()
+    previous = emitter.radar._result
     def fail(req, timeout):
         if 'iastate.edu' in req.full_url: raise ConnectionResetError('outage')
     hybrid.failure = fail
     hybrid.view()
     for _ in range(3):
-        emitter._do_radar(intent_triggered=False)
-    assert emitter._radar_result.source_id == 'rainviewer'
+        emitter.radar._acquire(intent_triggered=False)
+    assert emitter.radar._result.source_id == 'rainviewer'
     hybrid.failure = None
     hybrid.mono += 301
     hybrid.latest += 240
-    emitter._do_radar()
-    assert emitter._radar_result.source_id == 'iem-mrms-lcref'
+    emitter.radar._acquire()
+    assert emitter.radar._result.source_id == 'iem-mrms-lcref'
 
 
 
@@ -338,15 +339,15 @@ def test_retry_obeys_shared_request_gate(make_emitter, origin):
     origin.close_after = 1
     emitter = make_emitter()
     source = 'iem-mrms-lcref'
-    session = http.RadarSession(on_retry=lambda end, **kw: emitter._radar_transport_retry(source, end, **kw))
-    emitter._radar_session = session
+    session = http.RadarSession(on_retry=lambda end, **kw: emitter.radar._transport_retry(source, end, **kw))
+    emitter.radar._session = session
     try:
         get(session, origin)
         until(lambda: origin.closed == 1)
-        emitter._radar_request_times = [time.monotonic()] * (ae.RADAR_REQUESTS_PER_MIN-1)
-        with pytest.raises(ae._RadarBudget):
-            emitter._radar_request(source, origin.url+'/tile', time.monotonic()+2)
-        assert len(emitter._radar_request_times) == ae.RADAR_REQUESTS_PER_MIN
-        assert session.retries == emitter._radar_transport_retries == 0
+        emitter.radar._request_times = [time.monotonic()] * (radar_engine.RADAR_REQUESTS_PER_MIN-1)
+        with pytest.raises(radar_engine._RadarBudget):
+            emitter.radar._request(source, origin.url+'/tile', time.monotonic()+2)
+        assert len(emitter.radar._request_times) == radar_engine.RADAR_REQUESTS_PER_MIN
+        assert session.retries == emitter.radar._transport_retries == 0
         assert origin.connections == 1
     finally: session.close()

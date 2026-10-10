@@ -16,6 +16,7 @@ import numpy as np
 import pytest
 
 from lib import almanac_emit as ae, radar_level3 as l3
+from lib import radar_engine
 from tests.test_radar_level3 import product, SITE, PALETTE, native  # noqa: F401
 from tests.test_radar_hybrid import hybrid  # noqa: F401
 from tests.test_radar_v3 import multisite  # noqa: F401
@@ -98,24 +99,24 @@ def test_missing_minute_never_borrows_an_adjacent_scan(delta):
 
 
 def test_zoom8_sampling_change_has_a_new_immutable_identity(monkeypatch):
-    current = ae._radar_render_revision('native')
+    current = radar_engine._radar_render_revision('native')
     monkeypatch.setattr(l3, 'NATIVE_REVISION', 'level3-n0b-polar-v1')
-    assert current != ae._radar_render_revision('native')
-    assert len({current, ae._radar_render_revision(False), ae._radar_render_revision(True)}) == 3
+    assert current != radar_engine._radar_render_revision('native')
+    assert len({current, radar_engine._radar_render_revision(False), radar_engine._radar_render_revision(True)}) == 3
 
 
 @pytest.fixture
 def scan_engine(make_emitter, monkeypatch):
     emitter = make_emitter()
-    monkeypatch.setattr(emitter, '_radar_checkpoint', lambda ctx: None)
-    monkeypatch.setattr(ae, '_NEXRAD_SITES', {'KNEA': (*SITE, 'nearest')})
-    emitter._radar_session = SimpleNamespace(discard=lambda url: None)
+    monkeypatch.setattr(emitter.radar, '_checkpoint', lambda ctx: None)
+    monkeypatch.setattr(radar_engine, '_NEXRAD_SITES', {'KNEA': (*SITE, 'nearest')})
+    emitter.radar._session = SimpleNamespace(discard=lambda url: None)
     return emitter
 
 
 def fake_acquisition(monkeypatch, emitter, fetch):
     # Exercise the real rate gate, body limits, validation and health accounting.
-    monkeypatch.setattr(emitter._radar_session, 'open', fetch, raising=False)
+    monkeypatch.setattr(emitter.radar._session, 'open', fetch, raising=False)
 
 
 def listing():
@@ -136,16 +137,16 @@ def test_simultaneous_tiles_share_one_scan_and_account_bytes(scan_engine, monkey
         return io.BytesIO(raw)
     fake_acquisition(monkeypatch, emitter, fetch)
     with ThreadPoolExecutor(6) as pool:
-        owner = pool.submit(emitter._radar_level3_scan, 'KNEA', STAMP, {}, time.monotonic()+5)
+        owner = pool.submit(emitter.radar._level3_scan, 'KNEA', STAMP, {}, time.monotonic()+5)
         assert entered.wait(2)
-        rest = [pool.submit(emitter._radar_level3_scan, 'KNEA', STAMP, {}, time.monotonic()+5) for _ in range(5)]
+        rest = [pool.submit(emitter.radar._level3_scan, 'KNEA', STAMP, {}, time.monotonic()+5) for _ in range(5)]
         release.set()
         scans = [f.result(3) for f in [owner] + rest]
     assert all(scan is scans[0] for scan in scans)
-    assert len(calls) == len(emitter._radar_request_times) == 2
-    assert emitter._radar_received_bytes == len(raw) + len(listing())
-    assert not emitter._radar_level3_flights
-    state = next(iter(emitter._radar_health.hosts.values()))
+    assert len(calls) == len(emitter.radar._request_times) == 2
+    assert emitter.radar._received_bytes == len(raw) + len(listing())
+    assert not emitter.radar._level3_flights
+    state = next(iter(emitter.radar._health.hosts.values()))
     assert state['metadata'], 'S3 recovery probes must use its listing'
 
 
@@ -157,25 +158,25 @@ def test_cancelled_owner_does_not_turn_waiters_into_new_owners(scan_engine, monk
         calls.append(1)
         entered.set()
         assert release.wait(3)
-        raise ae._RadarSuperseded('changed variant')
-    monkeypatch.setattr(emitter, '_radar_request', request)
+        raise radar_engine._RadarSuperseded('changed variant')
+    monkeypatch.setattr(emitter.radar, '_request', request)
     with ThreadPoolExecutor(2) as pool:
-        owner = pool.submit(emitter._radar_level3_scan, 'KNEA', STAMP, {}, time.monotonic()+5)
+        owner = pool.submit(emitter.radar._level3_scan, 'KNEA', STAMP, {}, time.monotonic()+5)
         assert entered.wait(2)
-        flight = emitter._radar_level3_flights[('KNEA', STAMP)]
+        flight = emitter.radar._level3_flights[('KNEA', STAMP)]
         wait = flight['done'].wait
         def observe(timeout):
             waiting.set()
             return wait(timeout)
         monkeypatch.setattr(flight['done'], 'wait', observe)
-        waiter = pool.submit(emitter._radar_level3_scan, 'KNEA', STAMP, {}, time.monotonic()+5)
+        waiter = pool.submit(emitter.radar._level3_scan, 'KNEA', STAMP, {}, time.monotonic()+5)
         assert waiting.wait(2)
         release.set()
         for future in (owner, waiter):
-            with pytest.raises(ae._RadarSuperseded):
+            with pytest.raises(radar_engine._RadarSuperseded):
                 future.result(3)
     assert len(calls) == 1
-    assert not emitter._radar_level3_flights and not emitter._radar_level3_failed
+    assert not emitter.radar._level3_flights and not emitter.radar._level3_failed
 
 
 def test_waiter_honours_own_deadline_without_holding_radar_lock(scan_engine, monkeypatch):
@@ -184,21 +185,21 @@ def test_waiter_honours_own_deadline_without_holding_radar_lock(scan_engine, mon
     def request(*args, **kwargs):
         entered.set()
         assert release.wait(3)
-        raise ae._RadarBudget('budget')
-    monkeypatch.setattr(emitter, '_radar_request', request)
+        raise radar_engine._RadarBudget('budget')
+    monkeypatch.setattr(emitter.radar, '_request', request)
     with ThreadPoolExecutor(1) as pool:
-        owner = pool.submit(emitter._radar_level3_scan, 'KNEA', STAMP, {}, time.monotonic()+5)
+        owner = pool.submit(emitter.radar._level3_scan, 'KNEA', STAMP, {}, time.monotonic()+5)
         assert entered.wait(2)
         try:
             with pytest.raises(TimeoutError, match='wait deadline'):
-                emitter._radar_level3_scan('KNEA', STAMP, {}, time.monotonic()+.03)
-            assert emitter._radar_lock.acquire(timeout=.1)
-            emitter._radar_lock.release()
+                emitter.radar._level3_scan('KNEA', STAMP, {}, time.monotonic()+.03)
+            assert emitter.radar._lock.acquire(timeout=.1)
+            emitter.radar._lock.release()
         finally:
             release.set()
-        with pytest.raises(ae._RadarBudget):
+        with pytest.raises(radar_engine._RadarBudget):
             owner.result(3)
-    assert not emitter._radar_level3_flights
+    assert not emitter.radar._level3_flights
 
 
 def test_negative_cache_expires_and_preserves_local_failure_class(scan_engine, monkeypatch):
@@ -208,17 +209,17 @@ def test_negative_cache_expires_and_preserves_local_failure_class(scan_engine, m
     def request(*args, **kwargs):
         calls.append(1)
         raise socket.gaierror('offline')
-    monkeypatch.setattr(emitter, '_radar_request', request)
+    monkeypatch.setattr(emitter.radar, '_request', request)
     for _ in range(2):
         with pytest.raises(OSError) as caught:
-            emitter._radar_level3_scan('KNEA', STAMP, {}, 100)
-        assert ae.failure_class(caught.value) == 'local'
+            emitter.radar._level3_scan('KNEA', STAMP, {}, 100)
+        assert radar_engine.failure_class(caught.value) == 'local'
     assert len(calls) == 1
     now[0] = 11
     with pytest.raises(socket.gaierror):
-        emitter._radar_level3_scan('KNEA', STAMP, {}, 100)
-    assert len(calls) == 2 and not emitter._radar_level3_flights
-    assert not any(isinstance(v, BaseException) for v in emitter._radar_level3_failed[('KNEA', STAMP)])
+        emitter.radar._level3_scan('KNEA', STAMP, {}, 100)
+    assert len(calls) == 2 and not emitter.radar._level3_flights
+    assert not any(isinstance(v, BaseException) for v in emitter.radar._level3_failed[('KNEA', STAMP)])
 
 
 @pytest.mark.parametrize('damage', ['corrupt', 'wrong-minute', 'truncated-listing'])
@@ -231,17 +232,17 @@ def test_invalid_products_and_listings_are_health_failures(scan_engine, monkeypa
         return io.BytesIO(b'not level3' * 50 if damage == 'corrupt' else raw)
     fake_acquisition(monkeypatch, emitter, fetch)
     with pytest.raises(ValueError):
-        emitter._radar_level3_scan('KNEA', STAMP, {}, time.monotonic()+10)
-    state = next(iter(emitter._radar_health.hosts.values()))
+        emitter.radar._level3_scan('KNEA', STAMP, {}, time.monotonic()+10)
+    state = next(iter(emitter.radar._health.hosts.values()))
     assert state['samples'][-1][1] is False
-    assert emitter._radar_pass['counts']['host'] == 1
-    assert emitter._radar_request_metrics[-1]['failureClass'] == 'host'
-    assert not emitter._radar_level3_scans
+    assert emitter.radar._pass['counts']['host'] == 1
+    assert emitter.radar._request_metrics[-1]['failureClass'] == 'host'
+    assert not emitter.radar._level3_scans
 
 
 def test_scan_cache_is_bounded_and_hits_update_lru(scan_engine, monkeypatch):
     emitter = scan_engine
-    size = ae.RADAR_LEVEL3_SCAN_CACHE
+    size = radar_engine.RADAR_LEVEL3_SCAN_CACHE
     raw = product(volume_ts=STAMP+24, gates=4)
     def request(source, url, deadline, validate=None, **kwargs):
         if '?' in url:
@@ -252,50 +253,50 @@ def test_scan_cache_is_bounded_and_hits_update_lru(scan_engine, monkeypatch):
             payload = product(volume_ts=ts, gates=4)
         validate(payload)
         return payload
-    monkeypatch.setattr(emitter, '_radar_request', request)
+    monkeypatch.setattr(emitter.radar, '_request', request)
     for i in range(size):
-        emitter._radar_level3_scan('KNEA', STAMP+i*60, {}, time.monotonic()+10)
-    first = emitter._radar_level3_scan('KNEA', STAMP, {}, time.monotonic()+10)
-    emitter._radar_level3_scan('KNEA', STAMP+size*60, {}, time.monotonic()+10)
-    assert len(emitter._radar_level3_scans) == size
-    assert emitter._radar_level3_scans[('KNEA', STAMP)] is first
-    assert ('KNEA', STAMP+60) not in emitter._radar_level3_scans
+        emitter.radar._level3_scan('KNEA', STAMP+i*60, {}, time.monotonic()+10)
+    first = emitter.radar._level3_scan('KNEA', STAMP, {}, time.monotonic()+10)
+    emitter.radar._level3_scan('KNEA', STAMP+size*60, {}, time.monotonic()+10)
+    assert len(emitter.radar._level3_scans) == size
+    assert emitter.radar._level3_scans[('KNEA', STAMP)] is first
+    assert ('KNEA', STAMP+60) not in emitter.radar._level3_scans
 
 
 def test_native_budget_prices_scans_instead_of_output_tiles(scan_engine, monkeypatch):
     emitter = scan_engine
     tiles = [(x, 1, 0, 0) for x in range(30)]
-    monkeypatch.setattr(ae, '_radar_site_tiles', lambda ctx, site: tiles)
-    ctx = dict(native=True, attention='live', zoom=7, inventory=emitter._radar_disk_inventory)
+    monkeypatch.setattr(radar_engine, '_radar_site_tiles', lambda ctx, site: tiles)
+    ctx = dict(native=True, attention='live', zoom=7, inventory=emitter.radar._disk_inventory)
     pairs = [('KNEA', STAMP), ('KNEA', STAMP+60)]
-    assert emitter._radar_frame_request_cost(SOURCE, ctx, pairs) == 6  # two hourly listings, two products per volume
-    emitter._radar_level3_scans[('KNEA', STAMP)] = SimpleNamespace(volume_ts=STAMP+24)
-    assert emitter._radar_frame_request_cost(SOURCE, ctx, pairs) == 5
-    emitter._radar_level3_scans[('KNEA', STAMP+60)] = SimpleNamespace(volume_ts=STAMP+84)
-    assert emitter._radar_frame_request_cost(SOURCE, ctx, pairs) == 3
-    emitter._radar_level3_scans[('KNEA', STAMP+24, 'N0H')] = object()
-    emitter._radar_level3_scans[('KNEA', STAMP+84, 'N0H')] = object()
-    assert emitter._radar_frame_request_cost(SOURCE, ctx, pairs) == 0
-    assert emitter._radar_frame_request_cost(SOURCE, dict(ctx, native=False), pairs) == 60
+    assert emitter.radar._frame_request_cost(SOURCE, ctx, pairs) == 6  # two hourly listings, two products per volume
+    emitter.radar._level3_scans[('KNEA', STAMP)] = SimpleNamespace(volume_ts=STAMP+24)
+    assert emitter.radar._frame_request_cost(SOURCE, ctx, pairs) == 5
+    emitter.radar._level3_scans[('KNEA', STAMP+60)] = SimpleNamespace(volume_ts=STAMP+84)
+    assert emitter.radar._frame_request_cost(SOURCE, ctx, pairs) == 3
+    emitter.radar._level3_scans[('KNEA', STAMP+24, 'N0H')] = object()
+    emitter.radar._level3_scans[('KNEA', STAMP+84, 'N0H')] = object()
+    assert emitter.radar._frame_request_cost(SOURCE, ctx, pairs) == 0
+    assert emitter.radar._frame_request_cost(SOURCE, dict(ctx, native=False), pairs) == 60
 
 
 def test_native_transient_failure_keeps_published_frames(make_emitter, hybrid, multisite, native, monkeypatch):
     hybrid.view()
     emitter = make_emitter()
-    emitter._do_radar()
-    before = emitter._radar_result
+    emitter.radar._acquire()
+    before = emitter.radar._result
     assert before.tiles['variant'] == 'native' and before.frames
     hybrid.mono += 61
     hybrid.latest += 60
     multisite.scans['KNEA'].append(hybrid.latest)
-    opened = ae.RadarSession.open
+    opened = radar_engine.RadarSession.open
     def fail(self, req, timeout):
-        if req.full_url.startswith(ae.RADAR_LEVEL3_BUCKET):
+        if req.full_url.startswith(radar_engine.RADAR_LEVEL3_BUCKET):
             raise socket.gaierror('temporary outage')
         return opened(self, req, timeout)
-    monkeypatch.setattr(ae.RadarSession, 'open', fail)
-    emitter._do_radar(intent_triggered=False)
-    after = emitter._radar_result
+    monkeypatch.setattr(radar_engine.RadarSession, 'open', fail)
+    emitter.radar._acquire(intent_triggered=False)
+    after = emitter.radar._result
     assert after.tiles['variant'] == 'native'
     assert any(frame['complete'] for frame in after.frames)
     assert {f['ts'] for f in before.frames if f['complete']} <= {f['ts'] for f in after.frames}
@@ -327,24 +328,24 @@ def test_bzip_expansion_limit_is_enforced():
 def test_s3_outage_does_not_block_automatic_iem_fallback(make_emitter, hybrid, multisite, native, tmp_path, failure):
     hybrid.view()
     emitter = make_emitter()
-    emitter._do_radar()
-    assert emitter._radar_result.tiles['variant'] == 'native'
+    emitter.radar._acquire()
+    assert emitter.radar._result.tiles['variant'] == 'native'
     if failure == 'cooldown':
-        emitter._radar_cooldowns[ae.RADAR_LEVEL3_TRANSPORT] = hybrid.mono + 60
+        emitter.radar._cooldowns[radar_engine.RADAR_LEVEL3_TRANSPORT] = hybrid.mono + 60
     elif failure == 'breaker':
-        emitter._radar_health._host(ae.RADAR_LEVEL3_TRANSPORT, ae.RADAR_LEVEL3_BUCKET)['until'] = hybrid.mono + 60
+        emitter.radar._health._host(radar_engine.RADAR_LEVEL3_TRANSPORT, radar_engine.RADAR_LEVEL3_BUCKET)['until'] = hybrid.mono + 60
     else:
-        emitter._radar_level3_fallback(ConnectionError('unreachable'))
-    assert emitter._radar_headroom_delay(SOURCE, 1) >= (60 if failure == 'cooldown' else 0)
-    emitter._do_radar()
-    assert emitter._radar_result.tiles['variant'] is False
-    assert emitter._radar_result.frames and any(f['complete'] for f in emitter._radar_result.frames)
-    assert ae.RADAR_LEVEL3_TRANSPORT not in emitter._radar_transport_sources(SOURCE)
+        emitter.radar._level3_fallback(ConnectionError('unreachable'))
+    assert emitter.radar._headroom_delay(SOURCE, 1) >= (60 if failure == 'cooldown' else 0)
+    emitter.radar._acquire()
+    assert emitter.radar._result.tiles['variant'] is False
+    assert emitter.radar._result.frames and any(f['complete'] for f in emitter.radar._result.frames)
+    assert radar_engine.RADAR_LEVEL3_TRANSPORT not in emitter.radar._transport_sources(SOURCE)
 
 
 def test_s3_recovery_is_a_required_dependency_only_for_native(scan_engine):
     emitter = scan_engine
-    emitter._radar_native_requested = True
-    emitter._radar_attention.tier = 'live'
-    assert set(emitter._radar_transport_sources(SOURCE)) == {SOURCE, ae.RADAR_LEVEL3_TRANSPORT}
-    assert emitter._radar_transport_sources('iem-mrms-lcref') == ('iem-mrms-lcref',)
+    emitter.radar._native_requested = True
+    emitter.radar._attention.tier = 'live'
+    assert set(emitter.radar._transport_sources(SOURCE)) == {SOURCE, radar_engine.RADAR_LEVEL3_TRANSPORT}
+    assert emitter.radar._transport_sources('iem-mrms-lcref') == ('iem-mrms-lcref',)

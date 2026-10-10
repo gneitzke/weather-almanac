@@ -9,13 +9,14 @@ import xml.etree.ElementTree as ET
 import pytest
 
 from lib import almanac_emit as ae
+from lib import radar_engine
 from lib import radar_basemap as bm
 from lib.radar_geometry import world_point
 from tests.test_radar_hybrid import hybrid  # noqa: F401
 
 
 def context(lat=47.61, lon=-122.33, zoom=7, viewed=True):
-    tiles, _, bounds, _ = ae._radar_viewport(lat,lon,zoom,480)
+    tiles, _, bounds, _ = radar_engine._radar_viewport(lat,lon,zoom,480)
     identity=hashlib.sha256(repr((lat,lon,zoom,480,tiles)).encode()).hexdigest()[:20]
     return dict(center=dict(lat=lat,lon=lon),zoom=zoom,bounds=bounds,tiles=tiles,identity=identity,viewed=viewed)
 

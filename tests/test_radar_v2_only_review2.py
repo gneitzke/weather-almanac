@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from lib import almanac_emit as ae
+from lib import radar_engine
 from tests.test_emitter_lifecycle import FakeClock, InlineThread
 from tests.test_radar_hybrid import hybrid  # noqa: F401
 from tests.test_radar_v3 import multisite  # noqa: F401
@@ -56,27 +57,27 @@ def scheduled(hybrid, monkeypatch):
 def run(emitter, clock):
     """Start the emitter's radar lane the way start() does: the 100 ms intent
     watcher plus the first pass, then leave every later pass to the timers."""
-    emitter._running = True
-    emitter._radar_start_inventory()
-    assert emitter._radar_cache_ready.wait(30)  # production scans 60 s before the first pass
-    emitter._radar_zoom_stamp = emitter._radar_preference_stamp()
-    emitter._schedule(emitter._check_radar_zoom, ae.RADAR_INTENT_CHECK_SEC, interval=True)
-    emitter._check_radar()
-    assert emitter._radar_result.frames, 'the first scheduled pass drew'
+    emitter._runtime.running = True
+    emitter.radar._start_inventory()
+    assert emitter.radar._cache_ready.wait(30)  # production scans 60 s before the first pass
+    emitter.radar._zoom_stamp = emitter.radar._preference_stamp()
+    emitter._runtime.schedule(emitter.radar._check_zoom, radar_engine.RADAR_INTENT_CHECK_SEC, interval=True)
+    emitter.radar._check()
+    assert emitter.radar._result.frames, 'the first scheduled pass drew'
     return emitter
 
 
 def cooling(emitter):
-    return emitter._radar_cooldowns.get(ae.RADAR_LEVEL3_TRANSPORT, 0) > ae.time.monotonic()
+    return emitter.radar._cooldowns.get(radar_engine.RADAR_LEVEL3_TRANSPORT, 0) > ae.time.monotonic()
 
 
 def rate_limit_level3(monkeypatch, retry_after='3600'):
-    opened = ae.RadarSession.open
+    opened = radar_engine.RadarSession.open
     def limited(session, request, timeout):
-        if request.full_url.startswith(ae.RADAR_LEVEL3_BUCKET):
+        if request.full_url.startswith(radar_engine.RADAR_LEVEL3_BUCKET):
             raise urllib.error.HTTPError(request.full_url, 429, 'limited', {'Retry-After': retry_after}, None)
         return opened(session, request, timeout)
-    monkeypatch.setattr(ae.RadarSession, 'open', limited)
+    monkeypatch.setattr(radar_engine.RadarSession, 'open', limited)
     return opened
 
 
@@ -85,30 +86,30 @@ def rate_limit_level3(monkeypatch, retry_after='3600'):
 def test_level3_429_in_a_scheduled_pass_draws_iem_promptly(
         make_emitter, hybrid, multisite, native, monkeypatch, scheduled):
     emitter = run(make_emitter(), scheduled)
-    assert emitter._radar_result.tiles['variant'] == 'native'
+    assert emitter.radar._result.tiles['variant'] == 'native'
     opened = rate_limit_level3(monkeypatch)
     newest = hybrid.latest + 300
     for site in ('KNEA', 'KMID'):
         multisite.scans[site].append(newest)
     # Discovery finds the new scan on its own schedule; Level III answers 429.
-    scheduled.advance(emitter._radar_discovery.due - ae.time.time() + .5)
+    scheduled.advance(emitter.radar._discovery.due - ae.time.time() + .5)
     assert cooling(emitter), 'the 429 happened inside a scheduled pass'
-    assert emitter._radar_pass['outcome'] == 'failed', 'handled as a Level III outage, not a local yield'
-    assert emitter._radar_retry_reason == 'provider'
+    assert emitter.radar._pass['outcome'] == 'failed', 'handled as a Level III outage, not a local yield'
+    assert emitter.radar._retry_reason == 'provider'
     # No schedule waits on the Level III cooldown while IEM can draw.
-    assert emitter._radar_next_retry - ae.time.time() <= 2
-    assert emitter._radar_discovery.due - ae.time.time() < ae.RADAR_LEVEL3_COOLDOWN_MAX_SEC
-    assert emitter._radar_probe_delay() is None
+    assert emitter.radar._next_retry - ae.time.time() <= 2
+    assert emitter.radar._discovery.due - ae.time.time() < radar_engine.RADAR_LEVEL3_COOLDOWN_MAX_SEC
+    assert emitter.radar._probe_delay() is None
     scheduled.advance(2)  # the v1 retry
     wire = emitter._build_payload()['radar']
-    assert emitter._radar_result.ts_frame == newest
+    assert emitter.radar._result.ts_frame == newest
     assert wire['tiles']['variant'] is False
     assert wire['nativeFallback'] == dict(active=True, reason='level3-unreachable', recovering=False)
     assert [c for c in multisite.calls if c[0] == 'tile'], 'v1 fetched IEM ridge tiles'
     assert cooling(emitter)
     # Recovery: the cooldown ends, the outage wake restarts v2.
-    monkeypatch.setattr(ae.RadarSession, 'open', opened)
-    scheduled.advance(ae.RADAR_LEVEL3_COOLDOWN_MAX_SEC)
+    monkeypatch.setattr(radar_engine.RadarSession, 'open', opened)
+    scheduled.advance(radar_engine.RADAR_LEVEL3_COOLDOWN_MAX_SEC)
     assert emitter._build_payload()['radar']['tiles']['variant'] == 'native'
     emitter.stop()
 
@@ -122,7 +123,7 @@ def test_watch_level3_stall_warns_and_draws_labelled_iem_until_publication_resum
     emitter = make_emitter()
     tier(emitter, tmp_path, 'watch')
     run(emitter, scheduled)
-    assert emitter._radar_result.tiles['variant'] == 'native'
+    assert emitter.radar._result.tiles['variant'] == 'native'
     base = hybrid.latest
     ages = []
     for minute in range(1, 41):
@@ -131,25 +132,25 @@ def test_watch_level3_stall_warns_and_draws_labelled_iem_until_publication_resum
                 multisite.scans[site].append(base + minute*60)
             native.missing.add(base + minute*60)
         scheduled.advance(60)
-        ages.append(ae.time.time() - emitter._radar_result.ts_frame)
+        ages.append(ae.time.time() - emitter.radar._result.ts_frame)
     stalled = [w for w in warnings if 'Level III stalled' in w]
     assert stalled, 'a stalled feed is logged'
-    assert len(stalled) <= 40*60 // ae.RADAR_FAILURE_LOG_SEC + 1, 'rate limited'
+    assert len(stalled) <= 40*60 // radar_engine.RADAR_FAILURE_LOG_SEC + 1, 'rate limited'
     wire = emitter._build_payload()['radar']
     assert wire['sourceMode'] == 'site' and wire['tiles']['variant'] is False
     assert wire['nativeFallback'] == dict(active=True, reason='level3-stalled', recovering=False)
-    assert 'not published' in emitter._radar_health_payload()['nativeFallback']['reason']  # radar-health.json
-    assert max(ages[15:]) < ae.RADAR_LEVEL3_UNPUBLISHED_LOG_SEC + 120, 'IEM keeps the frame current'
-    assert not emitter._radar_transport_failures, 'a Level III stall never strikes IEM'
+    assert 'not published' in emitter.radar._health_payload()['nativeFallback']['reason']  # radar-health.json
+    assert max(ages[15:]) < radar_engine.RADAR_LEVEL3_UNPUBLISHED_LOG_SEC + 120, 'IEM keeps the frame current'
+    assert not emitter.radar._transport_failures, 'a Level III stall never strikes IEM'
     # Publication resumes: the next Level III check draws v2 and ends the stall.
     native.missing.clear()
     for site in ('KNEA', 'KMID'):
         multisite.scans[site].append(base + 45*60)
     scheduled.advance(5*60)
     wire = emitter._build_payload()['radar']
-    assert wire['tiles']['variant'] == 'native' and emitter._radar_result.ts_frame == base + 45*60
+    assert wire['tiles']['variant'] == 'native' and emitter.radar._result.ts_frame == base + 45*60
     assert wire['nativeFallback'] == dict(active=False, reason=None, recovering=False)
-    assert emitter._radar_level3_stall is None
+    assert emitter.radar._level3_stall is None
     emitter.stop()
 
 
@@ -171,9 +172,9 @@ def test_watch_skips_a_dark_nearest_radar_like_live(
     wire = emitter._build_payload()['radar']
     assert wire['sourceMode'] == 'site' and wire['siteId'] == 'KMID'
     assert wire['tiles']['variant'] == 'native'
-    assert emitter._radar_result.ts_frame == hybrid.latest + 60 + 20*60
-    assert not warnings and not emitter._radar_transport_failures
-    assert all(f.get('primaryOnly') for f in emitter._radar_result.frames[-1:])
+    assert emitter.radar._result.ts_frame == hybrid.latest + 60 + 20*60
+    assert not warnings and not emitter.radar._transport_failures
+    assert all(f.get('primaryOnly') for f in emitter.radar._result.frames[-1:])
     # Only the new primary's scans are downloaded; KFAR (farther) is never listed.
     assert all(key.startswith('MID_') for kind, key in native.calls if kind == 'get')
     assert ('list', 'KFAR') not in multisite.calls
@@ -201,24 +202,24 @@ def test_auto_watch_reevaluates_site_after_chain_forced_region(
     intent(tmp_path, 8)
     emitter = make_emitter()
     run(emitter, scheduled)
-    assert emitter._radar_result.source_mode == 'site'
+    assert emitter.radar._result.source_mode == 'site'
     tier(emitter, tmp_path, 'watch')
-    opened = ae.RadarSession.open
+    opened = radar_engine.RadarSession.open
     def listing_down(session, request, timeout):
         if 'operation=list' in request.full_url:
             raise urllib.error.HTTPError(request.full_url, 503, 'unavailable', {}, None)
         return opened(session, request, timeout)
-    monkeypatch.setattr(ae.RadarSession, 'open', listing_down)
+    monkeypatch.setattr(radar_engine.RadarSession, 'open', listing_down)
     weather_goes_on(hybrid, multisite, scheduled, 5)
-    assert emitter._radar_result.source_mode == 'mosaic', 'Site strikes forced Region'
+    assert emitter.radar._result.source_mode == 'mosaic', 'Site strikes forced Region'
     # The site listing recovers while nobody is watching.
-    monkeypatch.setattr(ae.RadarSession, 'open', opened)
+    monkeypatch.setattr(radar_engine.RadarSession, 'open', opened)
     multisite.calls.clear()
     weather_goes_on(hybrid, multisite, scheduled, 15)
     wire = emitter._build_payload()['radar']
     assert ('list', 'KNEA') in multisite.calls
     assert wire['sourceMode'] == 'site' and wire['siteId'] == 'KNEA'
-    assert emitter._radar_result.ts_frame == hybrid.latest
+    assert emitter.radar._result.ts_frame == hybrid.latest
     emitter.stop()
 
 
@@ -261,14 +262,14 @@ def test_an_abandoned_stall_streak_cannot_fire_hours_later(make_emitter, hybrid,
     msgs = []
     monkeypatch.setattr(ae.Logger, 'warning', msgs.append)
     e = make_emitter(); tier(e, tmp_path, 'watch')
-    e._do_radar()
+    e.radar._acquire()
     T = hybrid.latest + 300
     for s in ('KNEA', 'KMID'):
         multisite.scans[s].append(T)
     native.missing.add(T)
     hybrid.mono = T + 90 - (hybrid.latest + 360)
-    e._do_radar(discovery=True, intent_triggered=False)
-    assert e._radar_level3_stall is not None                 # a routine lag starts a streak
+    e.radar._acquire(discovery=True, intent_triggered=False)
+    assert e.radar._level3_stall is not None                 # a routine lag starts a streak
     native.missing.clear()
     tier(e, tmp_path, 'rest')
     hybrid.mono += 7200                                      # two hours away from watch
@@ -278,9 +279,9 @@ def test_an_abandoned_stall_streak_cannot_fire_hours_later(make_emitter, hybrid,
     hybrid.mono = X + 90 - (hybrid.latest + 360)
     tier(e, tmp_path, 'watch')
     hybrid.latest = X - 120
-    e._do_radar(discovery=True, intent_triggered=False)
+    e.radar._acquire(discovery=True, intent_triggered=False)
     r = e._build_payload()['radar']
-    assert e._radar_pass.get('outcome') == 'unpublished'     # an ordinary lag, not a stall
+    assert e.radar._pass.get('outcome') == 'unpublished'     # an ordinary lag, not a stall
     assert not (r.get('nativeFallback') or {}).get('active')
-    assert e._radar_level3_stall['since'] == X
+    assert e.radar._level3_stall['since'] == X
     assert not any('stalled' in m for m in msgs)

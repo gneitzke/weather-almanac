@@ -95,7 +95,7 @@ MIN_RING_VERTICES = 4
 HEADLINE_MAX = 160
 VIEW_W, VIEW_H = 956, 490
 PAN_DIAGONALS = 1.5      # console_live.html radarClampCamera: cap = 1.5 * hypot(956, 490) screen px
-MIN_ZOOM = 4             # console_live.html camera floor: radar.zoomMin (almanac_emit.RADAR_MIN_ZOOM)
+MIN_ZOOM = 4             # console_live.html camera floor: radar.zoomMin (radar_engine.RADAR_MIN_ZOOM)
 EARTH_CIRCUMFERENCE_M = 40075016.686
 
 # State, territory and marine area codes (api.weather.gov AreaCode) with their

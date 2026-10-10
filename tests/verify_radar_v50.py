@@ -3,6 +3,7 @@
 Only inter-poll waiting is accelerated. Acquisition, decoding and playback use
 real elapsed time; reported latency includes the simulated discovery wait.
 """
+from lib import radar_engine
 import argparse
 import json
 import shutil
@@ -24,17 +25,17 @@ from tests.conftest import loopback_only_when_offline
 def verify(browser, server, origin, patch, theme, output):
     clock = FakeClock()
     base_stamp = server.data['radar']['observedTs']
-    base = base_stamp + ae.RADAR_IEM_READY_LAG_SEC
+    base = base_stamp + radar_engine.RADAR_IEM_READY_LAG_SEC
     patch.setattr(ae, 'Clock', clock)
     patch.setattr(ae.time, 'time', lambda: base + clock.now)
     real_mono = time.monotonic
     patch.setattr(ae.time, 'monotonic', lambda: real_mono() + clock.now)
-    patch.setattr(ae, 'RADAR_DIR', str(server.root/'radar'))
-    shutil.rmtree(server.root/'radar'/'t'/ae._radar_render_revision()/'iem-nexrad-n0b')
-    patch.setattr(ae, 'RADAR_IEM_METADATA_URL', origin.url+'/metadata')
-    patch.setattr(ae, 'RADAR_IEM_ARCHIVE_TEMPLATE', origin.url+'/archive/%Y%m%d%H%M')
-    patch.setattr(ae, 'RADAR_IEM_TILE_TEMPLATE', origin.url+'/tile/{stamp}/{z}/{x}/{y}')
-    patch.setattr(ae, 'RADAR_SITE_LIST_URL', origin.url+'/listing')
+    patch.setattr(radar_engine, 'RADAR_DIR', str(server.root/'radar'))
+    shutil.rmtree(server.root/'radar'/'t'/radar_engine._radar_render_revision()/'iem-nexrad-n0b')
+    patch.setattr(radar_engine, 'RADAR_IEM_METADATA_URL', origin.url+'/metadata')
+    patch.setattr(radar_engine, 'RADAR_IEM_ARCHIVE_TEMPLATE', origin.url+'/archive/%Y%m%d%H%M')
+    patch.setattr(radar_engine, 'RADAR_IEM_TILE_TEMPLATE', origin.url+'/tile/{stamp}/{z}/{x}/{y}')
+    patch.setattr(radar_engine, 'RADAR_SITE_LIST_URL', origin.url+'/listing')
     origin.response = lambda path, raw: b'{"scans":[]}' if path.startswith('/listing') else raw
     app = SimpleNamespace(config=make_config(Station={'Latitude':'47.61', 'Longitude':'-122.33'}),
                           obsParser=SimpleNamespace(api_data={}))
@@ -78,16 +79,16 @@ def verify(browser, server, origin, patch, theme, output):
     page.wait_for_function('radarReady().length===8')
     page.route('**/wx.json*', lambda route: route.abort())
     # Warm the production tiers before starting the measured readiness clock.
-    e._do_radar(intent_triggered=False)
-    e._running = True
-    e._radar_arm_discovery()
+    e.radar._acquire(intent_triggered=False)
+    e._runtime.running = True
+    e.radar._arm_discovery()
     rows = []
     try:
         for stamp, ready in publications[1:]:
             before = len(origin.requests)
             ages = []
-            while e._radar_result.ts_frame != stamp:
-                event = e._radar_discovery_event
+            while e.radar._result.ts_frame != stamp:
+                event = e.radar._discovery_event
                 assert event is not None
                 delay = max(0, event.due-clock.now)
                 # Run the registered production wakeup, not a direct fetch call.
@@ -97,7 +98,7 @@ def verify(browser, server, origin, patch, theme, output):
                 fired_at = ae.time.time()
                 page.evaluate('now=>{const start=performance.now();Date.now=()=>now+performance.now()-start}', fired_at*1000)
                 viewed.write_text(str(fired_at))
-                while 'radar' in e._inflight:
+                while 'radar' in e._runtime.inflight:
                     r = e._build_payload()['radar']
                     ages.append(r['ageSec'] + time.perf_counter()-started)
                     page.evaluate('r=>renderRadar({radar:r})', r)
@@ -119,13 +120,13 @@ def verify(browser, server, origin, patch, theme, output):
             assert max(ages) < 450, row
             assert r['observedAt'] in read and 'min old' not in read
             assert r['completeFrameCount'] >= 8
-            assert e._radar_health.snapshot()['breaker'] == 'closed'
+            assert e.radar._health.snapshot()['breaker'] == 'closed'
             rows.append(row)
             print(theme, row, flush=True)
         assert not errors, errors
         page.screenshot(path=str(output/f'{theme}-five-stamps.png'))
         result = dict(theme=theme, stamps=rows, metadataPolls=metadata_polls,
-                      health=e._radar_health_payload(), consoleErrors=errors,
+                      health=e.radar._health_payload(), consoleErrors=errors,
                       clock='inter-poll waits accelerated; TLS/render/playback real time')
         (output/f'{theme}.json').write_text(json.dumps(result, indent=2))
     finally:

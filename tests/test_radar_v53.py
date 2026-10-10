@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from lib import almanac_emit as ae, radar_http as http
+from lib import radar_engine
 from lib.radar_fetch import Attempt, HostHealth, tile_race
 from tests.test_freshness_health import serve_at, _get  # noqa: F401
 from tests.test_radar_hybrid import hybrid  # noqa: F401
@@ -19,28 +20,28 @@ from tests.test_radar_keepalive import origin, get  # noqa: F401
 def test_settled_report_is_intent_and_durable_is_only_default(serve_at, make_emitter, hybrid, tmp_path):
     (tmp_path/'radar_zoom').write_text('8')
     e = make_emitter()
-    e._do_radar()
-    assert e._radar_result.zoom == 8
+    e.radar._acquire()
+    assert e.radar._result.zoom == 8
     (tmp_path/'radar_intent').write_text(json.dumps(dict(seq=1, zoom=8, center='station')))
     module, url = serve_at({})
     q = '/wx.json?view=radar&radarTheme=paper&radarGeoZoom=7&radarGeoCenter=47.61,-122.33'
     _get(url+q+'&radarMoving=1')
-    assert e._radar_read_intent()['zoom'] == 8
+    assert e.radar._read_intent()['zoom'] == 8
     _get(url+q+'&radarMoving=0')
-    assert e._radar_read_intent()['zoom'] == 7
-    e._do_radar()
-    assert e._radar_result.zoom == 7
+    assert e.radar._read_intent()['zoom'] == 7
+    e.radar._acquire()
+    assert e.radar._result.zoom == 7
     module._camera_persist_timer.join(2); module._flush_preferences()  # preference writer thread: wait for the durable write
     assert (tmp_path/'radar_zoom').read_text().strip() == '7'
-    stamp = e._radar_preference_stamp()
+    stamp = e.radar._preference_stamp()
     _get(url+q+'&radarMoving=0')
-    assert e._radar_preference_stamp() == stamp
+    assert e.radar._preference_stamp() == stamp
     # Old zoom endpoint and out-of-band durable writes cannot fight live intent.
     _get(url+'/wx.json?radarSeq=999999999998&radarZoom=9&radarSource=mosaic&radarCenter=station')
     (tmp_path/'radar_zoom').write_text('9')
-    assert e._radar_read_intent()['zoom'] == 7
-    e._do_radar()
-    assert e._radar_result.zoom == 7
+    assert e.radar._read_intent()['zoom'] == 7
+    e.radar._acquire()
+    assert e.radar._result.zoom == 7
 
 
 def test_handshake_admission_two_and_ticket_context(origin, monkeypatch):
@@ -141,75 +142,75 @@ def test_adaptive_hedging_rolling_window_and_five_minute_suspension(monkeypatch)
 def test_failed_pass_hysteresis_and_local_exclusion(make_emitter):
     e = make_emitter()
     for _ in range(9):
-        assert not e._radar_failed_pass('iem', http.LocalTransportError('TLS'), {})
-    assert 'iem' not in e._radar_transport_failures
-    assert not e._radar_failed_pass('iem', OSError('host'), {})
-    assert not e._radar_failed_pass('iem', OSError('host'), {})
-    assert e._radar_failed_pass('iem', OSError('host'), {})
+        assert not e.radar._failed_pass('iem', http.LocalTransportError('TLS'), {})
+    assert 'iem' not in e.radar._transport_failures
+    assert not e.radar._failed_pass('iem', OSError('host'), {})
+    assert not e.radar._failed_pass('iem', OSError('host'), {})
+    assert e.radar._failed_pass('iem', OSError('host'), {})
 
 
 def test_alternating_passes_retain_source_three_failures_then_dwell(make_emitter, hybrid, tmp_path, monkeypatch):
     (tmp_path/'radar_viewed').write_text(str(hybrid.now))
     e = make_emitter()
-    e._do_radar()
-    assert sum(f['complete'] for f in e._radar_result.frames) >= 8
-    primary = e._radar_iem_frames
+    e.radar._acquire()
+    assert sum(f['complete'] for f in e.radar._result.frames) >= 8
+    primary = e.radar._iem_frames
     def failed(ctx): raise ConnectionResetError('fake MRMS reset')
     for _ in range(4):
-        monkeypatch.setattr(e, '_radar_iem_frames', failed)
-        e._do_radar(intent_triggered=False)
-        assert e._radar_result.source_id == 'iem-mrms-lcref'
-        monkeypatch.setattr(e, '_radar_iem_frames', primary)
-        e._do_radar(intent_triggered=False)
-    old = e._radar_result
+        monkeypatch.setattr(e.radar, '_iem_frames', failed)
+        e.radar._acquire(intent_triggered=False)
+        assert e.radar._result.source_id == 'iem-mrms-lcref'
+        monkeypatch.setattr(e.radar, '_iem_frames', primary)
+        e.radar._acquire(intent_triggered=False)
+    old = e.radar._result
     published = []
-    monkeypatch.setattr(e, '_radar_emit_now', lambda: published.append(e._radar_result))
+    monkeypatch.setattr(e.radar, '_emit_now', lambda: published.append(e.radar._result))
     messages = []
     monkeypatch.setattr(ae.Logger, 'info', messages.append)
-    monkeypatch.setattr(e, '_radar_iem_frames', failed)
+    monkeypatch.setattr(e.radar, '_iem_frames', failed)
     for _ in range(2):
-        e._do_radar(intent_triggered=False)
-        assert e._radar_result is old
+        e.radar._acquire(intent_triggered=False)
+        assert e.radar._result is old
     # Give this fallback pass a fresh rolling budget, without changing dwell.
-    e._radar_request_times.clear()
-    e._do_radar(intent_triggered=False)
-    assert e._radar_result.source_id == 'rainviewer'
+    e.radar._request_times.clear()
+    e.radar._acquire(intent_triggered=False)
+    assert e.radar._result.source_id == 'rainviewer'
     # Auto publishes a switch once its newest frame is complete; the page keeps
     # the old loop on screen until four of the new one are decoded.
     assert all(s is old or s.source_id == 'rainviewer' and s.frames[-1]['complete'] for s in published)
     assert any('SWITCH iem-mrms-lcref -> rainviewer; reason=' in m and '3 consecutive' in m for m in messages)
-    monkeypatch.setattr(e, '_radar_iem_frames', primary)
-    e._do_radar(intent_triggered=False)
-    assert e._radar_result.source_id == 'rainviewer'
+    monkeypatch.setattr(e.radar, '_iem_frames', primary)
+    e.radar._acquire(intent_triggered=False)
+    assert e.radar._result.source_id == 'rainviewer'
     hybrid.mono += 301
     hybrid.latest += 240
     (tmp_path/'radar_viewed').write_text(str(hybrid.now+hybrid.mono))
-    e._do_radar(intent_triggered=False)
-    assert e._radar_result.source_id == 'iem-mrms-lcref'
+    e.radar._acquire(intent_triggered=False)
+    assert e.radar._result.source_id == 'iem-mrms-lcref'
     assert any('reason=preferred source recovered after 300s dwell' in m for m in messages)
 
 
 def test_two_attempts_have_individual_timeouts_within_batch_deadline(origin, make_emitter, monkeypatch):
-    e = make_emitter(); e._radar_session = http.RadarSession()
-    monkeypatch.setattr(ae, 'RADAR_TILE_TIMEOUT_SEC', .4)
+    e = make_emitter(); e.radar._session = http.RadarSession()
+    monkeypatch.setattr(radar_engine, 'RADAR_TILE_TIMEOUT_SEC', .4)
     origin.behavior = lambda path, ordinal: 'fail' if ordinal == 1 else 'hang'
     deadlines = []
-    request = e._radar_request
+    request = e.radar._request
     def record(source, url, deadline, **kwargs):
         deadlines.append(deadline)
         return request(source, url, deadline, **kwargs)
-    monkeypatch.setattr(e, '_radar_request', record)
+    monkeypatch.setattr(e.radar, '_request', record)
     started = time.monotonic()
     try:
         ctx = dict(zoom=8, tiles=[(0, 1, 0, 0)], tile_workers=4)
-        result = list(e._radar_tile_batch('iem-mrms-lcref', 1, ctx, started+3,
+        result = list(e.radar._tile_batch('iem-mrms-lcref', 1, ctx, started+3,
                       lambda x, y: origin.url+'/deadline-tile', None))
         assert not result and ctx['missing_tiles']
         assert time.monotonic()-started < .8
         assert len(origin.requests) == len(deadlines) == 2
         assert started < deadlines[0] <= deadlines[1] < started+.8
     finally:
-        e._radar_session.close()
+        e.radar._session.close()
 
 
 def test_unissued_hedge_does_not_count_as_discarded():
@@ -243,23 +244,23 @@ def test_late_hedge_admission_is_counted_after_drain():
 
 
 def test_real_response_deadline_is_host_failure_not_discard(origin, make_emitter, monkeypatch):
-    e = make_emitter(); e._radar_session = http.RadarSession()
-    monkeypatch.setattr(ae, 'RADAR_TILE_TIMEOUT_SEC', .3)
+    e = make_emitter(); e.radar._session = http.RadarSession()
+    monkeypatch.setattr(radar_engine, 'RADAR_TILE_TIMEOUT_SEC', .3)
     origin.hang = True
     try:
         ctx = dict(zoom=8, tiles=[(0, 1, 0, 0)], tile_workers=4)
-        list(e._radar_tile_batch('iem-mrms-lcref', 1, ctx, time.monotonic()+2,
+        list(e.radar._tile_batch('iem-mrms-lcref', 1, ctx, time.monotonic()+2,
              lambda x, y: origin.url+'/response-deadline', None))
-        h = e._radar_health.snapshot()
+        h = e.radar._health.snapshot()
         assert h['localFailures'] == 0 and h['successRate60s'] == 0
         assert h['discardedHedges'] == 0
     finally:
-        e._radar_session.close()
+        e.radar._session.close()
 
 
 def test_real_handshake_deadline_stays_local_during_race_cleanup(origin, make_emitter, monkeypatch):
-    e = make_emitter(); e._radar_session = http.RadarSession()
-    monkeypatch.setattr(ae, 'RADAR_TILE_TIMEOUT_SEC', .15)
+    e = make_emitter(); e.radar._session = http.RadarSession()
+    monkeypatch.setattr(radar_engine, 'RADAR_TILE_TIMEOUT_SEC', .15)
     handshake = ssl.SSLSocket.do_handshake
     def slow_server(sock, *args, **kwargs):
         if sock.server_side:
@@ -268,10 +269,10 @@ def test_real_handshake_deadline_stays_local_during_race_cleanup(origin, make_em
     monkeypatch.setattr(ssl.SSLSocket, 'do_handshake', slow_server)
     try:
         ctx = dict(zoom=8, tiles=[(0, 1, 0, 0)], tile_workers=4)
-        list(e._radar_tile_batch('iem-mrms-lcref', 1, ctx, time.monotonic()+2,
+        list(e.radar._tile_batch('iem-mrms-lcref', 1, ctx, time.monotonic()+2,
              lambda x, y: origin.url+'/handshake-deadline', None))
-        h = e._radar_health.snapshot()
+        h = e.radar._health.snapshot()
         assert h['localFailures'] >= 1 and h['successRate60s'] is None
         assert h['breaker'] == 'closed' and h['discardedHedges'] == 0
     finally:
-        e._radar_session.close()
+        e.radar._session.close()

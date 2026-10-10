@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from lib import almanac_emit as ae, radar_auto as auto, radar_native_budget as budget
+from lib import radar_engine
 from tests.test_radar_hybrid import hybrid  # noqa: F401
 from tests.test_radar_v3 import multisite  # noqa: F401
 from tests.test_radar_level3 import native  # noqa: F401
@@ -24,10 +25,10 @@ def test_region_loop_ignores_native_soft_ceiling(make_emitter, hybrid, multisite
     counts = []
     for amount in (0, budget.NATIVE_NEWEST_ONLY_BYTES+1):
         emitter = make_emitter()
-        emitter._radar_attention.forced = emitter._radar_attention.tier = tier
-        emitter._radar_native_budget.add(amount)
-        emitter._do_radar()
-        snap = emitter._radar_result
+        emitter.radar._attention.forced = emitter.radar._attention.tier = tier
+        emitter.radar._native_budget.add(amount)
+        emitter.radar._acquire()
+        snap = emitter.radar._result
         assert snap.source_mode == 'mosaic'
         counts.append(sum(f['complete'] for f in snap.frames))
     assert counts[0] > 1 and counts[0] == counts[1]
@@ -36,31 +37,31 @@ def test_region_loop_ignores_native_soft_ceiling(make_emitter, hybrid, multisite
 @pytest.mark.parametrize('failure', ['listing', 'nearest_listing', 'timeout', 'budget'])
 def test_unknown_discovery_keeps_site_and_evidence(make_emitter, hybrid, multisite, tmp_path, monkeypatch, failure):
     intent(tmp_path, 9)
-    emitter = make_emitter(); emitter._do_radar()
-    assert emitter._radar_result.source_mode == 'site'
-    status = dict(emitter._radar_site_status['KNEA'])
-    evidence = dict(emitter._radar_auto_evidence)
+    emitter = make_emitter(); emitter.radar._acquire()
+    assert emitter.radar._result.source_mode == 'site'
+    status = dict(emitter.radar._site_status['KNEA'])
+    evidence = dict(emitter.radar._auto_evidence)
     if failure in ('listing', 'nearest_listing'):
-        opened = ae.RadarSession.open
+        opened = radar_engine.RadarSession.open
         def fail(session, req, timeout):
             if 'operation=list' in req.full_url and (failure == 'listing' or 'radar=NEA' in req.full_url):
                 raise OSError('transport unavailable')
             return opened(session, req, timeout)
-        monkeypatch.setattr(ae.RadarSession, 'open', fail)
+        monkeypatch.setattr(radar_engine.RadarSession, 'open', fail)
     else:
         def fail(ctx):
-            raise TimeoutError('deadline') if failure == 'timeout' else ae._RadarBudget('budget')
-        monkeypatch.setattr(emitter, '_radar_site_discover', fail)
+            raise TimeoutError('deadline') if failure == 'timeout' else radar_engine._RadarBudget('budget')
+        monkeypatch.setattr(emitter.radar, '_site_discover', fail)
     for elapsed in (2, 12):
         hybrid.mono = elapsed
-        emitter._radar_forget('iem-nexrad-n0b')
-        emitter._do_radar(discovery=True, intent_triggered=False)
-        assert emitter._radar_result.source_mode == 'site'
+        emitter.radar._forget('iem-nexrad-n0b')
+        emitter.radar._acquire(discovery=True, intent_triggered=False)
+        assert emitter.radar._result.source_mode == 'site'
         if failure in ('listing', 'nearest_listing'):
-            assert emitter._radar_site_status['KNEA']['reporting'] is None
+            assert emitter.radar._site_status['KNEA']['reporting'] is None
         else:
-            assert emitter._radar_site_status['KNEA'] == status
-        assert emitter._radar_auto_evidence == (evidence if elapsed < ae.RADAR_SITE_MAX_AGE_SEC else {})
+            assert emitter.radar._site_status['KNEA'] == status
+        assert emitter.radar._auto_evidence == (evidence if elapsed < radar_engine.RADAR_SITE_MAX_AGE_SEC else {})
 
 
 @pytest.mark.parametrize('coverage,expected', [(.85, 'site'), (.70, 'site'), (.699, 'mosaic')])
@@ -81,11 +82,11 @@ def test_zoom_seven_uses_zoom_eight_footprint(make_emitter, hybrid, multisite, t
         return seen[-1][1]
     monkeypatch.setattr(auto, 'coverage_fraction', measure)
     intent(tmp_path, 8)
-    emitter = make_emitter(); emitter._do_radar()
-    assert emitter._radar_result.source_mode == 'site'
+    emitter = make_emitter(); emitter.radar._acquire()
+    assert emitter.radar._result.source_mode == 'site'
     intent(tmp_path, 7, seq=2); hybrid.mono += 11
-    emitter._do_radar()
-    assert emitter._radar_result.source_mode == 'site'
+    emitter.radar._acquire()
+    assert emitter.radar._result.source_mode == 'site'
     assert seen[0] == seen[-1] and seen[-1][1] >= .85
 
 
@@ -120,42 +121,42 @@ def test_ledger_durable_forward_days_and_write_rate(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize('invalid', [False, True])
 def test_accounting_failure_preserves_transport_result_and_metrics(make_emitter, monkeypatch, caplog, invalid):
-    emitter = make_emitter(); emitter._radar_begin_log_pass(); emitter._radar_session = ae.RadarSession()
-    monkeypatch.setattr(emitter._radar_session, 'open', lambda *args, **kwargs: io.BytesIO(b'body'))
+    emitter = make_emitter(); emitter.radar._begin_log_pass(); emitter.radar._session = radar_engine.RadarSession()
+    monkeypatch.setattr(emitter.radar._session, 'open', lambda *args, **kwargs: io.BytesIO(b'body'))
     def fail(*args): raise OSError('SD read only')
-    monkeypatch.setattr(emitter._radar_native_budget, '_write', fail)
+    monkeypatch.setattr(emitter.radar._native_budget, '_write', fail)
     def validate(raw):
         if invalid: raise ValueError('actual validation error')
     def request():
-        return emitter._radar_request(ae.RADAR_LEVEL3_TRANSPORT, ae.RADAR_LEVEL3_BUCKET+'object', ae.time.monotonic()+10, validate=validate)
+        return emitter.radar._request(radar_engine.RADAR_LEVEL3_TRANSPORT, radar_engine.RADAR_LEVEL3_BUCKET+'object', ae.time.monotonic()+10, validate=validate)
     if invalid:
         with pytest.raises(ValueError, match='actual validation error'): request()
     else:
         assert request() == b'body'
-    assert emitter._radar_request_metrics[-1]['bytes'] == 4
-    emitter._radar_native_budget.persist()
-    assert emitter._radar_native_budget.snapshot()['ledgerState'] == 'retrying'
-    emitter._radar_native_budget.add(3)
-    assert emitter._radar_native_budget.snapshot()['bytesToday'] == 7
+    assert emitter.radar._request_metrics[-1]['bytes'] == 4
+    emitter.radar._native_budget.persist()
+    assert emitter.radar._native_budget.snapshot()['ledgerState'] == 'retrying'
+    emitter.radar._native_budget.add(3)
+    assert emitter.radar._native_budget.snapshot()['bytesToday'] == 7
     assert len([r for r in caplog.records if 'ledger unavailable' in r.message]) == 1
 
 
 def test_sd_write_holds_neither_renderer_nor_accounting_lock(make_emitter, monkeypatch):
-    emitter = make_emitter(); emitter._radar_begin_log_pass(); emitter._radar_session = ae.RadarSession()
-    monkeypatch.setattr(emitter._radar_session, 'open', lambda *args, **kwargs: io.BytesIO(b'body'))
+    emitter = make_emitter(); emitter.radar._begin_log_pass(); emitter.radar._session = radar_engine.RadarSession()
+    monkeypatch.setattr(emitter.radar._session, 'open', lambda *args, **kwargs: io.BytesIO(b'body'))
     entered, release, completed = threading.Event(), threading.Event(), threading.Event()
-    write = emitter._radar_native_budget._write
+    write = emitter.radar._native_budget._write
     def blocked_write(current):
         entered.set(); assert release.wait(5)
         return write(current)
-    monkeypatch.setattr(emitter._radar_native_budget, '_write', blocked_write)
+    monkeypatch.setattr(emitter.radar._native_budget, '_write', blocked_write)
     def request():
-        emitter._radar_request(ae.RADAR_LEVEL3_TRANSPORT, ae.RADAR_LEVEL3_BUCKET+'object', ae.time.monotonic()+10)
+        emitter.radar._request(radar_engine.RADAR_LEVEL3_TRANSPORT, radar_engine.RADAR_LEVEL3_BUCKET+'object', ae.time.monotonic()+10)
     worker = threading.Thread(target=request); worker.start()
     assert entered.wait(5)
     def checkpoint():
-        with emitter._radar_lock:
-            assert emitter._radar_native_budget.snapshot()['bytesToday'] == 4
+        with emitter.radar._lock:
+            assert emitter.radar._native_budget.snapshot()['bytesToday'] == 4
         completed.set()
     reader = threading.Thread(target=checkpoint); reader.start()
     try: assert completed.wait(2)
@@ -169,55 +170,55 @@ def test_newest_only_tries_two_fallbacks_builds_one_frame(make_emitter, hybrid, 
     multisite.scans['KNEA'] = sorted(scans)
     multisite.scans['KMID'] = []
     native.missing.update(scans[:missing_count])
-    emitter = make_emitter(); emitter._radar_native_budget.add(budget.NATIVE_NEWEST_ONLY_BYTES+1)
-    emitter._do_radar()
+    emitter = make_emitter(); emitter.radar._native_budget.add(budget.NATIVE_NEWEST_ONLY_BYTES+1)
+    emitter.radar._acquire()
     if missing_count < 3:
-        assert emitter._radar_result.source_mode == 'site'
-        assert len(emitter._radar_result.frames) == 1
-        assert emitter._radar_result.ts_frame == scans[missing_count]
-        assert emitter._radar_refresh['frameTotal'] == 1
+        assert emitter.radar._result.source_mode == 'site'
+        assert len(emitter.radar._result.frames) == 1
+        assert emitter.radar._result.ts_frame == scans[missing_count]
+        assert emitter.radar._refresh['frameTotal'] == 1
     else:
-        assert not emitter._radar_result.frames
+        assert not emitter.radar._result.frames
     assert len([c for c in native.calls if c[0] == 'get']) == (1 if missing_count < 3 else 0)
 
 
 def test_region_checkpoint_and_wake_ignore_site_only_policy(make_emitter, monkeypatch):
-    monkeypatch.setattr(ae, 'RADAR_ATTENTION_MODE', 'active')
-    emitter = make_emitter(); emitter._radar_native_requested = True
-    emitter._radar_result = emitter._radar_result._replace(source_mode='mosaic', source_id='iem-mrms-lcref')
-    emitter._radar_target_source = 'iem-mrms-lcref'
+    monkeypatch.setattr(radar_engine, 'RADAR_ATTENTION_MODE', 'active')
+    emitter = make_emitter(); emitter.radar._native_requested = True
+    emitter.radar._result = emitter.radar._result._replace(source_mode='mosaic', source_id='iem-mrms-lcref')
+    emitter.radar._target_source = 'iem-mrms-lcref'
     before = dict(tier='watch', frames=4, tiles=True, prefetch=False, listing=120)
     after = dict(before, tier='warm')
-    monkeypatch.setattr(emitter, '_radar_attention_knobs', lambda: after)
+    monkeypatch.setattr(emitter.radar, '_attention_knobs', lambda: after)
     wakes = []
-    monkeypatch.setattr(emitter, '_schedule', lambda *args: wakes.append(args))
-    monkeypatch.setattr(emitter, '_radar_arm_discovery', lambda **kwargs: None)
-    emitter._radar_attention_changed(before, ae.time.time())
+    monkeypatch.setattr(emitter._runtime, 'schedule', lambda *args: wakes.append(args))
+    monkeypatch.setattr(emitter.radar, '_arm_discovery', lambda **kwargs: None)
+    emitter.radar._attention_changed(before, ae.time.time())
     assert not wakes
-    emitter._radar_native_budget.add(budget.NATIVE_NEWEST_ONLY_BYTES+1)
+    emitter.radar._native_budget.add(budget.NATIVE_NEWEST_ONLY_BYTES+1)
     ctx = dict(native=True, native_ceiling='normal', target_source='iem-mrms-lcref', attention_knobs=before)
-    emitter._radar_checkpoint(ctx)
+    emitter.radar._checkpoint(ctx)
     ctx['target_source'] = 'iem-nexrad-n0b'
-    with pytest.raises(ae._RadarSuperseded): emitter._radar_checkpoint(ctx)
+    with pytest.raises(radar_engine._RadarSuperseded): emitter.radar._checkpoint(ctx)
 
 
 @pytest.mark.parametrize('tier', ['watch', 'rest', 'dormant'])
 def test_shadow_tier_cannot_gate_auto_or_native(make_emitter, hybrid, multisite, native, tmp_path, monkeypatch, tier):
-    monkeypatch.setattr(ae, 'RADAR_ATTENTION_MODE', 'shadow')
+    monkeypatch.setattr(radar_engine, 'RADAR_ATTENTION_MODE', 'shadow')
     intent(tmp_path, 9)
-    emitter = make_emitter(); emitter._radar_attention.forced = emitter._radar_attention.tier = tier
-    emitter._do_radar()
-    assert emitter._radar_result.source_mode == 'site'
-    assert emitter._radar_result.tiles['variant'] == 'native' and native.calls
-    assert ae.RADAR_LEVEL3_TRANSPORT in emitter._radar_transport_sources('iem-nexrad-n0b')
+    emitter = make_emitter(); emitter.radar._attention.forced = emitter.radar._attention.tier = tier
+    emitter.radar._acquire()
+    assert emitter.radar._result.source_mode == 'site'
+    assert emitter.radar._result.tiles['variant'] == 'native' and native.calls
+    assert radar_engine.RADAR_LEVEL3_TRANSPORT in emitter.radar._transport_sources('iem-nexrad-n0b')
 
 
 def test_auto_schedules_site_breaker_recovery(make_emitter, monkeypatch):
     emitter = make_emitter()
-    emitter._radar_result = emitter._radar_result._replace(source_id='iem-mrms-lcref', source_mode='mosaic', zoom_desired=8)
+    emitter.radar._result = emitter.radar._result._replace(source_id='iem-mrms-lcref', source_mode='mosaic', zoom_desired=8)
     seen = []
-    monkeypatch.setattr(emitter._radar_health, 'probe_delay', lambda sources: seen.append(sources) or 12)
-    assert emitter._radar_probe_delay() == 12
+    monkeypatch.setattr(emitter.radar._health, 'probe_delay', lambda sources: seen.append(sources) or 12)
+    assert emitter.radar._probe_delay() == 12
     assert 'iem-nexrad-n0b' in seen[0]
 
 
@@ -257,29 +258,29 @@ process.exit(0);
 
 def test_confirmed_dark_site_can_leave_during_guard(make_emitter, hybrid, multisite, tmp_path):
     intent(tmp_path, 6)
-    emitter = make_emitter(); emitter._do_radar()
-    intent(tmp_path, 9, seq=2); emitter._do_radar()
-    assert emitter._radar_result.source_mode == 'site'
+    emitter = make_emitter(); emitter.radar._acquire()
+    intent(tmp_path, 9, seq=2); emitter.radar._acquire()
+    assert emitter.radar._result.source_mode == 'site'
     hybrid.mono += 2; multisite.scans['KNEA'] = []
-    emitter._radar_forget('iem-nexrad-n0b')
-    emitter._do_radar(discovery=True, intent_triggered=False)
-    assert emitter._radar_result.source_mode == 'mosaic'
+    emitter.radar._forget('iem-nexrad-n0b')
+    emitter.radar._acquire(discovery=True, intent_triggered=False)
+    assert emitter.radar._result.source_mode == 'mosaic'
 
 
 def test_coverage_exit_waits_for_guard_in_real_engine(make_emitter, hybrid, multisite, tmp_path, monkeypatch):
     intent(tmp_path, 6)
     coverage = [1.]
     monkeypatch.setattr(auto, 'coverage_fraction', lambda *args: coverage[0])
-    emitter = make_emitter(); emitter._do_radar()
-    intent(tmp_path, 9, seq=2); emitter._do_radar()
-    assert emitter._radar_result.source_mode == 'site'
+    emitter = make_emitter(); emitter.radar._acquire()
+    intent(tmp_path, 9, seq=2); emitter.radar._acquire()
+    assert emitter.radar._result.source_mode == 'site'
     coverage[0] = .69; hybrid.mono += 2
-    emitter._radar_coverage_cache.clear()  # injected geometry changed
-    emitter._do_radar(discovery=True, intent_triggered=False)
-    assert emitter._radar_result.source_mode == 'site' and emitter._radar_auto_due == 10
+    emitter.radar._coverage_cache.clear()  # injected geometry changed
+    emitter.radar._acquire(discovery=True, intent_triggered=False)
+    assert emitter.radar._result.source_mode == 'site' and emitter.radar._auto_due == 10
     hybrid.mono += 10
-    emitter._do_radar(discovery=True, intent_triggered=False)
-    assert emitter._radar_result.source_mode == 'mosaic'
+    emitter.radar._acquire(discovery=True, intent_triggered=False)
+    assert emitter.radar._result.source_mode == 'mosaic'
 
 
 def test_launcher_migrates_ledger_and_preserves_it_on_restart(tmp_path):
@@ -297,13 +298,13 @@ def test_launcher_migrates_ledger_and_preserves_it_on_restart(tmp_path):
 
 def test_region_prefetch_uses_actual_site_target_for_ceiling(make_emitter, hybrid, multisite, native, tmp_path, monkeypatch):
     hybrid.pin('mosaic')
-    emitter = make_emitter(); emitter._do_radar()
-    source, ctx = emitter._radar_idle_context
+    emitter = make_emitter(); emitter.radar._acquire()
+    source, ctx = emitter.radar._idle_context
     assert source == 'iem-mrms-lcref'
-    emitter._radar_native_budget.add(budget.NATIVE_NEWEST_ONLY_BYTES+1)
-    monkeypatch.setattr(emitter, '_radar_headroom_delay', lambda *args: 0)
+    emitter.radar._native_budget.add(budget.NATIVE_NEWEST_ONLY_BYTES+1)
+    monkeypatch.setattr(emitter.radar, '_headroom_delay', lambda *args: 0)
     # The Region pass is unaffected, but warming native Site must see its own
     # target when checking policy at the very first prefetch boundary.
-    emitter._radar_checkpoint(dict(ctx, target_source=source))
-    with pytest.raises(ae._RadarSuperseded, match='native daily budget'):
-        emitter._radar_prefetch(source, dict(ctx, viewed=True, refresh=dict(state='idle')))
+    emitter.radar._checkpoint(dict(ctx, target_source=source))
+    with pytest.raises(radar_engine._RadarSuperseded, match='native daily budget'):
+        emitter.radar._prefetch(source, dict(ctx, viewed=True, refresh=dict(state='idle')))

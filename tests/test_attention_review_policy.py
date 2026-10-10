@@ -7,6 +7,7 @@ import pytest
 import pytz
 
 from lib import almanac_emit as ae
+from lib import radar_engine
 from lib.radar_attention import Attention, AWAY_SEC, REST_TO_DORMANT_SEC
 from tests.test_radar_attention import sig, T0
 from tests.test_radar_hybrid import hybrid  # noqa: F401
@@ -38,7 +39,7 @@ def test_rain_hold_is_anchored_to_observation_not_repeated_tick():
     ('Extreme Rain', True), ('Snow Likely', True)])
 def test_recognized_rain_statuses_only(make_emitter, status, wet):
     e = make_emitter()
-    s = e._radar_attention_signals(dict(rainStatus=status), T0, timezone.utc)
+    s = e.radar._attention_signals(dict(rainStatus=status), T0, timezone.utc)
     assert s.rain_wet is wet
 
 
@@ -49,7 +50,7 @@ def test_carried_observation_uses_original_epoch(make_emitter, hybrid, tmp_path)
     e = make_emitter()
     p = e._build_payload()
     assert p['carried'] and p['obsAgeSec'] == 900
-    assert e._radar_attention.wet_until == 0
+    assert e.radar._attention.wet_until == 0
     assert p['radar']['attention']['reason'] == 'observations unknown'
 
 
@@ -57,16 +58,16 @@ def test_carried_observation_uses_original_epoch(make_emitter, hybrid, tmp_path)
     ('2026-11-01T09:30:00', 1.5), ('2026-03-08T10:30:00', 3.5)])
 def test_station_timezone_across_dst(make_emitter, utc, hour):
     now = datetime.fromisoformat(utc).replace(tzinfo=timezone.utc).timestamp()
-    s = make_emitter()._radar_attention_signals({}, now, pytz.timezone('America/Los_Angeles'))
+    s = make_emitter().radar._attention_signals({}, now, pytz.timezone('America/Los_Angeles'))
     assert s.local_hour == hour
 
 
 def test_lightning_is_seconds_and_each_strike_extends_hold(make_emitter):
     e = make_emitter()
     for now, age in ((T0, 1200), (T0+600, 10)):
-        s = e._radar_attention_signals(dict(lightningSinceSec=age), now, timezone.utc)
-        e._radar_attention.decide(s)
-        assert e._radar_attention.lightning_until == now + 1800 - age
+        s = e.radar._attention_signals(dict(lightningSinceSec=age), now, timezone.utc)
+        e.radar._attention.decide(s)
+        assert e.radar._attention.lightning_until == now + 1800 - age
 
 
 def test_rest_dwell_resets_on_weather_bounce_and_handles_zero_epoch():
@@ -80,27 +81,27 @@ def test_rest_dwell_resets_on_weather_bounce_and_handles_zero_epoch():
 
 
 def test_force_expiry_shadow_and_health_share_current_decision(make_emitter, hybrid, tmp_path, monkeypatch):
-    monkeypatch.setattr(ae, 'RADAR_ATTENTION_MODE', 'shadow')
-    e = make_emitter(); e._running = True
+    monkeypatch.setattr(radar_engine, 'RADAR_ATTENTION_MODE', 'shadow')
+    e = make_emitter(); e._runtime.running = True
     marker = tmp_path / 'radar_attention_force'
     marker.write_text('dormant')
     os.utime(marker, (ae.time.time(), ae.time.time()))
     scheduled = []
-    e._schedule = lambda *args, **kwargs: scheduled.append(args)
+    e._runtime.schedule = lambda *args, **kwargs: scheduled.append(args)
     p = e._build_payload()['radar']
-    assert p['attention']['tier'] == e._radar_health_payload()['attention']['tier'] == 'dormant'  # health: radar-health.json
+    assert p['attention']['tier'] == e.radar._health_payload()['attention']['tier'] == 'dormant'  # health: radar-health.json
     assert not scheduled
-    hybrid.mono += ae.RADAR_ATTENTION_FORCE_TTL
+    hybrid.mono += radar_engine.RADAR_ATTENTION_FORCE_TTL
     p = e._build_payload()['radar']
     assert p['attention']['tier'] == 'watch'
-    assert e._radar_health_payload()['attention']['forced'] is None
+    assert e.radar._health_payload()['attention']['forced'] is None
     assert not scheduled
 
 
 @pytest.mark.parametrize('value', ['nan', 'inf', '-inf', 'garbage'])
 def test_invalid_presence_epochs_do_not_prove_attention(make_emitter, hybrid, tmp_path, value):
     (tmp_path / 'presence').write_text(value)
-    assert make_emitter()._radar_marker_age('presence', ae.time.time()) is None
+    assert make_emitter().radar._marker_age('presence', ae.time.time()) is None
 
 
 def test_forecast_words_override_low_probability_as_documented():

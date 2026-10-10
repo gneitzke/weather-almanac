@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from lib import almanac_emit as ae
+from lib import radar_engine
 from tests.test_radar_hybrid import hybrid  # noqa: F401
 from tests.test_radar_v3 import multisite  # noqa: F401
 from tests.test_radar_level3 import native  # noqa: F401
@@ -19,7 +20,7 @@ SITE = 'iem-nexrad-n0b'
 def tier(emitter, tmp_path, name):
     for marker in ('radar_viewed', 'radar_viewing'):
         (tmp_path / marker).unlink(missing_ok=True)
-    emitter._radar_attention.forced = emitter._radar_attention.tier = name
+    emitter.radar._attention.forced = emitter.radar._attention.tier = name
 
 
 def full_timeline(multisite, latest):
@@ -33,33 +34,33 @@ def test_watch_publication_lag_waits_for_negative_expiry_without_failure(
     emitter = make_emitter()
     tier(emitter, tmp_path, 'watch')
     if not cold:
-        emitter._do_radar()
-    retained = emitter._radar_result
+        emitter.radar._acquire()
+    retained = emitter.radar._result
     latest = hybrid.latest + 300
     multisite.scans['KNEA'].append(latest)
     native.missing.add(latest)
     hybrid.now = latest + 90
     warnings, retries = [], []
     monkeypatch.setattr(ae.Logger, 'warning', warnings.append)
-    monkeypatch.setattr(emitter, '_schedule_retry', lambda key, callback, delay, **kw: retries.append(hybrid.mono+delay))
+    monkeypatch.setattr(emitter.radar, '_schedule_retry', lambda key, callback, delay, **kw: retries.append(hybrid.mono+delay))
     native.calls.clear()
     for elapsed in (0, 2, 4, 59):
         hybrid.mono = elapsed
-        emitter._do_radar(discovery=True, intent_triggered=False)
-        assert emitter._radar_pass['outcome'] == 'unpublished'
-        assert not emitter._radar_transport_failures
-        assert emitter._radar_result.frames == retained.frames
-        assert emitter._radar_result.source_id == SITE
+        emitter.radar._acquire(discovery=True, intent_triggered=False)
+        assert emitter.radar._pass['outcome'] == 'unpublished'
+        assert not emitter.radar._transport_failures
+        assert emitter.radar._result.frames == retained.frames
+        assert emitter.radar._result.source_id == SITE
         assert retries[-1] == 60
     assert warnings == []
     assert not [c for c in native.calls if c[0] == 'get']
     assert len([c for c in native.calls if c[0] == 'list']) == int(cold)
     native.missing.clear()
     hybrid.mono = 60
-    emitter._do_radar(discovery=True, intent_triggered=False)
-    assert emitter._radar_result.ts_frame == latest
-    assert len(emitter._radar_result.frames) == 1
-    assert emitter._radar_result.frames[0]['primaryOnly']
+    emitter.radar._acquire(discovery=True, intent_triggered=False)
+    assert emitter.radar._result.ts_frame == latest
+    assert len(emitter.radar._result.frames) == 1
+    assert emitter.radar._result.frames[0]['primaryOnly']
 
 
 def test_watch_overdue_publication_reaches_warning_bound(
@@ -70,16 +71,16 @@ def test_watch_overdue_publication_reaches_warning_bound(
     warnings = []
     monkeypatch.setattr(ae.Logger, 'warning', warnings.append)
     hybrid.now = hybrid.latest + 600
-    emitter._do_radar()
-    assert not warnings and not emitter._radar_transport_failures
+    emitter.radar._acquire()
+    assert not warnings and not emitter.radar._transport_failures
     hybrid.mono = 60
-    emitter._do_radar(discovery=True, intent_triggered=False)
+    emitter.radar._acquire(discovery=True, intent_triggered=False)
     assert any('scan unavailable' in message for message in warnings)
     # Past the bound Level III is stalled for the site view: IEM draws it,
     # labelled, and IEM's own fallback chain takes no strike.
     assert any('Level III stalled' in message for message in warnings)
-    assert not emitter._radar_transport_failures
-    assert emitter._radar_level3_outage['kind'] == 'stalled'
+    assert not emitter.radar._transport_failures
+    assert emitter.radar._level3_outage['kind'] == 'stalled'
 
 
 @pytest.mark.parametrize('neighbours', [False, True])
@@ -91,17 +92,17 @@ def test_watch_frame_is_rebuilt_with_neighbours_on_attendance(
         multisite.scans['KMID'] = []
     emitter = make_emitter()
     tier(emitter, tmp_path, 'watch')
-    emitter._do_radar()
-    watch = emitter._radar_result.frames[-1]
+    emitter.radar._acquire()
+    watch = emitter.radar._result.frames[-1]
     assert watch['primaryOnly'] and len(watch['requestedPairs']) == 1
     if new_scan:
         for site in (('KNEA', 'KMID') if neighbours else ('KNEA',)):
             multisite.scans[site].append(hybrid.latest+300)
         hybrid.mono += 300
     tier(emitter, tmp_path, 'live')
-    emitter._do_radar(discovery=True, intent_triggered=True)
-    emitter._do_radar(discovery=True, intent_triggered=False)
-    frames = emitter._radar_result.frames
+    emitter.radar._acquire(discovery=True, intent_triggered=True)
+    emitter.radar._acquire(discovery=True, intent_triggered=False)
+    frames = emitter.radar._result.frames
     assert len(frames) == 8 and all(f['complete'] for f in frames)
     assert all(not f.get('primaryOnly') for f in frames)
     expected = {'KNEA', 'KMID'} if neighbours else {'KNEA'}
@@ -116,11 +117,11 @@ def test_watch_frame_is_rebuilt_with_neighbours_on_attendance(
 def test_unviewed_full_mosaic_policy(make_emitter, hybrid, multisite, native, tmp_path,
                                     monkeypatch, attention, forced, count):
     full_timeline(multisite, hybrid.latest)
-    monkeypatch.setattr(ae, 'RADAR_ATTENTION_MODE', attention)
+    monkeypatch.setattr(radar_engine, 'RADAR_ATTENTION_MODE', attention)
     emitter = make_emitter()
     tier(emitter, tmp_path, forced)
-    emitter._do_radar()
-    frames = emitter._radar_result.frames
+    emitter.radar._acquire()
+    frames = emitter.radar._result.frames
     assert sum(f['complete'] for f in frames) >= count
     assert all({p['id'] for p in f['siteScans']} == {'KNEA', 'KMID'} for f in frames if f['complete'])
     assert not any(f.get('primaryOnly') for f in frames)
@@ -131,55 +132,55 @@ def test_unviewed_full_mosaic_policy(make_emitter, hybrid, multisite, native, tm
 def test_level3_429_caps_cooldown_and_falls_back_then_recovers(
         make_emitter, hybrid, multisite, native, monkeypatch, retry_after):
     emitter = make_emitter()
-    emitter._do_radar()
-    opened = ae.RadarSession.open
+    emitter.radar._acquire()
+    opened = radar_engine.RadarSession.open
     def limited(session, request, timeout):
-        if request.full_url.startswith(ae.RADAR_LEVEL3_BUCKET):
+        if request.full_url.startswith(radar_engine.RADAR_LEVEL3_BUCKET):
             raise urllib.error.HTTPError(request.full_url, 429, 'limited', {'Retry-After': retry_after}, None)
         return opened(session, request, timeout)
-    monkeypatch.setattr(ae.RadarSession, 'open', limited)
-    emitter._radar_begin_log_pass()
-    with pytest.raises(ae._RadarBudget):
-        emitter._radar_request(ae.RADAR_LEVEL3_TRANSPORT, ae.RADAR_LEVEL3_BUCKET+'test', 20)
-    assert emitter._radar_cooldowns[ae.RADAR_LEVEL3_TRANSPORT] == 300
+    monkeypatch.setattr(radar_engine.RadarSession, 'open', limited)
+    emitter.radar._begin_log_pass()
+    with pytest.raises(radar_engine._RadarBudget):
+        emitter.radar._request(radar_engine.RADAR_LEVEL3_TRANSPORT, radar_engine.RADAR_LEVEL3_BUCKET+'test', 20)
+    assert emitter.radar._cooldowns[radar_engine.RADAR_LEVEL3_TRANSPORT] == 300
     native.calls.clear()
     for elapsed in (0, 30, 120, 299):
         hybrid.mono = elapsed
-        emitter._do_radar(discovery=True, intent_triggered=False)
+        emitter.radar._acquire(discovery=True, intent_triggered=False)
         radar = emitter._build_payload()['radar']
         assert radar['tiles']['variant'] is False
         assert radar['nativeFallback'] == dict(active=True, reason='level3-unreachable', recovering=False)
     assert not native.calls
     hybrid.mono = 300
-    assert not emitter._radar_level3_down()
-    assert not emitter._radar_native_fallback(emitter._radar_result)['recovering']
-    monkeypatch.setattr(ae.RadarSession, 'open', opened)
+    assert not emitter.radar._level3_down()
+    assert not emitter.radar._native_fallback(emitter.radar._result)['recovering']
+    monkeypatch.setattr(radar_engine.RadarSession, 'open', opened)
     for site in ('KNEA', 'KMID'):
         multisite.scans[site].append(hybrid.latest+300)
-    emitter._do_radar(discovery=True, intent_triggered=False)
-    assert emitter._radar_result.tiles['variant'] == 'native'
-    assert emitter._radar_level3_outage is None
+    emitter.radar._acquire(discovery=True, intent_triggered=False)
+    assert emitter.radar._result.tiles['variant'] == 'native'
+    assert emitter.radar._level3_outage is None
 
 
 def test_auto_watch_holds_attended_mode_without_neighbour_requests(
         make_emitter, hybrid, multisite, native, tmp_path, monkeypatch):
-    monkeypatch.setattr(ae, '_NEXRAD_SITES', {
+    monkeypatch.setattr(radar_engine, '_NEXRAD_SITES', {
         'KNEA': (48.86, -122.33, 'north'), 'KMID': (46.26, -122.33, 'south'),
         'KFAR': (49.5, -122.33, 'far')})
     multisite.scans['KMID'] = list(multisite.scans['KNEA'])
     hybrid.pin(None)
     intent(tmp_path, 8)
     emitter = make_emitter()
-    emitter._do_radar()
-    assert emitter._radar_result.source_mode == 'site'
-    coverage = next(iter(emitter._radar_auto_evidence.values()))['coverage']
+    emitter.radar._acquire()
+    assert emitter.radar._result.source_mode == 'site'
+    coverage = next(iter(emitter.radar._auto_evidence.values()))['coverage']
     assert coverage > .98
     tier(emitter, tmp_path, 'watch')
     multisite.calls.clear()
-    emitter._do_radar(discovery=True, intent_triggered=False)
-    assert emitter._radar_result.source_mode == 'site'
+    emitter.radar._acquire(discovery=True, intent_triggered=False)
+    assert emitter.radar._result.source_mode == 'site'
     assert multisite.calls == [('list', 'KNEA')]
-    assert next(iter(emitter._radar_auto_evidence.values()))['coverage'] == coverage
+    assert next(iter(emitter.radar._auto_evidence.values()))['coverage'] == coverage
 
 
 @pytest.mark.parametrize('in_view', [False, True])
@@ -188,19 +189,19 @@ def test_watch_saved_camera_never_downloads_offscreen_primary(
     (tmp_path/'radar_center').write_text('47.61,-129.5')
     (tmp_path/'radar_zoom').write_text('8')
     if in_view:
-        monkeypatch.setitem(ae._NEXRAD_SITES, 'KMID', (47.61, -129.5, 'in view'))
+        monkeypatch.setitem(radar_engine._NEXRAD_SITES, 'KMID', (47.61, -129.5, 'in view'))
         multisite.scans['KMID'] = [hybrid.latest]
     emitter = make_emitter()
     tier(emitter, tmp_path, 'watch')
-    emitter._do_radar()
+    emitter.radar._acquire()
     if in_view:
-        assert emitter._radar_result.site_id == 'KMID'
-        assert emitter._radar_result.frames[-1]['complete']
+        assert emitter.radar._result.site_id == 'KMID'
+        assert emitter.radar._result.frames[-1]['complete']
         assert native.calls and all(key.startswith('MID_') for _, key in native.calls)
     else:
         assert not native.calls and not multisite.calls
-        assert not emitter._radar_result.frames
-        assert 'no viewport coverage' in emitter._radar_pass['error']
+        assert not emitter.radar._result.frames
+        assert 'no viewport coverage' in emitter.radar._pass['error']
         wire = emitter._build_payload()['radar']
         assert wire['reason'] == 'out of view'
         assert next(s for s in wire['sources'] if s['mode'] == 'site')['reason'] == 'out of view'
@@ -230,25 +231,25 @@ assert.doesNotMatch($('rad-note').textContent,/sharpening|Level III|IEM tiles/i)
 def test_outage_expiry_and_half_open_do_not_claim_recovery(
         make_emitter, hybrid, multisite, native):
     emitter = make_emitter()
-    emitter._radar_level3_fallback(ConnectionError('down'))
-    emitter._do_radar()
-    fallback = emitter._radar_result
+    emitter.radar._level3_fallback(ConnectionError('down'))
+    emitter.radar._acquire()
+    fallback = emitter.radar._result
     for elapsed in (119, 120, 121, 240):
         hybrid.mono = elapsed
-        assert emitter._radar_native_fallback(fallback) == dict(active=True, reason='level3-unreachable', recovering=False)
-    url = ae.RADAR_LEVEL3_BUCKET+'?list-type=2&prefix=NEA_N0B_2026_09_13_00'
-    host = emitter._radar_health._host(ae.RADAR_LEVEL3_TRANSPORT, url)
+        assert emitter.radar._native_fallback(fallback) == dict(active=True, reason='level3-unreachable', recovering=False)
+    url = radar_engine.RADAR_LEVEL3_BUCKET+'?list-type=2&prefix=NEA_N0B_2026_09_13_00'
+    host = emitter.radar._health._host(radar_engine.RADAR_LEVEL3_TRANSPORT, url)
     host['until'] = hybrid.mono
-    assert emitter._radar_health.admit(ae.RADAR_LEVEL3_TRANSPORT, url, metadata=True)
-    assert emitter._radar_health.state(host) == 'half'
-    assert not emitter._radar_native_fallback(fallback)['recovering']
-    emitter._radar_health.record(ae.RADAR_LEVEL3_TRANSPORT, url, True, probe=True)
+    assert emitter.radar._health.admit(radar_engine.RADAR_LEVEL3_TRANSPORT, url, metadata=True)
+    assert emitter.radar._health.state(host) == 'half'
+    assert not emitter.radar._native_fallback(fallback)['recovering']
+    emitter.radar._health.record(radar_engine.RADAR_LEVEL3_TRANSPORT, url, True, probe=True)
     # A successful listing is not proof that an N0B product can be fetched.
-    emitter._radar_request(ae.RADAR_LEVEL3_TRANSPORT,
-        ae.RADAR_LEVEL3_BUCKET+'?list-type=2&prefix=NEA_N0B_2026_09_13_00', 260, metadata=True)
-    assert not emitter._radar_native_fallback(fallback)['recovering']
-    emitter._radar_level3_scan('KNEA', hybrid.latest, {}, 260)
-    assert emitter._radar_native_fallback(fallback) == dict(active=True, reason=None, recovering=True)
+    emitter.radar._request(radar_engine.RADAR_LEVEL3_TRANSPORT,
+        radar_engine.RADAR_LEVEL3_BUCKET+'?list-type=2&prefix=NEA_N0B_2026_09_13_00', 260, metadata=True)
+    assert not emitter.radar._native_fallback(fallback)['recovering']
+    emitter.radar._level3_scan('KNEA', hybrid.latest, {}, 260)
+    assert emitter.radar._native_fallback(fallback) == dict(active=True, reason=None, recovering=True)
 
 
 @pytest.mark.parametrize('ledger,ceiling', [('retrying', 'normal'), ('ok', 'paused')])
@@ -274,18 +275,18 @@ def test_region_evidence_remains_independent_when_level3_cools_mid_pass(
     hybrid.pin(None)
     intent(tmp_path, 6)
     emitter = make_emitter()
-    emitter._do_radar()
-    reserve = emitter._radar_mandatory_reserve
+    emitter.radar._acquire()
+    reserve = emitter.radar._mandatory_reserve
     seen = []
     def cooldown_after_policy(source, ctx, stamps, *args, **kwargs):
         # A worker/429 can start a cooldown after native policy was snapshotted.
         assert ctx['native'] is True
-        emitter._radar_cooldowns[ae.RADAR_LEVEL3_TRANSPORT] = hybrid.mono+300
+        emitter.radar._cooldowns[radar_engine.RADAR_LEVEL3_TRANSPORT] = hybrid.mono+300
         seen.append(True)
         return reserve(source, ctx, stamps, *args, **kwargs)
-    monkeypatch.setattr(emitter, '_radar_mandatory_reserve', cooldown_after_policy)
+    monkeypatch.setattr(emitter.radar, '_mandatory_reserve', cooldown_after_policy)
     multisite.calls.clear()
-    emitter._do_radar(discovery=True, intent_triggered=False)
+    emitter.radar._acquire(discovery=True, intent_triggered=False)
     assert seen and multisite.calls == [('list', 'KNEA')]
     assert emitter._build_payload()['radar']['nexrad']['reporting'] is True
 
@@ -297,36 +298,36 @@ def test_watch_publication_retry_also_holds_discovery_wakeup(
     monkeypatch.setattr(ae, 'Clock', clock)
     emitter = make_emitter()
     tier(emitter, tmp_path, 'watch')
-    emitter._running = True
+    emitter._runtime.running = True
     native.missing.add(hybrid.latest)
     hybrid.now = hybrid.latest+90
-    emitter._do_radar()
-    assert emitter._radar_next_retry == hybrid.now+60
-    assert emitter._radar_discovery.due >= hybrid.now+60
-    assert emitter._radar_discovery_event.due >= 60
+    emitter.radar._acquire()
+    assert emitter.radar._next_retry == hybrid.now+60
+    assert emitter.radar._discovery.due >= hybrid.now+60
+    assert emitter.radar._discovery_event.due >= 60
     # An intent validation before expiry must replace, not inherit, a 2s retry.
-    emitter._radar_clear_retry()
-    emitter._schedule_retry('radar', emitter._check_radar, 2)
-    emitter._do_radar(intent_triggered=True)
-    assert emitter._radar_next_retry == hybrid.now+60
-    assert not emitter._radar_transport_failures
+    emitter.radar._clear_retry()
+    emitter.radar._schedule_retry('radar', emitter.radar._check, 2)
+    emitter.radar._acquire(intent_triggered=True)
+    assert emitter.radar._next_retry == hybrid.now+60
+    assert not emitter.radar._transport_failures
     emitter.stop()
 
 
 def test_cold_auto_watch_uses_cached_neighbour_coverage_without_fetching_it(
         make_emitter, hybrid, multisite, native, tmp_path, monkeypatch):
-    monkeypatch.setattr(ae, '_NEXRAD_SITES', {
+    monkeypatch.setattr(radar_engine, '_NEXRAD_SITES', {
         'KNEA': (48.86, -122.33, 'north'), 'KMID': (46.26, -122.33, 'south'),
         'KFAR': (49.5, -122.33, 'far')})
     hybrid.pin(None)
     intent(tmp_path, 8)
     emitter = make_emitter()
     tier(emitter, tmp_path, 'watch')
-    emitter._radar_site_status['KMID'] = dict(reporting=True, newestTs=hybrid.latest,
+    emitter.radar._site_status['KMID'] = dict(reporting=True, newestTs=hybrid.latest,
         checkedTs=hybrid.now, reason=None)
-    emitter._do_radar()
-    assert emitter._radar_result.source_mode == 'site'
-    assert next(iter(emitter._radar_auto_evidence.values()))['coverage'] > .98
+    emitter.radar._acquire()
+    assert emitter.radar._result.source_mode == 'site'
+    assert next(iter(emitter.radar._auto_evidence.values()))['coverage'] > .98
     assert multisite.calls == [('list', 'KNEA')]
     assert all(key.startswith('NEA_') for _, key in native.calls)
 
@@ -336,15 +337,15 @@ def test_attendance_rebuilds_watch_even_while_the_next_scan_is_unpublished(
     full_timeline(multisite, hybrid.latest)
     emitter = make_emitter()
     tier(emitter, tmp_path, 'watch')
-    emitter._do_radar()
-    original = emitter._radar_result
+    emitter.radar._acquire()
+    original = emitter.radar._result
     for site in ('KNEA', 'KMID'):
         multisite.scans[site].append(hybrid.latest+300)
     native.missing.add(hybrid.latest+300)
     hybrid.mono = 60  # expire the hourly listing cache
     tier(emitter, tmp_path, 'live')
-    emitter._do_radar(discovery=True, intent_triggered=False)
-    current = emitter._radar_result
+    emitter.radar._acquire(discovery=True, intent_triggered=False)
+    current = emitter.radar._result
     assert current.ts_frame == original.ts_frame
     assert current.ts_fetch == original.ts_fetch, 'older scans must retain their measured freshness'
     assert len(current.frames) == 8 and all(f['complete'] for f in current.frames)
