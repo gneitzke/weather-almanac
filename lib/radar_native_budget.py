@@ -109,6 +109,35 @@ class NativeBudget:
                 (self.saved[0] > target_day or self.saved[0] == target_day and
                  self.saved[1] >= target_bytes), timeout) and not self.failed
 
+    def _write(self, current):
+        """Durably replace the ledger with one accounting snapshot.
+
+        Kept as the writer's narrow storage seam: the accounting thread owns
+        when this runs, while callers and tests can observe or fault one
+        ledger without changing process-wide ``os`` functions used by other
+        live writers.
+        """
+        temporary = None
+        try:
+            target = self.path.resolve()
+            temporary = target.with_name(target.name+'.tmp')
+            with temporary.open('w') as stream:
+                json.dump(dict(day=current[0], bytes=current[1]), stream)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, target)
+            directory = os.open(target.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        finally:
+            if temporary is not None:
+                try:
+                    temporary.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
     def _writer(self):
         while True:
             with self.condition:
@@ -131,21 +160,9 @@ class NativeBudget:
                     continue
             # Only this thread touches storage, outside every accounting/renderer
             # lock. A request that arrives during I/O wakes the next iteration.
-            temporary = None
             started = self.monotonic()
             try:
-                target = self.path.resolve()
-                temporary = target.with_name(target.name+'.tmp')
-                with temporary.open('w') as stream:
-                    json.dump(dict(day=current[0], bytes=current[1]), stream)
-                    stream.flush()
-                    os.fsync(stream.fileno())
-                os.replace(temporary, target)
-                directory = os.open(target.parent, os.O_RDONLY)
-                try:
-                    os.fsync(directory)
-                finally:
-                    os.close(directory)
+                self._write(current)
                 with self.condition:
                     self.failed = False
                     self.write_failures = 0
@@ -160,11 +177,6 @@ class NativeBudget:
                 if first_failure:
                     logging.getLogger(__name__).warning('Native radar ledger unavailable; retrying, bytes counted in memory: %s', error)
             finally:
-                if temporary is not None:
-                    try:
-                        temporary.unlink(missing_ok=True)
-                    except OSError:
-                        pass
                 with self.condition:
                     self.processed = ticket
                     self.condition.notify_all()

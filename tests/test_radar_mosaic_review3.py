@@ -150,13 +150,13 @@ def test_pass_finishes_while_ledger_fsync_is_stalled(make_emitter, hybrid, multi
     ledger = emitter._radar_native_budget
     assert ledger.flush()
     entered, release = threading.Event(), threading.Event()
-    real_fsync = os.fsync
-    def fsync(fd):
+    write = ledger._write
+    def blocked_write(current):
         if threading.current_thread().name == 'radar-ledger':
             entered.set()
             assert release.wait(5)
-        return real_fsync(fd)
-    monkeypatch.setattr(os, 'fsync', fsync)
+        return write(current)
+    monkeypatch.setattr(ledger, '_write', blocked_write)
     with ledger.lock:
         ledger.last_write = ledger.monotonic()-3
     ledger.add(1)

@@ -186,11 +186,11 @@ assert.ok(old.every(f=>f.bitmap.closes===1));
 def test_ledger_retry_backoff_recovers_and_enforces_memory_limits(tmp_path, monkeypatch):
     clock, mono = [1_800_000_000.], [0.]
     ledger = budget.NativeBudget(tmp_path/'bytes.json', lambda: clock[0], lambda: mono[0])
-    replace = budget.os.replace
+    write = ledger._write
     attempts = []
     def fail(*args):
         attempts.append(mono[0]);raise OSError('temporary read-only filesystem')
-    monkeypatch.setattr(budget.os, 'replace', fail)
+    monkeypatch.setattr(ledger, '_write', fail)
     ledger.add(10)
     ledger.persist()
     for tick in range(5):
@@ -204,7 +204,7 @@ def test_ledger_retry_backoff_recovers_and_enforces_memory_limits(tmp_path, monk
     ledger.add(budget.NATIVE_PAUSE_BYTES)
     assert ledger.snapshot()['ceilingState'] == 'paused'
     mono[0] = 14;ledger.persist();assert attempts == [0, 5]
-    monkeypatch.setattr(budget.os, 'replace', replace)
+    monkeypatch.setattr(ledger, '_write', write)
     mono[0] = 15;ledger.persist()
     assert ledger.snapshot()['ledgerState'] == 'ok'
     assert json.loads(ledger.path.read_text())['bytes'] == budget.NATIVE_PAUSE_BYTES+15

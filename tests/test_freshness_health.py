@@ -43,14 +43,15 @@ def serve_at(monkeypatch, tmp_path):
         server = module.Server(('127.0.0.1', 0), module.Handler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
-        started.append((server, thread))
+        started.append((module, server, thread))
         return module, f'http://127.0.0.1:{server.server_address[1]}'
 
     yield _start
-    for server, thread in started:
+    for module, server, thread in started:
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+        module._close_preferences()
 
 
 def _get(url):

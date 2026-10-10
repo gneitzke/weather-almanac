@@ -213,7 +213,8 @@ def test_newest_failure_above_soft_ceiling_builds_only_one_native_frame(make_emi
 
 def test_unwritable_ledger_reports_persistence_failure(make_emitter, monkeypatch):
     emitter = make_emitter()
-    monkeypatch.setattr(budget.os, 'replace', lambda *args: (_ for _ in ()).throw(OSError('read-only ledger')))
+    monkeypatch.setattr(emitter._radar_native_budget, '_write',
+                        lambda *_: (_ for _ in ()).throw(OSError('read-only ledger')))
     emitter._radar_native_budget.add(20)
     emitter._radar_native_budget.persist()
     assert emitter._radar_native_budget.snapshot()['ledgerState'] == 'retrying'

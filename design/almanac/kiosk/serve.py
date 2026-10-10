@@ -607,6 +607,11 @@ def _write_radar_preference(name, values):
     _stage_preference(name, values)
 
 
+def _replace_preference(source, target):
+    """Atomic preference replacement, kept separate from request-side state."""
+    os.replace(source, target)
+
+
 def _persist_preference(name, value):
     marker = _preference_path(name)
     tmp = f"{marker}.tmp.{os.getpid()}"
@@ -624,7 +629,7 @@ def _persist_preference(name, value):
             f.write(value + '\n')
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, marker)
+        _replace_preference(tmp, marker)
     except OSError:
         pass
     finally:

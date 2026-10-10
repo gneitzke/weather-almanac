@@ -94,9 +94,9 @@ def test_ledger_durable_forward_days_and_write_rate(tmp_path, monkeypatch):
     target = tmp_path/'durable'; target.write_text('{}')
     path = tmp_path/'radar_native_bytes.json'; path.symlink_to(target)
     writes = []
-    replace = budget.os.replace
-    monkeypatch.setattr(budget.os, 'replace', lambda *args: (writes.append(args), replace(*args))[-1])
     ledger = budget.NativeBudget(path, lambda: clock[0], lambda: mono[0])
+    write = ledger._write
+    monkeypatch.setattr(ledger, '_write', lambda current: (writes.append(current), write(current))[-1])
     ledger.add(10)
     ledger.persist()
     saved = ledger.snapshot()
@@ -123,7 +123,7 @@ def test_accounting_failure_preserves_transport_result_and_metrics(make_emitter,
     emitter = make_emitter(); emitter._radar_begin_log_pass(); emitter._radar_session = ae.RadarSession()
     monkeypatch.setattr(emitter._radar_session, 'open', lambda *args, **kwargs: io.BytesIO(b'body'))
     def fail(*args): raise OSError('SD read only')
-    monkeypatch.setattr(budget.os, 'replace', fail)
+    monkeypatch.setattr(emitter._radar_native_budget, '_write', fail)
     def validate(raw):
         if invalid: raise ValueError('actual validation error')
     def request():
@@ -144,9 +144,11 @@ def test_sd_write_holds_neither_renderer_nor_accounting_lock(make_emitter, monke
     emitter = make_emitter(); emitter._radar_begin_log_pass(); emitter._radar_session = ae.RadarSession()
     monkeypatch.setattr(emitter._radar_session, 'open', lambda *args, **kwargs: io.BytesIO(b'body'))
     entered, release, completed = threading.Event(), threading.Event(), threading.Event()
-    def fsync(fd):
+    write = emitter._radar_native_budget._write
+    def blocked_write(current):
         entered.set(); assert release.wait(5)
-    monkeypatch.setattr(budget.os, 'fsync', fsync)
+        return write(current)
+    monkeypatch.setattr(emitter._radar_native_budget, '_write', blocked_write)
     def request():
         emitter._radar_request(ae.RADAR_LEVEL3_TRANSPORT, ae.RADAR_LEVEL3_BUCKET+'object', ae.time.monotonic()+10)
     worker = threading.Thread(target=request); worker.start()

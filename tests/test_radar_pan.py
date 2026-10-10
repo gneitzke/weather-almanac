@@ -37,20 +37,41 @@ def test_loopback_center_validation(monkeypatch, tmp_path, value, valid, address
     assert served == [h.path]
 
 
-def test_duplicate_center_and_atomic_dedup(serve_at, tmp_path, monkeypatch):
-    module, url = serve_at(_payload())
-    assert _get(url + '/wx.json?radarCenter=1,2&radarCenter=3,4')[0] == 200
+def test_duplicate_center_and_atomic_dedup(tmp_path, monkeypatch):
+    module = _load_serve(monkeypatch, tmp_path, _payload())
+    served = []
+    monkeypatch.setattr(module.http.server.SimpleHTTPRequestHandler, 'do_GET',
+                        lambda handler: served.append(handler.path))
+    def request(value):
+        handler = object.__new__(module.Handler)
+        handler.client_address = ('127.0.0.1', 1)
+        handler.path = '/wx.json?radarCenter=' + value
+        handler.do_GET()
+    request('1,2&radarCenter=3,4')
     marker = tmp_path / 'radar_center'; assert not marker.exists()
-    replace = os.replace; calls = []
+    replace = module._replace_preference; calls = []
     def replacing(src, dst):
         assert Path(src).parent == Path(dst).parent == tmp_path
         assert Path(src).read_text() in ('1.0,2.0\n', 'station\n')
         calls.append(dst); replace(src, dst)
-    monkeypatch.setattr(module.os, 'replace', replacing)
-    for value in ('1,2', '1.0,2.00', '1,2', 'station', 'station'):
-        assert _get(url + '/wx.json?radarCenter=' + value)[0] == 200
+    monkeypatch.setattr(module, '_replace_preference', replacing)
+    # The writer is deliberately asynchronous.  Make the two durable state
+    # transitions explicit instead of relying on request scheduling to happen
+    # to write the first value before the later staging coalesces it.
+    for value in ('1,2', '1.0,2.00', '1,2'):
+        request(value)
+    module._flush_preferences()
+    assert len(calls) == 1 and marker.read_text() == '1.0,2.0\n'
+    for value in ('station', 'station'):
+        request(value)
+    module._flush_preferences()
     assert len(calls) == 2 and marker.read_text() == 'station\n'
     assert not list(tmp_path.glob('radar_center.tmp.*'))
+    assert served == [
+        '/wx.json?radarCenter=1,2&radarCenter=3,4',
+        '/wx.json?radarCenter=1,2', '/wx.json?radarCenter=1.0,2.00',
+        '/wx.json?radarCenter=1,2', '/wx.json?radarCenter=station',
+        '/wx.json?radarCenter=station']
 
 
 def test_center_never_follows_durable_symlink(monkeypatch, tmp_path):
@@ -165,7 +186,7 @@ def test_center_io_error_preserves_marker_and_poll(serve_at, tmp_path, monkeypat
     import builtins
     module, url = serve_at(_payload()); marker = tmp_path / 'radar_center'; marker.write_text('1,2')
     if failure == 'replace':
-        monkeypatch.setattr(module.os, 'replace', lambda *_: (_ for _ in ()).throw(OSError('read only')))
+        monkeypatch.setattr(module, '_replace_preference', lambda *_: (_ for _ in ()).throw(OSError('read only')))
     else:
         original = builtins.open
         def opening(path, *args, **kwargs):

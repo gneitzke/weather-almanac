@@ -264,13 +264,13 @@ def test_ledger_writer_never_blocks_counter_and_drains_trailing_burst(tmp_path, 
     ledger = budget.NativeBudget(tmp_path/'bytes.json')
     entered, release = threading.Event(), threading.Event()
     writer_threads = set()
-    replace = os.replace
-    def slow_replace(*args):
+    write = ledger._write
+    def slow_write(*args):
         writer_threads.add(threading.current_thread().name)
         entered.set()
         assert release.wait(3)
-        return replace(*args)
-    monkeypatch.setattr(os, 'replace', slow_replace)
+        return write(*args)
+    monkeypatch.setattr(ledger, '_write', slow_write)
     try:
         start = time.perf_counter(); ledger.add(10)
         assert time.perf_counter()-start < .1 and entered.wait(1)
