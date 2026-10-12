@@ -127,11 +127,13 @@ never film the map. There is no guessing at rain versus snow.
 on the newest. Each frame's scan time is printed under the play control (with
 its date when it is from an earlier day) and is never dressed up as "live". The
 corner above the map stays empty while the radar is current; it speaks only
-when something is wrong: "Stale · 32 min old", "Couldn't refresh", "Starting". Opening the tab brings the loop up from cache in
-milliseconds. A **+/−** control sets the zoom and remembers it across reboots,
-and a zoom step keeps the loop playing until the new frames are in. **SMOOTH**
-(off by default) softens echo edges for Region; it is disabled while the radar's
-own cells are drawn.
+when something is wrong: "Stale · 32 min old", "Couldn't refresh", "Starting".
+Opening the tab brings the loop up from cache in milliseconds. A **+/−** control
+sets the zoom and remembers it across reboots, and a zoom step keeps the loop
+playing until the new frames are in. **SMOOTH** (off by default) softens echo
+edges on every source. On the radar's own cells it interpolates reflectivity
+between neighbouring cells before colouring, so it never blends colours and
+never paints rain into a gap where the radar measured nothing.
 
 **Warnings on the map.** In the US, National Weather Service storm-based
 warnings (tornado, severe thunderstorm, flash flood, special marine, snow
