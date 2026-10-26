@@ -64,7 +64,9 @@ The rain adapts to the machine drawing it. On the Pi the console watches CPU loa
 temperature and the power supply: when the board is busy or hot it draws the same
 rain at 30, 20 or 12 frames a second, and it holds it still while the supply sags.
 It climbs back to the display's full rate once there is headroom. A browser on
-another device does the same from its own frame timing.
+another device does the same from its own frame timing. `/health` shows what the
+panel decided: the Pi's load under `perf`, and the rain's frame rate and the
+reason under `motion`.
 
 ![The rainfall panel during heavy rain: engraved rain falls into the intensity gauge, splashes at the waterline and sinks as beads](design/almanac/screenshots/rainfall.gif)
 
@@ -235,7 +237,9 @@ stays down.
 ### Running the Almanac
 
 - **HTML kiosk (recommended).** The console runs headless as a data engine, and
-  `chromium --kiosk` draws the interface, using about half a core on a Pi. A
+  `chromium --kiosk` draws the interface, using about half a core on a Pi while
+  it is dry. Falling rain at the full frame rate takes about two cores on a Pi 4,
+  which is why the rain's frame rate adapts to the board's headroom. A
   systemd-supervised watchdog relaunches any piece that dies, restarts the engine
   if the feed goes stale, and checks for a wedged screen. Setup, management and
   revert steps are in [`design/almanac/kiosk/README.md`](design/almanac/kiosk/README.md).
