@@ -43,6 +43,7 @@ from lib.almanac_shared import (
 )
 from lib.provider_runtime import ProviderRuntime
 from lib.radar_engine import RadarEngine
+from lib.system_load import SystemLoad
 
 # ==============================================================================
 # CONFIGURATION
@@ -62,7 +63,7 @@ CARRY_MAX_SEC = 6 * 3600   # a restarted engine republishes its last observation
 CARRY_WINDOW_SEC = 600     # ... and fills still-unfetched fields (forecast, AQI, Sager) from them this long after start
 CARRY_SKIP = frozenset(('radar', 'alerts', 'alertCount', 'alertsAgeSec', 'alertsAsOf', 'alertsStale',
                         'ts', 'time', 'date', 'obsTs', 'obsAgeSec', 'carried',
-                        'updateAvailable', 'latestVersion', 'currentVersion'))
+                        'updateAvailable', 'latestVersion', 'currentVersion', 'perf'))
 RAIN_START_HOLD_SEC = 300  # evt_precip shows 'Rain Starting' until the next obs_st, never longer than this
 
 FC_STALE_SEC           = 86400 # seconds (24 h) without a successful forecast fetch -> fcStale (band hides)
@@ -310,6 +311,7 @@ class AlmanacEmitter:
         # as an occasional 0.01 in minute with zeros between, so the raw
         # per-minute rate flickers 0 <-> trace and the gauge went dry mid-drizzle
         self._rain_win = _RainWindow(RAIN_WINDOW_SEC)
+        self._system = SystemLoad()      # the machine's headroom, for the page's motion budget
         self._started_at = time.time()   # obsAgeSec counts from here until the first observation
         self._carried = self._load_previous_payload()  # the last run's wx.json, republished until live data lands
 
@@ -1439,6 +1441,10 @@ class AlmanacEmitter:
             'sagerPressure': None,   # not sourced - no composed "<value> <trend>" string exists
             'sagerWind':     None,   # not sourced
             'sagerSky':      None,   # not sourced
+
+            # The machine itself (lib/system_load.py): the panel's motion
+            # governor sets the rain's frame rate from this; LAN pages ignore it
+            'perf': self._system.sample(),
         }
         payload = self._carry_forward(payload, now)
         self.radar.tick(payload, now, tz)

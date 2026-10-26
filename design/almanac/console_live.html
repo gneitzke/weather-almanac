@@ -567,6 +567,13 @@
        ripple or two on the waterline */
     #raingauge .imp-ring.still { opacity: 0.7; }
   }
+  /* the motion budget's still tier (motionGovern): the same still engraving,
+     chosen by the machine instead of the person, and no glides either, so a
+     poll's change costs one frame, not a 2.4 s run of them */
+  #raingauge.motion-still .rain-plate, #raingauge.motion-still .rain-plunge, #raingauge.motion-still .surf-drift,
+  #raingauge.motion-still .imp-ring, #raingauge.motion-still .imp-crown, #raingauge.motion-still .imp-spray { animation: none !important; }
+  #raingauge.motion-still, #raingauge.motion-still * { transition: none !important; }
+  #raingauge.motion-still .imp-ring.still { opacity: 0.7; }
   .gauge-ptr-g { transition: transform 1.4s ease; }      /* pointer rides the water level */
   @media (prefers-reduced-motion: reduce) { .gauge-ptr-g { transition: none; } }
   #raingauge .tick       { stroke-width: 2.6; }
@@ -1541,6 +1548,9 @@
         poll(true);
       }
     }
+    /* the rain gauge's animations restart when its screen shows again: hand
+       them to the motion clock now, not at the next poll */
+    if (typeof motionSync === "function") motionSync();
   }
   document.querySelectorAll(".tab[data-screen]").forEach(function (b) {
     b.addEventListener("click", function () {
@@ -1850,9 +1860,207 @@
       if (g._offT) { clearTimeout(g._offT); g._offT = null; }
       g.classList.add("live");
     } else if (g.classList.contains("live") && !g._offT) {
-      g._offT = setTimeout(function () { g.classList.remove("live"); g._offT = null; }, RAIN_FADE_MS);
+      /* the motion clock lets go of the part now, not at the next poll */
+      g._offT = setTimeout(function () { g.classList.remove("live"); g._offT = null; motionSync(); }, RAIN_FADE_MS);
     }
   }
+
+  /* ———— motion budget · the rain's frame rate follows the machine's headroom.
+     Measured on the Pi 4 panel: every frame the page draws costs ~37 ms of
+     CPU however little changed (pausing any one part of the rain saved
+     nothing, pausing all of it saved everything), so the rain at the
+     display's 60 fps took Chromium from 25 % to ~200 % of a core. Frame rate
+     is the lever, and CSS steps() does not pull it (Blink still ticks every
+     frame). So the tiers are: the keyframes at the display's own rate; the
+     same keyframes and glides paused and advanced by a clock at 30, 20 or
+     12 fps (Pi 4: ~130 %, ~95 %, ~62 %); then still, the reduced-motion
+     engraving (15 %). The look never changes, only how often it is drawn.
+     The panel governs on the whole machine's CPU (wx.json perf, sampled by
+     the engine each emit); every page also watches its own frame pacing,
+     which is all a LAN browser has: the Pi's CPU says nothing about a phone. */
+  var MOTION_FPS = [60, 30, 20, 12, 0];
+  var MOTION = {
+    high: 0.75,                    /* whole-machine busy share (averaged) that steps down a tier */
+    severe: 0.92,                  /* ... two tiers at once */
+    low: 0.5,                      /* under this, a step up may be tried */
+    emaSec: 8,                     /* the CPU average's time constant */
+    downMs: 6000,                  /* a tier runs this long before it can be judged too dear */
+    dwellMs: 30000,                /* ... and this long, healthy, before the next one up is tried */
+    backoffMs: [60000, 1800000],   /* a tier that proved too dear is barred this long, doubling */
+    clearMs: 600000,               /* a tier held healthy this long forgets its bar */
+    late: 0.25,                    /* share of late frames (motionLate) that reads as janky */
+    minFrames: 30,                 /* fewer display frames than this: no pacing verdict */
+    minTicks: 10,                  /* ... or fewer clock ticks */
+    tickLate: 1.3,                 /* a clock tick this many times its interval apart was late */
+    powerHoldSec: 600,             /* still for 10 min after the Pi last reported under-voltage */
+    hotC: 80, warmC: 75            /* SoC: step down at 80 °C, no step up above 75 °C */
+  };
+  /* the pacing verdict: the share of late frames, or null without enough to
+     judge (the caller keeps collecting until there are). On a clocked tier
+     the samples are the clock's own ticks and a tick is late past tickLate x
+     its interval: a page that cannot hold 30 fps reads as janky whatever the
+     display's rate (a 120 Hz screen dropping to 60 is still fine for 30). At
+     the display's own rate (no target) a frame is late past 1.5x the
+     display's interval: this window's 10th-percentile frame, but never
+     slower than a 48 Hz display's, so a page stuck at half rate reads as
+     janky rather than as a slow screen. */
+  function motionLate(samples, target) {
+    if (samples.length < (target ? MOTION.minTicks : MOTION.minFrames)) return null;
+    var over = 0, limit = target ? target * MOTION.tickLate : 0;
+    if (!target) {
+      var s = samples.slice().sort(function (a, b) { return a - b; });
+      limit = Math.min(s[Math.floor(s.length * 0.1)], 1000 / 48) * 1.5;
+    }
+    samples.forEach(function (g) { if (g > limit) over++; });
+    return over / samples.length;
+  }
+  /* the policy, pure: state + this poll's signals -> next state. sig: active
+     (the rain animates on a visible screen), cpu (0..1, panel only, a NEW
+     engine sample or null), late (motionLate), tempC and undervoltAgeSec
+     (panel only, new samples only). Steps down at once when a tier proves
+     too dear, up one at a time after a continuously healthy dwell, and a
+     tier that failed is barred for a doubling while, so a machine near its
+     limit settles instead of hunting. */
+  function motionGovern(st, sig, now) {
+    var M = MOTION, still = MOTION_FPS.length - 1;
+    var s = { tier: st.tier, since: st.since, reason: st.reason, ema: st.ema, emaAt: st.emaAt, active: !!sig.active,
+              healthy: st.healthy, powerUntil: st.powerUntil || 0,
+              blocked: Object.assign({}, st.blocked), backoff: Object.assign({}, st.backoff) };
+    var fresh = isNum(st.ema) && now - st.emaAt < 30000;
+    if (isNum(sig.cpu)) {
+      s.ema = fresh ? st.ema + (sig.cpu - st.ema) * (1 - Math.exp(-(now - st.emaAt) / 1000 / M.emaSec)) : sig.cpu;
+      s.emaAt = now;
+    } else if (!fresh) s.ema = null;                 /* a LAN page, an older or stalled engine: pacing alone */
+    /* an under-voltage report holds still until powerHoldSec after the Pi
+       last saw the alarm. The deadline is the page's own: a restarted engine
+       (which forgets the alarm) or a missing sample cannot cut it short */
+    if (isNum(sig.undervoltAgeSec))
+      s.powerUntil = Math.max(s.powerUntil, now + (M.powerHoldSec - sig.undervoltAgeSec) * 1000);
+    /* a new tier starts a new average and a new dwell: the old tier's load must not judge it */
+    function go(tier, why) {
+      s.tier = tier; s.since = now; s.reason = why; s.ema = null; s.emaAt = 0; s.healthy = null; return s;
+    }
+    if (now < s.powerUntil) return s.tier === still && s.reason === "power" ? s : go(still, "power");
+    if (!s.active) { s.healthy = null; return s; }   /* nothing animates: no evidence either way */
+    if (!st.active) s.since = now;                   /* the rain or the screen just came back: judge afresh */
+    var age = now - s.since;
+    var hot = isNum(sig.tempC) && sig.tempC >= M.hotC;
+    var busy = isNum(s.ema) && s.ema > M.high, severe = isNum(s.ema) && s.ema > M.severe;
+    var janky = isNum(sig.late) && sig.late > M.late;
+    if ((hot || busy || janky) && s.tier < still && age >= M.downMs) {
+      var bar = Math.min(2 * (s.backoff[s.tier] || M.backoffMs[0] / 2), M.backoffMs[1]);
+      s.backoff[s.tier] = bar; s.blocked[s.tier] = now + bar;
+      return go(Math.min(still, s.tier + (severe ? 2 : 1)), hot ? "heat" : busy ? "cpu" : "frames");
+    }
+    /* healthy is evidence, not silence: a moving tier must show its frames,
+       and the dwell counts only unbroken healthy time */
+    var paced = isNum(sig.late) || MOTION_FPS[s.tier] === 0;
+    var calm = paced && !janky && !(isNum(s.ema) && s.ema >= M.low) && !(isNum(sig.tempC) && sig.tempC > M.warmC);
+    s.healthy = calm ? (isNum(st.healthy) && st.active ? st.healthy : now) : null;
+    if (calm && now - s.healthy >= M.clearMs) delete s.backoff[s.tier];   /* proven here: its history is forgiven */
+    if (calm && s.tier > 0 && now - s.healthy >= M.dwellMs && !(s.blocked[s.tier - 1] > now)) return go(s.tier - 1, "headroom");
+    return s;
+  }
+  /* the clock. Tier 0 leaves the keyframes to the browser; a clocked tier
+     pauses every animation and glide in the gauge and advances them by the
+     real elapsed time, at most `fps` times a second, on display frames; still
+     drops them (the .motion-still CSS). One display-frame loop runs
+     while anything in the gauge moves on a visible Observations screen: it
+     drives the clock and records frame gaps and clock ticks for motionLate.
+     An idle frame loop costs nothing measurable. */
+  var motion = { st: { tier: 1, since: 0, reason: "start", ema: null, emaAt: 0, active: false, healthy: null,
+                       powerUntil: 0, blocked: {}, backoff: {} },
+                 anims: [], gaps: [], ticks: [], raf: 0, prev: 0, tick: 0, perfTs: null };
+  function motionFrame(t) {
+    var m = motion, fps = MOTION_FPS[m.st.tier];
+    m.raf = 0;
+    /* the loop stops whenever the page is hidden, so a long gap while it runs
+       is a real stall and counts; only one past 5 s is taken for a resume */
+    if (m.prev && t - m.prev < 5000) { m.gaps.push(t - m.prev); if (m.gaps.length > 300) m.gaps.shift(); }
+    m.prev = t;
+    if (fps > 0 && fps < 60 && t - m.tick >= 1000 / fps - 2) {
+      var dt = m.tick ? Math.min(t - m.tick, 250) : 0;    /* after a stall: no lurch */
+      if (m.tick && t - m.tick < 5000) { m.ticks.push(t - m.tick); if (m.ticks.length > 120) m.ticks.shift(); }
+      m.tick = t;
+      m.anims = m.anims.filter(function (a) { return a._motion && a.playState === "paused"; });
+      m.anims.forEach(function (a) { a.currentTime = (a.currentTime || 0) + dt; });
+    }
+    if (m.anims.length || fps === 60) m.raf = requestAnimationFrame(motionFrame);
+    else m.prev = 0;
+  }
+  /* keep the clock's animations in step with the CSS. Once script has paused
+     or played a keyframe animation, Chromium keeps it alive after its CSS
+     stops naming it (a part left .live, the rain stopped, the still tier) and
+     builds a fresh one beside it when the CSS names it again, so a touched
+     part would go on moving unseen. Cancel each touched one (_motion, which
+     never clears) that the CSS no longer names or has rebuilt; glides
+     (transitions) end by themselves. Returns what is still in play. */
+  function motionReconcile(anims) {
+    var fresh = [];
+    anims.forEach(function (a) { if (a.animationName && !a._motion) fresh.push(a.effect.target, a.animationName); });
+    return anims.filter(function (a) {
+      if (!a.animationName || !a._motion) return true;
+      var t = a.effect && a.effect.target, rebuilt = false;
+      for (var i = 0; i < fresh.length; i += 2) if (fresh[i] === t && fresh[i + 1] === a.animationName) rebuilt = true;
+      var named = !!t && getComputedStyle(t).animationName.split(", ").indexOf(a.animationName) >= 0;
+      if (named && !rebuilt) return true;
+      a.cancel();
+      return false;
+    });
+  }
+  /* after every rain update, tier change, part fading out, screen switch and
+     visibility change: hand each animation to the clock (or back to the
+     browser), and run the frame loop only while something in the gauge moves
+     on a visible Observations screen. Off screen everything touched holds
+     still: nothing it draws can be seen, so nothing should tick. */
+  function motionSync() {
+    if (!motion || !rainArt) return;
+    var m = motion, g = $("raingauge"), fps = MOTION_FPS[m.st.tier];
+    if (!g.getAnimations) return;                    /* no Web Animations: the browser's own rate */
+    var shown = !document.hidden && $("s-obs").classList.contains("active");
+    if (!shown) {
+      /* off screen is no evidence: the dwell starts over once the gauge is seen again */
+      if (m.st.active || m.st.healthy !== null) m.st = Object.assign({}, m.st, { active: false, healthy: null });
+      m.gaps = []; m.ticks = [];
+    }
+    var clocked = shown && fps > 0 && fps < 60;
+    var anims = motionReconcile(g.getAnimations({ subtree: true }));
+    anims.forEach(function (a) {
+      if (!shown || clocked) { if (a.playState === "running") { a.pause(); a._motion = true; } }
+      else if (a._motion && a.playState === "paused") {
+        if (fps === 0 && a.transitionProperty) a.finish();   /* still: a held glide lands now */
+        else a.play();
+      }
+    });
+    m.anims = clocked ? anims.filter(function (a) { return a._motion && a.playState === "paused"; }) : [];
+    var moving = shown && fps > 0 && (clocked ? m.anims.length > 0 : anims.length > 0);
+    if (moving && !m.raf) { m.prev = 0; m.tick = 0; m.raf = requestAnimationFrame(motionFrame); }
+    else if (!moving && m.raf) { cancelAnimationFrame(m.raf); m.raf = 0; m.prev = 0; }
+  }
+  /* the poll reports the tier and why, for /health (serve.py believes the panel only) */
+  function motionQuery() { return "&motion=" + MOTION_FPS[motion.st.tier] + ":" + motion.st.reason; }
+  /* once per render, from renderGauges: judge, then apply. The engine's
+     numbers count once per emit (keyed by the payload's ts): a stalled
+     engine whose last file is served again, or the radar's 300 ms polls,
+     never pass one old sample off as many new ones */
+  function motionTick(data) {
+    var m = motion, g = $("raingauge"), now = performance.now(), prev = m.st.tier, fps = MOTION_FPS[prev];
+    var perf = radarIntent.panel && data.perf && typeof data.perf === "object" && data.ts !== m.perfTs ? data.perf : null;
+    if (perf) m.perfTs = data.ts;
+    var active = g.classList.contains("rain-anim") && $("s-obs").classList.contains("active") && !document.hidden && !_reduceMotion;
+    var late = fps > 0 && fps < 60 ? motionLate(m.ticks, 1000 / fps) : fps === 60 ? motionLate(m.gaps) : null;
+    if (late !== null || !active) { m.gaps = []; m.ticks = []; }   /* no verdict yet: keep collecting */
+    m.st = motionGovern(m.st, { active: active, cpu: perf && perf.cpu, late: active ? late : null,
+                                tempC: perf && perf.tempC, undervoltAgeSec: perf && perf.undervoltAgeSec }, now);
+    if (m.st.tier !== prev) {
+      m.gaps = []; m.ticks = [];                                     /* a new tier is judged on its own frames */
+      g.classList.toggle("motion-still", MOTION_FPS[m.st.tier] === 0);
+      g.setAttribute("data-motion", String(MOTION_FPS[m.st.tier]));
+    }
+    motionSync();
+  }
+  /* back on screen: restart the clock now, not at the next successful poll */
+  document.addEventListener("visibilitychange", function () { motionSync(); });
   (function () {
     var svg = $("raingauge");
     var top = rainGeom.top, bot = rainGeom.bot, x1 = rainGeom.x1, x2 = 57, cx = (x1 + x2) / 2;
@@ -2317,7 +2525,7 @@
     } else if (gauge.classList.contains("rain-anim") && !_rainOffT) {
       /* keep the rain falling while it fades; stop the keyframes only once
          nothing is visible, so the Pi isn't compositing invisible rain */
-      _rainOffT = setTimeout(function () { gauge.classList.remove("rain-anim"); _rainOffT = null; }, RAIN_FADE_MS);
+      _rainOffT = setTimeout(function () { gauge.classList.remove("rain-anim"); _rainOffT = null; motionSync(); }, RAIN_FADE_MS);
     }
     /* the level: water body, waterline and pointer ride it together */
     var ride = "translateY(" + (-rr * (rainGeom.bot - rainGeom.top)).toFixed(1) + "px)";
@@ -2381,6 +2589,9 @@
       var dirn = rainArt.driftRev ? "reverse" : "normal";
       if (rainArt.drift.style.animationDirection !== dirn) rainArt.drift.style.animationDirection = dirn;
     }
+    /* how often all of that is drawn: the motion budget, last, so the clock
+       catches every animation and glide this update started */
+    motionTick(data);
     /* NOTE: no intensity word here — the tile header (rainStatus) and the tube
        level both carry it already, and a third copy overflowed the column
        ("… · Moderat" clipped against the gauge on the real panel) */
@@ -4423,7 +4634,8 @@
     var geoQuery=radarActive&&radarCamera?'&radarGeoZoom='+clamp(Math.round(radarCamera.zoom),4,10)+'&radarGeoCenter='+encodeURIComponent(radarCamera.lat.toFixed(10)+','+(((radarCamera.lon+180)%360+360)%360-180).toFixed(10)):'';
     var viewQuery='&viewSession='+radarIntent.session+'&viewSeq='+gen+(radarIntent.viewOwner==null?'':'&viewClaim='+encodeURIComponent(radarIntent.viewOwner));
     var touched = presenceDirty; presenceDirty = false;
-    fetch("wx.json?_=" + started + viewQuery + (ack ? "&r=1" : "") + (touched ? "&touch=1" : "") + (radarActive ? "&view=radar&radarTheme="+radarBaseStyle.theme+"&radarMoving="+(radarGesture.state!=='idle'?1:0) + geoQuery + zoomQuery + (sentSmooth===null?"":"&radarSmooth="+(sentSmooth?"on":"off")) : "&view=none"), opts)
+    var motionReport = typeof motionQuery === "function" ? motionQuery() : "";
+    fetch("wx.json?_=" + started + viewQuery + motionReport + (ack ? "&r=1" : "") + (touched ? "&touch=1" : "") + (radarActive ? "&view=radar&radarTheme="+radarBaseStyle.theme+"&radarMoving="+(radarGesture.state!=='idle'?1:0) + geoQuery + zoomQuery + (sentSmooth===null?"":"&radarSmooth="+(sentSmooth?"on":"off")) : "&view=none"), opts)
       .then(function (r) {
         if (!r.ok) throw new Error("HTTP " + r.status);
         var srv = Date.parse(r.headers.get("Date") || "");   /* the producer's clock, 1 s resolution */

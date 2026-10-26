@@ -213,6 +213,13 @@
     "obsLowTime": null,
     "obsTs": 1735731925,
     "peakSun": null,
+    "perf": {
+      "cores": 4,
+      "cpu": 0.12,
+      "tempC": 52.1,
+      "undervolt": false,
+      "undervoltAgeSec": null
+    },
     "radUnit": "W/m2",
     "radar": {
       "acquiredTs": null,

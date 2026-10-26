@@ -60,6 +60,12 @@ surface each drop slows to a bead that sinks almost straight down and fades. The
 water level is the measured rate, so in a deluge the tube is nearly full and the
 splashes and sinking beads carry the intensity.
 
+The rain adapts to the machine drawing it. On the Pi the console watches CPU load,
+temperature and the power supply: when the board is busy or hot it draws the same
+rain at 30, 20 or 12 frames a second, and it holds it still while the supply sags.
+It climbs back to the display's full rate once there is headroom. A browser on
+another device does the same from its own frame timing.
+
 ![The rainfall panel during heavy rain: engraved rain falls into the intensity gauge, splashes at the waterline and sinks as beads](design/almanac/screenshots/rainfall.gif)
 
 Live readings move the way an instrument should. The vane swings the short way

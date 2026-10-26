@@ -212,6 +212,10 @@ def _seeded_emitter(make_emitter, monkeypatch):
     # writer; the fixture deliberately represents a clean empty ledger instead.
     monkeypatch.setattr(emitter.radar._native_budget, 'snapshot',
                         lambda: dict(day='2025-01-02', bytesToday=0, ceilingState='normal', ledgerState='ok'))
+    # perf is the running host's own load (cores, temperature, CPU): pin a Pi 4
+    # at rest so the golden reads the same on any machine
+    monkeypatch.setattr(emitter._system, 'sample',
+                        lambda: dict(cpu=0.12, cores=4, tempC=52.1, undervolt=False, undervoltAgeSec=None))
     return emitter
 
 

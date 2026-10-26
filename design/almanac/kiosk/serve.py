@@ -294,6 +294,28 @@ _polls      = 0
 _renders    = 0
 _count_lock = threading.Lock()
 
+# The panel's motion budget (console_live.html motionGovern): the rain's frame
+# rate and why, reported as motion=<fps>:<reason> on every poll. Believed from
+# the panel only, like r=1; published in /health and logged when it changes,
+# so a week of tier changes is in the journal.
+MOTION_FPS     = frozenset(('60', '30', '20', '12', '0'))
+MOTION_REASONS = frozenset(('start', 'headroom', 'cpu', 'frames', 'heat', 'power'))
+_panel_motion  = None      # dict(fps, reason, since) under _count_lock
+
+
+def _note_motion(values, now):
+    """ Record a panel motion report; anything outside the page's own
+    vocabulary is ignored. Caller holds _count_lock. """
+    global _panel_motion
+    fps, sep, reason = (values[-1] if values else '').partition(':')
+    if not sep or fps not in MOTION_FPS or reason not in MOTION_REASONS:
+        return
+    old = _panel_motion
+    if old is not None and (old['fps'], old['reason']) == (int(fps), reason):
+        return
+    _panel_motion = dict(fps=int(fps), reason=reason, since=now)
+    print(f"motion: {old['fps'] if old else '-'} -> {fps} fps ({reason})", flush=True)
+
 
 # A separate session marker preserves radar_viewed's 15-minute demand hint.
 # The engine admits deep history only during a continuous, live view session.
@@ -1008,6 +1030,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 view_accepted, viewing = False, False
                 if panel and same_site and params.get('r') == ['1']:
                     _renders += 1
+                if panel and same_site:
+                    _note_motion(params.get('motion'), now)
                 if admitted:
                     camera_report = viewed_radar and params.get('radarTheme') in (['paper'], ['night'])
                     ordered = 'radarSession' in params
@@ -1144,6 +1168,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def _health(self):
         h = {"status": "ok", "polls": _polls, "renders": _renders}
+        d = None
         try:
             with open(DATA) as f:
                 d = json.load(f)
@@ -1170,6 +1195,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             h["reason"] = h["error"] = str(e)
         # Read after the verdict: radar diagnostics never change status or code.
         h["radar"] = _radar_health()
+        # Nor do the machine's load (the engine's wx.json perf) or the panel's
+        # motion tier: they explain a slow panel, they do not fail it.
+        perf = d.get("perf") if isinstance(d, dict) else None
+        h["perf"] = perf if isinstance(perf, dict) else None
+        with _count_lock:
+            motion = dict(_panel_motion) if _panel_motion else None
+        if motion:
+            motion["sinceSec"] = round(max(0.0, time.time() - motion.pop("since")))
+        h["motion"] = motion
         try:
             body = json.dumps(h, allow_nan=False).encode()
         except ValueError as e:                                          # a non-finite crept in

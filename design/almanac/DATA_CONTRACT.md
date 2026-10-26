@@ -174,6 +174,60 @@ its next poll only after `render()` returned, and the server credits that mark o
 from a loopback client. The launcher's watchdog reads `renders`, because a request
 count never proved anything reached the screen.
 
+## Motion budget (2026-10-26)
+
+The rain gauge's frame rate follows the machine's headroom. On the Pi 4 panel
+every frame the page draws costs about 37 ms of CPU however little changed
+(pausing any one part of the rain saved nothing; pausing all of it saved
+everything), so the rain at the display's 60 fps took Chromium from 25 % to about
+200 % of a core. CSS `steps()` does not help: Blink still ticks every frame.
+
+`perf` (object, every emit, never carried forward) is the engine's sample of the
+machine (`lib/system_load.py`):
+
+| field | meaning |
+|---|---|
+| `cpu` | busy share of all cores since the previous emit, 0..1; `null` on the first sample or off Linux |
+| `cores` | `os.cpu_count()` |
+| `tempC` | SoC temperature (thermal_zone0), 0.1 °C; `null` when absent |
+| `undervolt` | the Pi firmware's under-voltage flag now (hwmon `rpi_volt`); `null` off a Pi |
+| `undervoltAgeSec` | whole seconds since the flag was last seen raised this run (0 while raised); `null` if never |
+
+Only the panel uses `perf` (the poll's `X-Radar-Panel: 1`); a LAN page's own
+screen has nothing to do with the Pi's CPU and governs on its frame pacing alone.
+
+Tiers, measured on the Pi 4 at extreme rain (Chromium, % of one core): the
+keyframes at the display's own rate (~205); the same keyframes and glides paused
+and advanced by a display-frame clock at 30 fps (~130), 20 (~95) or 12 (~62);
+still, the reduced-motion engraving with no glides (`.motion-still`, ~15). The look
+never changes, only how often it is drawn. `motionGovern` (pure, in the page):
+
+- whole-machine CPU, averaged over ~8 s and re-seeded at each tier change, above
+  0.75 steps down a tier after 6 s at it (above 0.92, two tiers); more than 25 %
+  late frames does the same (a clocked tier's ticks over 1.3x its interval; at the
+  display's own rate, frames over 1.5x the window's 10th-percentile frame), and so
+  does 80 °C
+- a step up needs 30 s of unbroken healthy time at the current tier: the average
+  under 0.5, a pacing verdict with no janky frames (a moving tier must show its
+  frames), 75 °C or less, and the tier above not barred
+- a tier that proved too dear is barred 1 min, doubling to 30 min; 10 min held
+  healthy at a tier clears its bar, so a machine near its limit settles
+- an under-voltage report forces still until 10 min after the Pi last saw the
+  alarm, even while dry; the deadline is the page's own, so a restarted engine
+  (which forgets the alarm) cannot lift it early
+- each engine sample counts once (keyed by the payload's `ts`): a stalled
+  engine's file served again is no evidence, and the average lapses after 30 s
+  without a new one
+- no decision while the rain is idle or its screen is hidden, and off screen
+  nothing the clock touched ticks; a person's `prefers-reduced-motion` wins
+  outright; pages start at 30 fps and climb
+
+The page reports `motion=<fps>:<reason>` on every poll (`reason`: `start`,
+`headroom`, `cpu`, `frames`, `heat`, `power`). `serve.py` believes it from the
+panel only, ignores anything outside that vocabulary, prints `motion: 60 -> 30 fps
+(cpu)` when it changes, and `/health` shows `motion: {fps, reason, sinceSec}` beside
+`perf`. Neither changes the health verdict.
+
 ## Warning polygons on the radar (2026-10-09)
 
 `radar.warnings` carries the NWS storm-based warnings the radar camera can

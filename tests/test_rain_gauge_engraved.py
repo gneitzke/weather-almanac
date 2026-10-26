@@ -149,8 +149,9 @@ def test_every_animation_runs_only_while_raining_and_never_under_reduced_motion(
     # parts animate only while they are visible or fading (the `live` gate),
     # and the gauge-wide gate is lifted one fade after the last drop
     assert '.rain-plate.live' in CSS and '.rain-plunge.live' in CSS and '.imp-tier.live' in CSS
-    assert 'setTimeout(function () { g.classList.remove("live"); g._offT = null; }, RAIN_FADE_MS)' in BUILD
-    assert 'setTimeout(function () { gauge.classList.remove("rain-anim"); _rainOffT = null; }, RAIN_FADE_MS)' in RENDER
+    # (and the motion clock lets go of the part at the same moment)
+    assert 'setTimeout(function () { g.classList.remove("live"); g._offT = null; motionSync(); }, RAIN_FADE_MS)' in BUILD
+    assert 'setTimeout(function () { gauge.classList.remove("rain-anim"); _rainOffT = null; motionSync(); }, RAIN_FADE_MS)' in RENDER
 
 
 def test_loops_travel_exactly_one_tile_so_they_are_seamless():
@@ -236,8 +237,14 @@ def test_level_pointer_and_waterline_ride_the_measurement_not_the_texture():
     assert 'if (_rrShown === null) { if (isNum(rainMm)) _rrShown = rr; }' in RENDER
     assert '_rrDryPolls = rr > 0 ? 0 : _rrDryPolls + 1;' in RENDER
     assert 'else _rrShown = rainEase(_rrShown, rr, _rrDryPolls);' in RENDER
-    # nothing per frame: no rAF loop, no filters, no gradients, no raster
+    # nothing per frame in the rain itself: no filters, gradients or raster,
+    # and no frame loop but the motion budget's clock (motionFrame), which
+    # only advances the gauge's own keyframes at a capped rate. Measured on
+    # the Pi 4: an idle frame loop costs nothing; the clock at 30 fps takes a
+    # third off the rain's cost, at 12 fps two thirds (test_motion_budget_page)
     code = BUILD + RENDER
+    for clock in ('motionFrame', 'motionSync', 'motionReconcile'):
+        code = code.replace(js_function(clock), '')
     for banned in ('requestAnimationFrame', 'filter', 'Gradient', '<image', 'canvas'):
         assert banned not in code, banned
     assert not re.search(r'(?<![\w-])filter\s*:|gradient\(', CSS)
