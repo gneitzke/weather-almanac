@@ -52,11 +52,15 @@ gusts.
 
 ![The Almanac interface during heavy rain, with the 7-day outlook band](design/almanac/screenshots/almanac.png)
 
-While it rains, etched rain falls into the rate gauge. The hatching falls at two
-depths, its speed and density follow the measured rate, and it lands in a
-wave-topped water surface whose swell tracks the intensity too.
+While it rains, engraved rain falls into the rate gauge. A drizzle is a few short
+drops drifting down; a downpour is dense, long, fast strokes, all on one slant
+that leans with the measured wind (a westerly blows the rain to the right). Where
+the rain meets the water it throws up small crowns and ripple rings. Below the
+surface each drop slows to a bead that sinks almost straight down and fades. The
+water level is the measured rate, so in a deluge the tube is nearly full and the
+splashes and sinking beads carry the intensity.
 
-![The rainfall panel during heavy rain: etched rain falls into the intensity gauge](design/almanac/screenshots/rainfall.gif)
+![The rainfall panel during heavy rain: engraved rain falls into the intensity gauge, splashes at the waterline and sinks as beads](design/almanac/screenshots/rainfall.gif)
 
 Live readings move the way an instrument should. The vane swings the short way
 around the dial, and numbers count to their new values instead of snapping.
