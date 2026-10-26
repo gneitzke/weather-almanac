@@ -1888,7 +1888,9 @@
     dwellMs: 30000,                /* ... and this long, healthy, before the next one up is tried */
     backoffMs: [60000, 1800000],   /* a tier that proved too dear is barred this long, doubling */
     clearMs: 600000,               /* a tier held healthy this long forgets its bar */
-    late: 0.25,                    /* share of late frames (motionLate) that reads as janky */
+    late: 0.25,                    /* share of late frames (motionLate, averaged) that reads as janky */
+    lateSec: 6,                    /* the pacing average's time constant: one bad window is noise
+                                      (Pi 4, steady 30 fps: 0-7 % late, single windows up to 23 %) */
     minFrames: 30,                 /* fewer display frames than this: no pacing verdict */
     minTicks: 10,                  /* ... or fewer clock ticks */
     tickLate: 1.3,                 /* a clock tick this many times its interval apart was late */
@@ -1924,21 +1926,23 @@
   function motionGovern(st, sig, now) {
     var M = MOTION, still = MOTION_FPS.length - 1;
     var s = { tier: st.tier, since: st.since, reason: st.reason, ema: st.ema, emaAt: st.emaAt, active: !!sig.active,
-              healthy: st.healthy, powerUntil: st.powerUntil || 0,
+              late: st.late, lateAt: st.lateAt, healthy: st.healthy, powerUntil: st.powerUntil || 0,
               blocked: Object.assign({}, st.blocked), backoff: Object.assign({}, st.backoff) };
-    var fresh = isNum(st.ema) && now - st.emaAt < 30000;
-    if (isNum(sig.cpu)) {
-      s.ema = fresh ? st.ema + (sig.cpu - st.ema) * (1 - Math.exp(-(now - st.emaAt) / 1000 / M.emaSec)) : sig.cpu;
-      s.emaAt = now;
-    } else if (!fresh) s.ema = null;                 /* a LAN page, an older or stalled engine: pacing alone */
+    /* time-weighted averages; one that has gone 30 s without a sample lapses */
+    function avg(v, at, x, tau) { return isNum(v) && now - at < 30000 ? v + (x - v) * (1 - Math.exp(-(now - at) / 1000 / tau)) : x; }
+    if (isNum(sig.cpu)) { s.ema = avg(st.ema, st.emaAt, sig.cpu, M.emaSec); s.emaAt = now; }
+    else if (!(isNum(st.ema) && now - st.emaAt < 30000)) s.ema = null;   /* a LAN page, an older or stalled engine: pacing alone */
+    if (isNum(sig.late)) { s.late = avg(st.late, st.lateAt, sig.late, M.lateSec); s.lateAt = now; }
+    else if (!(isNum(st.late) && now - st.lateAt < 30000)) s.late = null;
     /* an under-voltage report holds still until powerHoldSec after the Pi
        last saw the alarm. The deadline is the page's own: a restarted engine
        (which forgets the alarm) or a missing sample cannot cut it short */
     if (isNum(sig.undervoltAgeSec))
       s.powerUntil = Math.max(s.powerUntil, now + (M.powerHoldSec - sig.undervoltAgeSec) * 1000);
-    /* a new tier starts a new average and a new dwell: the old tier's load must not judge it */
+    /* a new tier starts new averages and a new dwell: the old tier's load must not judge it */
     function go(tier, why) {
-      s.tier = tier; s.since = now; s.reason = why; s.ema = null; s.emaAt = 0; s.healthy = null; return s;
+      s.tier = tier; s.since = now; s.reason = why; s.ema = null; s.emaAt = 0; s.late = null; s.lateAt = 0;
+      s.healthy = null; return s;
     }
     if (now < s.powerUntil) return s.tier === still && s.reason === "power" ? s : go(still, "power");
     if (!s.active) { s.healthy = null; return s; }   /* nothing animates: no evidence either way */
@@ -1946,7 +1950,7 @@
     var age = now - s.since;
     var hot = isNum(sig.tempC) && sig.tempC >= M.hotC;
     var busy = isNum(s.ema) && s.ema > M.high, severe = isNum(s.ema) && s.ema > M.severe;
-    var janky = isNum(sig.late) && sig.late > M.late;
+    var janky = isNum(s.late) && s.late > M.late;
     if ((hot || busy || janky) && s.tier < still && age >= M.downMs) {
       var bar = Math.min(2 * (s.backoff[s.tier] || M.backoffMs[0] / 2), M.backoffMs[1]);
       s.backoff[s.tier] = bar; s.blocked[s.tier] = now + bar;
@@ -1954,7 +1958,7 @@
     }
     /* healthy is evidence, not silence: a moving tier must show its frames,
        and the dwell counts only unbroken healthy time */
-    var paced = isNum(sig.late) || MOTION_FPS[s.tier] === 0;
+    var paced = isNum(s.late) || MOTION_FPS[s.tier] === 0;
     var calm = paced && !janky && !(isNum(s.ema) && s.ema >= M.low) && !(isNum(sig.tempC) && sig.tempC > M.warmC);
     s.healthy = calm ? (isNum(st.healthy) && st.active ? st.healthy : now) : null;
     if (calm && now - s.healthy >= M.clearMs) delete s.backoff[s.tier];   /* proven here: its history is forgiven */
@@ -1968,9 +1972,9 @@
      while anything in the gauge moves on a visible Observations screen: it
      drives the clock and records frame gaps and clock ticks for motionLate.
      An idle frame loop costs nothing measurable. */
-  var motion = { st: { tier: 1, since: 0, reason: "start", ema: null, emaAt: 0, active: false, healthy: null,
-                       powerUntil: 0, blocked: {}, backoff: {} },
-                 anims: [], gaps: [], ticks: [], raf: 0, prev: 0, tick: 0, perfTs: null };
+  var motion = { st: { tier: 1, since: 0, reason: "start", ema: null, emaAt: 0, late: null, lateAt: 0,
+                       active: false, healthy: null, powerUntil: 0, blocked: {}, backoff: {} },
+                 anims: [], gaps: [], ticks: [], raf: 0, prev: 0, tick: 0, perfTs: null, settling: true };
   function motionFrame(t) {
     var m = motion, fps = MOTION_FPS[m.st.tier];
     m.raf = 0;
@@ -2021,7 +2025,7 @@
     if (!shown) {
       /* off screen is no evidence: the dwell starts over once the gauge is seen again */
       if (m.st.active || m.st.healthy !== null) m.st = Object.assign({}, m.st, { active: false, healthy: null });
-      m.gaps = []; m.ticks = [];
+      m.gaps = []; m.ticks = []; m.settling = true;   /* coming back restarts the animations: a transient too */
     }
     var clocked = shown && fps > 0 && fps < 60;
     var anims = motionReconcile(g.getAnimations({ subtree: true }));
@@ -2050,10 +2054,13 @@
     var active = g.classList.contains("rain-anim") && $("s-obs").classList.contains("active") && !document.hidden && !_reduceMotion;
     var late = fps > 0 && fps < 60 ? motionLate(m.ticks, 1000 / fps) : fps === 60 ? motionLate(m.gaps) : null;
     if (late !== null || !active) { m.gaps = []; m.ticks = []; }   /* no verdict yet: keep collecting */
+    /* the first verdict after a tier change measures the change itself
+       (on the Pi 4 up to 23 % late at a steady 30 fps): drop it */
+    if (late !== null && m.settling) { m.settling = false; late = null; }
     m.st = motionGovern(m.st, { active: active, cpu: perf && perf.cpu, late: active ? late : null,
                                 tempC: perf && perf.tempC, undervoltAgeSec: perf && perf.undervoltAgeSec }, now);
     if (m.st.tier !== prev) {
-      m.gaps = []; m.ticks = [];                                     /* a new tier is judged on its own frames */
+      m.gaps = []; m.ticks = []; m.settling = true;                  /* a new tier is judged on its own frames */
       g.classList.toggle("motion-still", MOTION_FPS[m.st.tier] === 0);
       g.setAttribute("data-motion", String(MOTION_FPS[m.st.tier]));
     }

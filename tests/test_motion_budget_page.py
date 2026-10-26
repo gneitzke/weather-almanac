@@ -38,7 +38,7 @@ def js_var(name):
 PRELUDE = '\n'.join([js_function('isNum'), js_var('MOTION_FPS'), js_var('MOTION'),
                      js_function('motionLate'), js_function('motionGovern')]) + '''
 function fresh(tier) {
-  return { tier: tier === undefined ? 1 : tier, since: 0, reason: "start", ema: null, emaAt: 0,
+  return { tier: tier === undefined ? 1 : tier, since: 0, reason: "start", ema: null, emaAt: 0, late: null, lateAt: 0,
            active: false, healthy: null, powerUntil: 0, blocked: {}, backoff: {} };
 }
 /* poll every 2 s for `secs`, cpu from cost(tier); a moving tier shows smooth
@@ -139,6 +139,20 @@ def test_a_slow_machine_walks_down_until_it_fits_and_severe_load_drops_two_tiers
     ''')
     assert r['changes'][0][1:3] == [0, 2]          # 100 % busy: straight past 30 fps
     assert r['tier'] == 2                          # 0.70 is under the 0.75 line: it holds at 20 fps
+
+
+@needs_node
+def test_one_janky_window_is_noise_and_sustained_jank_is_not():
+    # measured on the Pi 4 at a steady 30 fps: windows 0-7 % late, one at 23 %;
+    # the live run stepped down on single windows like that before pacing was averaged
+    r = node('''
+      var spike = run(fresh(1), 60, function () { return 0.3; }, function (t) { return { late: t === 20000 ? 0.4 : 0.03 }; });
+      var bad = run(fresh(1), 20, function () { return 0.3; }, function () { return { late: 0.4 }; });
+      console.log(JSON.stringify({ spike: spike.changes.filter(function (c) { return c[3] === "frames"; }).length,
+                                   bad: bad.changes[0] }));
+    ''')
+    assert r['spike'] == 0
+    assert r['bad'][1:] == [1, 2, 'frames']
 
 
 @needs_node
@@ -298,3 +312,6 @@ def test_page_wiring():
     assert 'if (late !== null || !active) { m.gaps = []; m.ticks = []; }' in tick
     # off screen is no evidence: the dwell starts over when the gauge is seen again
     assert '{ active: false, healthy: null }' in sync
+    # the first verdict after a tier change (or a return to the screen) measures the change: dropped
+    assert 'if (late !== null && m.settling) { m.settling = false; late = null; }' in tick
+    assert 'm.settling = true' in sync and 'm.settling = true' in tick

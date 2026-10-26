@@ -204,9 +204,11 @@ never changes, only how often it is drawn. `motionGovern` (pure, in the page):
 
 - whole-machine CPU, averaged over ~8 s and re-seeded at each tier change, above
   0.75 steps down a tier after 6 s at it (above 0.92, two tiers); more than 25 %
-  late frames does the same (a clocked tier's ticks over 1.3x its interval; at the
-  display's own rate, frames over 1.5x the window's 10th-percentile frame), and so
-  does 80 °C
+  late frames, averaged over ~6 s, does the same (a clocked tier's ticks over 1.3x
+  its interval; at the display's own rate, frames over 1.5x the window's
+  10th-percentile frame, capped at a 48 Hz display's), and so does 80 °C. The
+  first pacing verdict after a tier change or a return to the screen is dropped:
+  it measures the change (Pi 4, steady 30 fps: 0-7 % late, single windows to 23 %)
 - a step up needs 30 s of unbroken healthy time at the current tier: the average
   under 0.5, a pacing verdict with no janky frames (a moving tier must show its
   frames), 75 °C or less, and the tier above not barred
