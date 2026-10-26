@@ -105,13 +105,35 @@ until a power-cycle. Two things guard against it:
    `(incomplete)` while the Pi's own outbound still works, and the gateway still
    answers, so a gateway probe cannot detect it). The Pi's own frames toward a
    wired host are what re-teach the node's bridge table. The nudge's reply is
-   ignored; the frames are the point. Install:
+   ignored; the frames are the point.
+
+   Every check also *announces* the Pi (`wifi-announce.py`): two rounds of
+   broadcast ARP for its own address. Measured 2026-10-26, the mesh delivers no
+   broadcast or multicast frames to wireless clients at all (none in 30 s on
+   either Pi), so another host can find a Pi only through the mesh's record of
+   it. That record goes stale after a roam or ages out: the Pi 3 roamed between
+   nodes and nothing on the LAN, not even the Pi 4 on the same node, reached it
+   for nine hours. The Pi's own broadcast re-teaches every node, the mesh's ARP
+   proxy and every wired host, so a stale record lasts at most a minute. The
+   result rides on the per-minute log line (`announced <ip> at <mac>`).
+   Install:
 
    ```
    sudo install -m 0755 wifi-keepalive.sh /usr/local/sbin/
+   sudo install -m 0755 wifi-announce.py /usr/local/sbin/wifi-announce
    sudo install -m 0644 wifi-keepalive.service wifi-keepalive.timer /etc/systemd/system/
    sudo systemctl daemon-reload && sudo systemctl enable --now wifi-keepalive.timer
    ```
+
+   The kernel can announce on its own when the link comes up; turn that on too:
+
+   ```
+   echo 'net.ipv4.conf.all.arp_notify = 1' | sudo tee /etc/sysctl.d/99-arp-notify.conf
+   sudo sysctl -p /etc/sysctl.d/99-arp-notify.conf
+   ```
+
+   The same applies to any Pi on this network, the Pi 3 included: it runs the
+   timer with the same files.
 
    Every recovery is logged: `journalctl -t wifi-keepalive`. Make the journal
    persistent (`Storage=persistent` in `/etc/systemd/journald.conf.d/`) so the

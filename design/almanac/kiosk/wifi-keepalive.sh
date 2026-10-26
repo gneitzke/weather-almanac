@@ -20,6 +20,11 @@ fi
 # a reachable gateway alone did not (observed 2026-09-13/14: gateway REACHABLE,
 # wired hosts could not ARP the Pi, and pinging the wired viewer healed it).
 NUDGE_FILE="${WIFI_NUDGE_FILE:-/tmp/wfp_data/last_viewer}"
+# Announce: the mesh delivers no broadcasts to its wireless clients (2026-10-26:
+# none in 30 s on either Pi), so others find the Pi only through the mesh's own
+# record of it, which goes stale after a roam or ages out. The Pi's broadcast
+# ARP re-teaches every node and wired host (wifi-announce).
+ANNOUNCE="${WIFI_ANNOUNCE:-/usr/local/sbin/wifi-announce}"
 FAIL_LIMIT="${WIFI_FAIL_LIMIT:-3}"
 # A peer outage must not cause repeated wifi bounces every three minutes.
 COOLDOWN="${WIFI_RECOVERY_COOLDOWN:-900}"
@@ -51,7 +56,19 @@ read_count() {
 }
 probe() { ping -n -c 3 -W 2 -w 8 -I "$IFACE" "$1" >/dev/null 2>&1; }
 
-# Bridge nudge every check, before anything else and regardless of outcome: the
+# Announce every check, first: a failure is logged on its own line, success
+# rides on the peer line so the journal stays one line a minute.
+announced="announce not installed"
+if [ -x "$ANNOUNCE" ]; then
+  if out=$("$ANNOUNCE" "$IFACE" 2>&1); then
+    announced="${out%% on *}"
+  else
+    announced="announce failed"
+    log "announce failed: ${out:-no output}"
+  fi
+fi
+
+# Bridge nudge every check, before the probe and regardless of outcome: the
 # result is deliberately ignored (the viewer may be asleep); the frames are the point.
 if [ -r "$NUDGE_FILE" ]; then
   viewer=$(head -c 64 "$NUDGE_FILE" | tr -d '[:space:]')
@@ -64,7 +81,7 @@ fi
 fails=$(read_count "$STATE")
 if probe "$PEER"; then
   echo 0 > "$STATE"
-  log "peer $PEER reachable on $IFACE; misses $fails -> 0; no recovery needed"
+  log "peer $PEER reachable on $IFACE; misses $fails -> 0; $announced; no recovery needed"
   exit 0
 fi
 
