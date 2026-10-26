@@ -1691,8 +1691,22 @@
 
   var rainPtr, rainArt = null, rainGeom = { top: 22, bot: 136, x1: 15 };
   var RAIN_FADE_MS = 2600, _rainOffT = null;   /* a hair longer than the 2.4s opacity ease */
-  /* shown-intensity slew per 2 s poll tick: up fast, down slow */
-  var RAIN_ATTACK = 0.15, RAIN_RELEASE = 0.04, _rrShown = null;
+  /* the texture's intensity eases toward the measured one by a share of the
+     gap per 2 s poll, never less than a floor step so it lands. Rain shows
+     on the first wet poll and builds to ~90% in ~14 s; while it still rains,
+     dips and the tail of a one-minute spike settle over ~20 s, so the
+     Tempest's minute-to-minute flux reads as a swell, not a flicker. A dry
+     reading eases like a dip for its first `hold` polls, so a blip between
+     wet ones is a small dip; once the station stays dry, a downpour thins
+     through drizzle to nothing in ~18 s. [share, floor] per case. */
+  var RAIN_EASE = { rise: [0.3, 0.02], fall: [0.12, 0.02], stop: [0.35, 0.045], hold: 2 };
+  var _rrShown = null, _rrDryPolls = 0;
+  function rainEase(shown, target, dryPolls) {
+    var e = target > shown ? RAIN_EASE.rise
+          : target > 0 || dryPolls <= RAIN_EASE.hold ? RAIN_EASE.fall : RAIN_EASE.stop;
+    var step = Math.max(Math.abs(target - shown) * e[0], e[1]);
+    return target > shown ? Math.min(target, shown + step) : Math.max(target, shown - step);
+  }
   /* the rain plates. One tile (w x h, in gauge units) per drop class, placed
      three across and two down from (x0, y0) so the slant can reach ±30°
      without running out of rain and the loop never shows an edge: h is
@@ -2285,16 +2299,15 @@
     $("raingauge").classList.toggle("is-dry", dryGauge);
     var gauge = $("raingauge");
     var rr = clamp(rainFrac(rainMm), 0, 1);              /* MEASURED: level, pointer, waterline */
-    /* SHOWN: the rain texture slews toward the measurement, one poll tick at
-       a time — up fast (a downpour builds in ~8 s), down slow (a moderate
-       shower takes ~30 s to count its drops out). Direction-aware, so the
-       Tempest's wet/dry flip between minutes reads as a swell and a settle,
-       never a cut. Data stays data: only the texture lags. The first real
-       measurement seeds it outright (the page's empty first render is not
-       one), so a console that loads into a storm shows the storm. */
+    /* SHOWN: the rain texture eases toward the measurement (rainEase), so
+       the Tempest's minute-to-minute flux reads as a swell and a settle and
+       a stop thins out instead of cutting. Data stays data: only the
+       texture lags. The first real measurement seeds it outright (the
+       page's empty first render is not one), so a console that loads into
+       a storm shows the storm. */
+    _rrDryPolls = rr > 0 ? 0 : _rrDryPolls + 1;
     if (_rrShown === null) { if (isNum(rainMm)) _rrShown = rr; }
-    else if (rr > _rrShown) _rrShown = Math.min(rr, _rrShown + RAIN_ATTACK);
-    else _rrShown = Math.max(rr, _rrShown - RAIN_RELEASE);
+    else _rrShown = rainEase(_rrShown, rr, _rrDryPolls);
     var shown = _rrShown === null ? 0 : _rrShown;
     var wet = (isNum(rainMm) && rainMm > 0) || shown > 0;
     gauge.classList.toggle("raining", wet);              /* the rain field fades via CSS */

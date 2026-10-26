@@ -7,6 +7,7 @@ transform and opacity, every animation stops with the rain and under
 prefers-reduced-motion, the loops are exactly one tile long, and the lean
 follows the measured wind by one bounded, tested formula.
 """
+import json
 import re
 import shutil
 import subprocess
@@ -233,12 +234,47 @@ def test_level_pointer_and_waterline_ride_the_measurement_not_the_texture():
         assert part in RENDER
     # the texture lags by design; the first real measurement seeds it outright
     assert 'if (_rrShown === null) { if (isNum(rainMm)) _rrShown = rr; }' in RENDER
-    assert 'RAIN_ATTACK = 0.15, RAIN_RELEASE = 0.04' in BUILD
+    assert '_rrDryPolls = rr > 0 ? 0 : _rrDryPolls + 1;' in RENDER
+    assert 'else _rrShown = rainEase(_rrShown, rr, _rrDryPolls);' in RENDER
     # nothing per frame: no rAF loop, no filters, no gradients, no raster
     code = BUILD + RENDER
     for banned in ('requestAnimationFrame', 'filter', 'Gradient', '<image', 'canvas'):
         assert banned not in code, banned
     assert not re.search(r'(?<![\w-])filter\s*:|gradient\(', CSS)
+
+
+@needs_node
+def test_texture_eases_through_flux_and_thins_out_when_dry():
+    # one step = one 2 s poll, counting dry polls exactly as renderGauges does
+    script = js_var('RAIN_EASE') + js_function('rainEase') + r'''
+const run = (s, targets) => { let dry = 0;   // each case starts from steady rain
+  return targets.map(t => (dry = t > 0 ? 0 : dry + 1, s = rainEase(s, t, dry))); };
+const rep = (t, n) => Array(n).fill(t);
+const spikeTop = run(0.5, rep(0.65, 30)).pop();
+console.log(JSON.stringify({
+  onset: run(0, rep(0.7, 12)), stop: run(0.7, rep(0, 12)), lightStop: run(0.3, rep(0, 12)),
+  blip: run(0.7, [0, 0.7, 0.7, 0.7, 0.7]), dip: run(0.6, rep(0.45, 15)),
+  spikeBack: run(spikeTop, rep(0.5, 15)), spikeTop }));
+'''
+    r = json.loads(run_node(script))
+    # rain shows on the first wet poll, reaches 90% in 7 polls (14 s) and lands
+    assert r['onset'][0] >= 0.2 and r['onset'][6] >= 0.9 * 0.7 and r['onset'][-1] == 0.7
+    # a dry reading first eases like a dip; a dry spell then thins out quickly
+    # and is gone by the 9th poll (18 s), from a downpour or a shower
+    assert r['stop'][0] > 0.55 and r['stop'][3] < 0.3 and r['stop'][8] == 0
+    assert r['lightStop'][8] == 0
+    # one dry blip between wet readings is a small dip, not a stop
+    assert min(r['blip']) > 0.6 and r['blip'][-1] == 0.7
+    # while it still rains a dip is eased (at most ~a sixth of the gap per poll)
+    # and settles within 30 s; a one-minute spike lands back the same way
+    assert r['dip'][0] >= 0.57 and r['dip'][-1] == 0.45
+    assert r['spikeTop'] == 0.65 and r['spikeBack'][0] > 0.6 and r['spikeBack'][-1] == 0.5
+    # never overshoots, always moves toward the measurement
+    for start, seq, target in ((0, r['onset'], 0.7), (0.7, r['stop'], 0), (0.6, r['dip'], 0.45)):
+        prev = start
+        for v in seq:
+            assert min(prev, target) <= v <= max(prev, target)
+            prev = v
 
 
 def test_gauge_colours_are_the_pages_tokens():
