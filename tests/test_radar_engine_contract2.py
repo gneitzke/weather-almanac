@@ -11,6 +11,7 @@ the resulting diff before keeping it: fixture data is synthetic and must never
 contain an address, home path, or personal contact detail.
 """
 
+from collections import namedtuple
 import json
 import os
 from datetime import datetime, timezone
@@ -19,7 +20,7 @@ import threading
 
 import pytest
 
-from lib import almanac_emit as ae, radar_engine
+from lib import almanac_emit as ae, radar_cache, radar_engine
 from tests.fixtures import obs_scenarios as scn
 from tests.fixtures.config import make_config
 from tests.test_emitter_lifecycle import FakeClock
@@ -168,6 +169,12 @@ def _seeded_emitter(make_emitter, monkeypatch):
     monkeypatch.setattr(ae.time, 'time', lambda: FIXED_NOW)
     monkeypatch.setattr(ae.time, 'monotonic', lambda: float(FIXED_NOW))
     monkeypatch.setattr(ae, 'datetime', _FrozenDateTime)
+    # the radar cache sizes its caps from free disk (2 %, floor to ceiling), so
+    # pin the Pi 4's 110 GB free: the golden then reads the ceilings whatever
+    # disk runs the suite (a CI runner with ~8 GB free reported 164 MB)
+    usage = namedtuple('usage', 'total used free')
+    monkeypatch.setattr(radar_cache.shutil, 'disk_usage',
+                        lambda p: usage(220_000_000_000, 110_000_000_000, 110_000_000_000))
 
     scenario = scn.clear_day()
     scenario['Obs'].update({
