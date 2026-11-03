@@ -181,7 +181,8 @@ also fill in, automatically and labelled, whenever Level III can't be reached.
 ### What the Almanac changes
 
 - One dominant temperature and a plain-language forecast line, in place of six
-  equal-weight panels.
+  equal-weight panels. Under the temperature, the hourly trend is red while it
+  is rising and blue while it is falling.
 - A barometer zone bar (Stormy / Change / Fair / Dry) and a 24-hour pressure
   barograph labelled with the day's high and low.
 - Active US National Weather Service alerts in one strip below the masthead,
@@ -275,6 +276,15 @@ This is enabled by default in the systemd service via `Environment=WFP_BIND=0.0.
 If you want to restrict the server back to the Pi only (no LAN access), remove
 that line from `~/.config/systemd/user/almanac-kiosk.service` and run
 `systemctl --user daemon-reload && systemctl --user restart almanac-kiosk`.
+
+On a mesh Wi-Fi network, install the Wi-Fi keepalive as well. Some mesh systems
+pass no broadcasts to their wireless clients, so other devices can find the Pi
+only through the mesh's own record of it, and that record goes stale after the
+Pi moves to another access point. The console keeps running but drops off the
+LAN: on one test network a Pi stayed unreachable for nine hours. The keepalive
+announces the Pi's address every minute, so a stale record lasts a minute at
+most. Setup is under "WiFi: keep the box on the LAN" in
+[`design/almanac/kiosk/PI4-SETUP.md`](design/almanac/kiosk/PI4-SETUP.md).
 
 ### Do I need a WeatherFlow Tempest?
 
