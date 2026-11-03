@@ -209,6 +209,8 @@
   .trend .arrow { color: var(--accent); font-size: 19px; line-height: 1.3; }
   .trend-main { font-size: 19px; }
   .trend-main b { color: var(--accent); font-weight: 800; }
+  /* a falling temperature reads cold: the arrow and the rate take the water blue */
+  .trend.falling .arrow, .trend.falling .trend-main b { color: var(--water); }
   .trend-sub { font-family: var(--sans); font-size: 14.5px; color: var(--ink-soft); margin-top: 2px; }
 
   .range { margin-top: 5px; }
@@ -2402,6 +2404,7 @@
     else if (tt > 0.05) { arrow.textContent = "↑"; word.textContent = "Rising"; }
     else if (tt < -0.05) { arrow.textContent = "↓"; word.textContent = "Falling"; }
     else { arrow.textContent = "→"; word.textContent = "Steady"; }
+    arrow.closest(".trend").classList.toggle("falling", isNum(tt) && tt < -0.05);   /* same line as the word */
 
     /* 24h delta sentence */
     var d24 = data.temp24hDelta;
