@@ -382,6 +382,27 @@ def test_the_warning_toggle_keeps_its_footprint(browser):
     assert [t.strip().split('\n')[-1].casefold() for *_, t in size] == ['warning areas', 'shown · 5', 'hidden · 5']
 
 
+
+def test_recenter_never_sits_under_the_zoom_rail(browser):
+    # the rail grows leftward (reset in manual zoom, SMOOTH, Warning areas);
+    # the recenter button rides in it, so the widest rail cannot cover it
+    ctx, page = _open(browser, 'night')
+    try:
+        m = page.evaluate('''()=>{activate('s-radar');document.getElementById('rad-zoom').hidden=false;
+          const now=radarServerNow(),it=id=>({id,event:'Tornado Warning',label:'Tornado Warning',kind:'tornado',expires:now+900,
+            polygon:[[[-122.4,47.5],[-122.2,47.5],[-122.2,47.7],[-122.4,47.5]]]});
+          radarWarnUpdate({available:true,fetchedTs:now,staleAt:now+900,stale:false,items:[it('a'),it('b'),it('c')]});
+          for(const id of ['rad-zoom-reset','rad-recenter','rad-loop'])document.getElementById(id).hidden=false;
+          document.getElementById('rad-zoom-mode').textContent='10';
+          const r=id=>{const b=document.getElementById(id).getBoundingClientRect();return [b.left,b.right,b.top,b.bottom]};
+          return {inRail:document.getElementById('rad-recenter').parentElement.id,recenter:r('rad-recenter'),
+                  out:r('rad-zoom-out'),rail:r('rad-zoom'),loop:r('rad-loop'),plate:r('rad-plate')};}''')
+    finally:
+        ctx.close()
+    assert m['inRail'] == 'rad-zoom'
+    assert m['recenter'][1] + 8 <= m['out'][0], m                   # its own gap before the zoom-out step
+    assert m['loop'][1] < m['rail'][0] and m['plate'][0] < m['rail'][0], m
+
 def test_small_and_clipped_warnings_offer_a_complete_ordered_list():
     run(r'''
 radarCamera={lat:47.61,lon:-122.33,zoom:6};

@@ -734,7 +734,8 @@
     :root:not([data-theme="paper"]):not([data-theme="light"]) .rad-plate { box-shadow: none; }
   }
   .rad-stack { position:absolute; inset:0; transform-origin:0 0; pointer-events:none; }
-  .rad-recenter { position:absolute; left:calc(50% + 38px); bottom:12px; z-index:4; transform:translateX(-50%); }
+  /* recenter leads the zoom rail: the rail grows leftward (reset, SMOOTH,
+     Warning areas) and a button pinned on its own once ended up under it */
   .rad-recenter[hidden] { display:none; }
   .rad-over .rad-station-accent { fill:none; stroke:var(--accent); stroke-width:1.5; }
   .rad-base, .rad-echo, .rad-over { transform-origin:0 0; position: absolute; inset: 0; width: 100%; height: 100%; }
@@ -1440,9 +1441,9 @@
         <canvas class="rad-echo" id="rad-echo" width="956" height="490" aria-label="Radar reflectivity" hidden></canvas>
         <svg class="rad-over" id="rad-over" viewBox="0 0 956 490" preserveAspectRatio="none" aria-label="Station, range rings and distance scale"></svg>
         </div>
-        <button class="rad-step rad-recenter" id="rad-recenter" type="button" aria-label="Recenter on station" hidden>↩</button>
         <figcaption class="rad-src-cap" id="rad-src-cap"></figcaption>
         <div class="rad-zoom" id="rad-zoom" data-mode="auto" hidden>
+          <button class="rad-step rad-recenter" id="rad-recenter" type="button" aria-label="Recenter on station" hidden>↩</button>
           <button class="rad-step" id="rad-zoom-out" type="button" aria-label="Zoom out — wider area">&#8722;</button>
           <span class="rad-zoom-read"><span class="rad-zoom-k">Zoom</span>
             <span class="rad-zoom-dot">&middot;</span>
@@ -2082,9 +2083,15 @@
     function clip(id, x, y, w, h) { return el("rect", { x: x, y: y, width: w, height: h }, el("clipPath", { id: id }, defs)); }
     /* static clips: the air (the tube and its open mouth) and the tube. The
        plunge bands' clips are made below, in the riding surface's own space,
-       so they ride the level without ever being animated themselves. */
-    clip("rg-air", inX, mouth, inW, bot - mouth);
-    clip("rg-tube", inX, top, inW, bot - top);
+       so they ride the level without ever being animated themselves.
+       The opaque water hides the rain behind it only where no pixel holds
+       both of their edges: an anti-aliased edge shared by the two lets the
+       rain through as a flickering seam (the gauge rarely sits on whole
+       pixels). So each edge belongs to one of them. The water runs under the
+       walls, which are drawn over it, and the rain stops a unit (over a
+       pixel) short of the floor, which the water keeps. */
+    clip("rg-air", inX, mouth, inW, bot - 1 - mouth);
+    clip("rg-tube", x1, top, x2 - x1, bot - top);
 
     /* RAIN · five plates in one slanted field */
     var field = el("g", { class: "rain-field", "clip-path": "url(#rg-air)" }, svg);
@@ -2110,7 +2117,7 @@
     var water = el("g", { "clip-path": "url(#rg-tube)" }, svg);
     var body = el("g", { class: "water-g" }, water);
     body.style.opacity = "0";
-    el("rect", { class: "water-fill", x: inX, y: bot + 2, width: inW, height: depth }, body);
+    el("rect", { class: "water-fill", x: x1, y: bot + 2, width: x2 - x1, height: depth }, body);
     var drift = el("g", { class: "surf-drift" }, body);
     var surf = { fill: el("path", { class: "water-fill" }, drift), crest: el("path", { class: "water-crest" }, drift) };
 

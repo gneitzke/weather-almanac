@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.test_radar_warnings_ux_page import browser  # noqa: F401
+
 HTML = Path('design/almanac/console_live.html').read_text()
 
 CSS = re.sub(r'/\*.*?\*/', '', HTML[HTML.index('/* ———— rate gauge · engraved rain over a water wash'):
@@ -321,3 +323,63 @@ def test_graduations_sit_over_the_water():
     # drawn after the water and the waterline, so nothing covers the scale
     assert BUILD.index('class: "water-g"') < BUILD.index('class: "rain-band"')
     assert BUILD.index('"imp-ring" + pat') < BUILD.index('class: "rain-band"')
+
+
+def test_rain_and_water_never_share_an_edge():
+    # The water hides the rain behind it, but an anti-aliased edge that both
+    # share lets the rain through: the gauge rarely sits on whole pixels, so
+    # a seam of passing drops flickered along the floor and the walls. Each
+    # edge has one owner: the water runs under the walls (drawn over it) and
+    # keeps the floor; the rain stops a unit (over a pixel) above the floor.
+    assert 'clip("rg-air", inX, mouth, inW, bot - 1 - mouth);' in BUILD
+    assert 'clip("rg-tube", x1, top, x2 - x1, bot - top);' in BUILD
+    assert 'el("rect", { class: "water-fill", x: x1, y: bot + 2, width: x2 - x1, height: depth }, body);' in BUILD
+    walls = BUILD.index('el("line", { class: "tick", x1: x1, y1: top, x2: x1, y2: bot }, svg);')
+    assert BUILD.index('class: "water-g"') < walls
+    assert re.search(r'#raingauge \.tick\s+\{ stroke-width: 2\.6; \}', HTML)       # 1.3 each side of x1/x2
+
+
+FLOOR_AND_WALLS = '''async (nudge)=>{
+  const g=document.getElementById('raingauge');g.style.position='relative';g.style.top=nudge+'px';g.style.left=nudge+'px';
+  await new Promise(r=>setTimeout(r,300));
+  const box=g.getBoundingClientRect(),floor=g.querySelector('.gauge-fill').getBoundingClientRect().bottom,k=box.width/72;
+  return {floor,walls:[box.left+16*k,box.left+56*k],water:g.querySelector('.water-g').style.opacity};}'''
+
+
+def test_the_floor_and_walls_hold_still_under_heavy_rain(browser):  # noqa: F811
+    from PIL import Image
+    import io
+    import time
+    from tests.test_motion_budget_browser import BASE
+    from tests.test_radar_warnings_ux_page import BOOT, PAGE
+    payload = json.dumps(dict(BASE, ts=int(time.time()), rainRateMm=14.6, rainRateInstMm=14.6, rainRate=0.57,
+                              rainUnit='in', rainToday=0.09, windSpd=6.0, windDir=250, windUnit='mph'))
+    html = PAGE.read_text()
+    ctx = browser.new_context(viewport=dict(width=1024, height=600))
+    page = ctx.new_page()
+    page.route('**/*', lambda r: r.fulfill(status=200, content_type='text/html', body=html)
+               if r.request.url.split('?')[0] == BOOT else
+               r.fulfill(status=200, content_type='application/json', body=payload)
+               if '/wx.json' in r.request.url else r.fulfill(status=503, body=''))
+    try:
+        page.goto(BOOT + '?theme=night')
+        page.wait_for_function("document.querySelector('#raingauge .water-g').style.opacity === '1'", timeout=15000)
+        page.wait_for_timeout(2000)
+        for nudge in (0, 0.3, 0.55, 0.9):                       # wherever layout puts it, to the sub-pixel
+            m = page.evaluate(FLOOR_AND_WALLS, nudge)
+            y = int(m['floor'])
+            rows = {r: set() for r in (y - 1, y, y + 1)}
+            cols = {c: set() for w in m['walls'] for c in (int(w) - 1, int(w), int(w) + 1)}
+            for _ in range(20):
+                im = Image.open(io.BytesIO(page.screenshot())).convert('RGB')
+                for r in rows:
+                    rows[r].update(im.getpixel((x, r)) for x in range(int(m['walls'][0]) + 3, int(m['walls'][1]) - 3))
+                for c in cols:                                  # well below the deepest beads
+                    cols[c].update(im.getpixel((c, r)) for r in range(y - 24, y - 2))
+                page.wait_for_timeout(90)
+            # the rain falls past; the floor row stays one colour, the wall
+            # columns only show the static graduations crossing them
+            assert all(len(v) == 1 for v in rows.values()), (nudge, {r: len(v) for r, v in rows.items()})
+            assert all(len(v) <= 4 for v in cols.values()), (nudge, {c: len(v) for c, v in cols.items()})
+    finally:
+        ctx.close()
